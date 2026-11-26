@@ -208,7 +208,6 @@ impl Inbox {
                 source["guild_id"] != guild
             }
             || !source["webhook_id"].is_null()
-            || !source["message_reference"].is_null()
             || source["author"]
                 .get("bot")
                 .is_some_and(|value| value != false)
@@ -216,9 +215,6 @@ impl Inbox {
                 .get("system")
                 .is_some_and(|value| value != false)
             || !source["attachments"].is_array()
-            || source["message_snapshots"]
-                .as_array()
-                .is_some_and(|snapshots| !snapshots.is_empty())
             || source["type"] != 0
         {
             return Ok(None);
@@ -231,7 +227,25 @@ impl Inbox {
         {
             return Ok(None);
         }
-        let empty = source["attachments"].as_array().unwrap().is_empty();
+        let visible = match super::received_files::visible(source) {
+            Ok(visible) => visible,
+            Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        let forwarding = visible.revision()?;
+        if visible.is_forwarded()
+            && (address.is_some()
+                || super::worker::target_text(body).is_some()
+                || !guild.is_empty() && !team)
+        {
+            return Ok(None);
+        }
+        let context = visible.context();
+        let body = format!("{body}{context}");
+        if visible.is_forwarded() && body.len() > 4096 {
+            return Ok(None);
+        }
+        let empty = !visible.has_files();
         let (body, files) = if empty {
             if body.trim().is_empty() {
                 return Ok(None);
@@ -239,7 +253,7 @@ impl Inbox {
             (body.to_owned(), Value::Null)
         } else {
             if address.is_some()
-                || super::worker::target_text(body).is_some()
+                || super::worker::target_text(&body).is_some()
                 || !guild.is_empty() && !team
             {
                 return Ok(None);
@@ -262,7 +276,7 @@ impl Inbox {
             if existing_revision
                 && (!old["received_files"].is_array()
                     || old["text"] != format!("{body}{header}{}", old["received_files"])
-                    || !same_received_metadata(&old["received_files"], &source["attachments"]))
+                    || !visible.matches(&old["received_files"]))
             {
                 return Ok(None);
             }
@@ -275,7 +289,9 @@ impl Inbox {
             let body = format!("{body}{header}{}", json!(captured));
             (body, json!(captured))
         };
-        let revision = hash(&json!([actor, body, channel, guild, id, edited, "", files]))?;
+        let revision = hash(&json!([
+            actor, body, channel, guild, id, edited, forwarding, files
+        ]))?;
         let operation = format!("da_{}", &hash(&json!([installation, id]))?[..32]);
         let mut receipt = json!({
             "operation_id": operation, "revision": revision, "text": body,
@@ -657,18 +673,6 @@ impl Inbox {
             .filter(|row| matches!(row["state"].as_str(), Some("prepared" | "sending")))
             .count()
     }
-}
-
-fn same_received_metadata(saved: &Value, source: &Value) -> bool {
-    let (Some(saved), Some(source)) = (saved.as_array(), source.as_array()) else {
-        return false;
-    };
-    saved.len() == source.len()
-        && saved.iter().zip(source).all(|(a, b)| {
-            ["id", "filename", "size"]
-                .into_iter()
-                .all(|field| a[field] == b[field])
-        })
 }
 
 pub(super) fn valid_boundary(value: &Value) -> bool {

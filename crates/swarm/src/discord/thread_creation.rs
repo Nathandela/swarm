@@ -141,8 +141,13 @@ fn authorize(
     if actor_rights & (1 << 3) == 0 && actor_rights & ACTOR != ACTOR {
         return Ok(None);
     }
+    let revision = match revision(&source) {
+        Ok(revision) => revision,
+        Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Ok(None),
+        Err(err) => return Err(err),
+    };
     let plan = json!({"guild_id":guild,"parent_id":parent,"message_id":id,"actor_id":actor,
-        "revision":revision(&source)?});
+        "revision":revision});
     Ok(Some((plan, capacity & ((1 << 3) | (1 << 35)) != 0)))
 }
 
@@ -244,22 +249,34 @@ fn exact(channel: &Value, plan: &Value) -> bool {
         && channel["type"] == 11
 }
 pub(super) fn revision(source: &Value) -> io::Result<String> {
-    hash(&json!([
+    let attachments = source["attachments"].as_array().map(|items| {
+        items
+            .iter()
+            .map(|item| {
+                json!([
+                    item["id"],
+                    item["filename"],
+                    item["size"],
+                    item["content_type"]
+                ])
+            })
+            .collect::<Vec<_>>()
+    });
+    let original = hash(&json!([
         source["id"],
         source["channel_id"],
         source["author"]["id"],
         source["content"],
         source["edited_timestamp"],
-        source["attachments"].as_array().map(|items| items
-            .iter()
-            .map(|item| json!([
-                item["id"],
-                item["filename"],
-                item["size"],
-                item["content_type"]
-            ]))
-            .collect::<Vec<_>>())
-    ]))
+        attachments
+    ]))?;
+    if source["message_reference"]["type"] == 1 {
+        return hash(&json!([
+            original,
+            super::received_files::visible(source)?.revision()?
+        ]));
+    }
+    Ok(original)
 }
 fn id(value: &Value) -> Option<&str> {
     value.as_str().filter(|id| snowflake(id))

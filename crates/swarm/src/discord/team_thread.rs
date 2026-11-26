@@ -260,9 +260,8 @@ pub(super) fn explicit(cfg: &Config, source: &Value) -> bool {
                 .any(|prefix| {
                     text.trim_start().strip_prefix(prefix).is_some_and(|tail| {
                         (!tail.trim().is_empty()
-                            || source["attachments"]
-                                .as_array()
-                                .is_some_and(|files| !files.is_empty()))
+                            || super::received_files::visible(source)
+                                .is_ok_and(|visible| visible.has_files() || visible.is_forwarded()))
                             && !matches!(
                                 tail.trim(),
                                 "voice join" | "voice consent" | "voice leave"
