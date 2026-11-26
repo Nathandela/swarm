@@ -1140,6 +1140,163 @@ mod tests {
         }
     }
 
+    fn dispatcher_input_routes(
+        binary: &std::ffi::OsStr,
+        fixture: &OwnedFixture,
+        manager: &Manager,
+        id: &str,
+        instance: &str,
+        rust: bool,
+    ) {
+        let cli = |args: &[&str]| {
+            let output = Command::new(binary)
+                .env_clear()
+                .env("HOME", &fixture.root)
+                .env(
+                    "PATH",
+                    format!("{}:/usr/bin:/bin", fixture.root.join("bin").display()),
+                )
+                .env("SWARM_DAEMON_STATE", fixture.root.join("state"))
+                .env("SWARM_DAEMON_SOCK", &fixture.socket)
+                .args(args)
+                .output()
+                .unwrap();
+            (
+                output.status.code().unwrap(),
+                String::from_utf8(output.stdout).unwrap(),
+                String::from_utf8(output.stderr).unwrap(),
+            )
+        };
+        let state = fixture.root.join("state");
+        let session_dir = if rust { state.join("rust-v1") } else { state };
+        let local = id.split_once('/').unwrap().1;
+        let marker = session_dir.join(local).join("direct-input-unresolved.json");
+        let route = "use Discord or a bound worker note (swarm teammate message) to contact this dispatcher, or attach for manual input";
+        for flags in [
+            &["--text", "refused text"][..],
+            &["--text", "refused draft", "--no-submit"],
+        ] {
+            let mut args = vec!["send", id];
+            args.extend_from_slice(flags);
+            assert_eq!(
+                cli(&args),
+                (1, String::new(), format!("send: send_input: {route}\n"))
+            );
+        }
+        let operation = crate::providers::codex_receipt::operation().unwrap();
+        let expected = (
+            1,
+            String::new(),
+            format!(
+                "message: operation_id={operation}: semantic message rejected without a new effect: composer_send: {route} (structured_unsupported)\n"
+            ),
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                cli(&[
+                    "message",
+                    id,
+                    "--text",
+                    "refused semantic input",
+                    "--operation-id",
+                    &operation
+                ]),
+                expected
+            );
+        }
+        let status = cli(&["message", id, "--status", "--operation-id", &operation]);
+        assert_eq!(status.0, 0, "{status:?}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&status.1).unwrap(),
+            json!({"operation_id":operation,"session":id,"session_instance":instance,"state":"rejected"})
+        );
+        let peek = cli(&["peek", id]);
+        assert_eq!(peek.0, 0, "{peek:?}");
+        assert!(!peek.1.contains("refused"));
+        assert!(
+            !marker.exists(),
+            "refusal reached the terminal write boundary"
+        );
+
+        let ordinary = cli(&[
+            "spawn",
+            "--cli",
+            "codex",
+            "--dir",
+            fixture.root.to_str().unwrap(),
+            "--prompt",
+            "ordinary warmup",
+        ]);
+        assert_eq!(ordinary.0, 0, "{ordinary:?}");
+        let ordinary = manager
+            .dial()
+            .unwrap()
+            .sessions()
+            .unwrap()
+            .into_iter()
+            .find(|row| row["id"] != id && row["status"]["Process"] == "running")
+            .expect("fixture spawned an ordinary session");
+        let ordinary_id = field(&ordinary, "id");
+        assert_eq!(
+            cli(&["send", ordinary_id, "--text", "ordinary-terminal-text"]),
+            (0, String::new(), String::new())
+        );
+        let wait_for_screen = |session, text| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                let screen = cli(&["peek", session]);
+                assert_eq!(screen.0, 0, "{screen:?}");
+                if screen.1.contains(text) {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "terminal never showed {text:?}: {screen:?}"
+                );
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        };
+        wait_for_screen(ordinary_id, "ordinary-terminal-text");
+
+        let mut attachment = Client::dial(&fixture.socket, &[]).unwrap();
+        let lease = attachment.request("attach", Some(id), "lease").unwrap();
+        attachment
+            .take_snapshot(lease["snapshot_len"].as_u64().unwrap() as usize)
+            .unwrap();
+        let mut stream = attachment.stream();
+        crate::ipc::wire::write_frame(&mut stream, runtime::DATA_IN, b"manual-dispatcher-text")
+            .unwrap();
+        wait_for_screen(id, "manual-dispatcher-text");
+        assert_eq!(runtime::read_json(&marker).unwrap()["class"], "draft");
+        assert_eq!(
+            cli(&["send", id, "--key", "enter"]),
+            (0, String::new(), String::new())
+        );
+        drop(attachment);
+        assert_eq!(runtime::read_json(&marker).unwrap()["class"], "submitted");
+
+        let mut owner = manager.dial().unwrap();
+        let endpoint = owner.endpoint().to_owned();
+        owner
+            .send(
+                &json!({"op":"manager_runtime","endpoint_id":endpoint,"session_id":id,
+            "body_version":1,"manager_runtime_request":{"session_instance":instance}}),
+            )
+            .unwrap();
+        let hold = owner
+            .receive(Instant::now() + Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(hold["op"], "error", "{hold}");
+        // The older synthetic app-server sometimes loses native custody on the signed Go binary.
+        // Go intentionally gives the native custody refusal precedence over the persisted hold.
+        if rust || hold["error_code"] != "manager_custody_lost" {
+            assert_eq!(
+                hold["error_code"], "manager_direct_input_unresolved",
+                "{hold}"
+            );
+        }
+    }
+
     #[test]
     #[ignore = "requires an isolated Go or Rust supervisor and fake-Codex binaries; no network calls"]
     fn pinned_go_owner_protocol_and_scoped_launch() {
@@ -1196,7 +1353,7 @@ mod tests {
             )
             .unwrap();
         }
-        let launch = Command::new(go)
+        let launch = Command::new(&go)
             .arg("daemon")
             .env_clear()
             .env("HOME", &root)
@@ -2058,5 +2215,15 @@ mod tests {
         let mut different = request.clone();
         different["manager"]["conversation_id"] = json!("discord-teammate-different");
         assert!(manager.launch(&operation, &different).is_err());
+        if std::env::var_os("SWARM_DISPATCHER_INPUT_FIXTURE").is_some() {
+            dispatcher_input_routes(
+                &go,
+                &_cleanup,
+                &manager,
+                id,
+                field(&row["capabilities"], "session_instance"),
+                rust.is_some(),
+            );
+        }
     }
 }

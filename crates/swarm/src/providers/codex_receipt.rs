@@ -112,15 +112,75 @@ pub(crate) fn bind_intent(
     incarnation: &str,
     intent: &str,
 ) -> io::Result<()> {
+    bind_operation(root, operation, target, incarnation, intent, false)
+}
+
+pub(crate) fn reject_unadmitted(
+    root: &Path,
+    operation: &str,
+    session: &str,
+    instance: &str,
+    body: &Value,
+) -> io::Result<()> {
+    bind_operation(
+        root,
+        operation,
+        session,
+        instance,
+        &hash(&serde_json::to_string(body)?),
+        true,
+    )
+}
+
+pub(crate) fn unadmitted_rejection(
+    root: &Path,
+    operation: &str,
+    session: &str,
+) -> io::Result<Option<Value>> {
+    if issued(operation).is_none() {
+        return Ok(None);
+    }
+    match runtime::read_json(&operation_path(root, operation)) {
+        Ok(binding) if binding["unadmitted_dispatcher"] == true => {
+            if binding["operation"] != operation || binding["session"] != session {
+                return Err(io::Error::other(
+                    "semantic operation does not belong to this session",
+                ));
+            }
+            Ok(Some(json!({"operation_id":operation,"session":session,
+                "session_instance":binding["instance"],"state":"rejected"})))
+        }
+        Ok(_) => Ok(None),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn operation_path(root: &Path, operation: &str) -> PathBuf {
+    root.join("operations")
+        .join(format!("semantic-{:x}.json", Sha256::digest(operation)))
+}
+
+fn bind_operation(
+    root: &Path,
+    operation: &str,
+    target: &str,
+    incarnation: &str,
+    intent: &str,
+    unadmitted_dispatcher: bool,
+) -> io::Result<()> {
     if !timely(operation) {
         return Err(io::Error::other("invalid semantic operation ID"));
     }
     let dir = root.join("operations");
     durable_dir(root)?;
     durable_dir(&dir)?;
-    let path = dir.join(format!("semantic-{:x}.json", Sha256::digest(operation)));
-    let binding =
+    let path = operation_path(root, operation);
+    let mut binding =
         json!({"operation":operation,"session":target,"instance":incarnation,"intent":intent});
+    if unadmitted_dispatcher {
+        binding["unadmitted_dispatcher"] = json!(true);
+    }
     match runtime::read_json(&path) {
         Ok(saved) if saved == binding => Ok(()),
         Ok(_) => Err(io::Error::other(
@@ -141,10 +201,7 @@ pub(crate) fn verify_binding(
     if issued(operation).is_none() {
         return Err(io::Error::other("invalid semantic operation ID"));
     }
-    let path = root
-        .join("operations")
-        .join(format!("semantic-{:x}.json", Sha256::digest(operation)));
-    let stored = runtime::read_json(&path)?;
+    let stored = runtime::read_json(&operation_path(root, operation))?;
     let expected =
         json!({"operation":operation,"session":target,"instance":incarnation,"intent":intent});
     if stored != expected {

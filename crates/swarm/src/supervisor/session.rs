@@ -1458,6 +1458,9 @@ impl Session {
     }
 
     pub(super) fn semantic_target(&self) -> io::Result<String> {
+        if self.is_discord_manager() {
+            return Ok(codex_receipt::provider_instance(&self.agent, &self.token));
+        }
         if self.hermes_native {
             self.dial()?;
             return self.hermes_descriptor()?.validate_target();
@@ -1558,6 +1561,11 @@ impl Session {
         }
         if self.agent == "opencode" {
             return self.opencode_operation_status(session, operation, "prompt", root);
+        }
+        if self.is_discord_manager()
+            && let Some(rejection) = codex_receipt::unadmitted_rejection(root, operation, session)?
+        {
+            return Ok(Some(rejection));
         }
         let thread = self.semantic_thread()?;
         let record = codex_receipt::load_for(
@@ -2564,6 +2572,23 @@ impl Session {
             "Session":session,"Instance":codex_receipt::instance(&self.token),"Attempt":self.mailbox["attempt"],
             "Agent":self.agent,"Project":self.mailbox["project"],"ParentInputHash":self.mailbox["parent_input_hash"]}),
         )
+    }
+
+    pub(super) fn is_discord_manager(&self) -> bool {
+        !self.manager.is_null()
+            && field(&self.manager["launch"]["manager"], "conversation_id")
+                .starts_with("discord-teammate-")
+    }
+
+    pub(super) fn dispatcher_runtime_has_draft(&self, request: &Value) -> bool {
+        request["body_version"] == 1
+            && self.is_discord_manager()
+            && self.is_live()
+            && request["manager_runtime_request"]["session_instance"]
+                == codex_receipt::provider_instance(&self.agent, &self.token)
+            && self
+                .status_exchange(&json!({"type":"manager_direct_input"}))
+                .is_ok_and(|response| response["type"] == "ok" && response["unresolved"] == true)
     }
 
     pub(super) fn owns_manager_launch(&self, conversation: &str, operation: &Value) -> bool {

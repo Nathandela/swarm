@@ -307,9 +307,25 @@ impl Client {
                 "error" => {
                     let error = field(&reply, "error");
                     if message["op"] == "manager_runtime"
+                        && reply["error_code"] == crate::shim::manager_terminal::CODE
+                    {
+                        return Err(io::Error::new(io::ErrorKind::WouldBlock, error.to_owned()));
+                    }
+                    if message["op"] == "manager_runtime"
                         && reply["error_code"] == "temporarily_unavailable"
                     {
                         return Err(io::Error::new(io::ErrorKind::WouldBlock, error.to_owned()));
+                    }
+                    if message["op"] == "semantic_send"
+                        && reply["error_code"] == "structured_unsupported"
+                        && error.starts_with("composer_send: ")
+                    {
+                        return Err(io::Error::other(Refusal(
+                            format!(
+                                "semantic message rejected without a new effect: {error} (structured_unsupported)"
+                            ),
+                            false,
+                        )));
                     }
                     let prefix = match field(&message, "op") {
                         "owner_launch" => Some("owner launch"),
