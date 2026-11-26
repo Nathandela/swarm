@@ -116,7 +116,11 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False):
                 start = len(board.capture)
                 board.send(b"\x1b[57351;9u")
                 board.wait_bytes("tail█".encode(), start)
-                board.send(b"\x15amber\r")
+                board.resize(40, 8)
+                board.send(b"\x15" + ("界" * 13 + "X").encode() + b"\x1b[D")
+                board.wait_bytes(("界" * 12 + "█").encode())
+                board.resize(80, 24)
+                board.send(b"\x1b[F\x15amber\r")
                 board.wait_bytes(b"fixture ready")
             else:
                 board.wait_bytes(b"amber")
