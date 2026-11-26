@@ -47,7 +47,12 @@ const ROLE_TEXT_FIELDS: &[&str] = &[
     "input_embargo",
     "resumed_from",
 ];
-const ROLE_OBJECT_FIELDS: &[&str] = &["manager_retirement", "login_runtime", "opencode_binding"];
+const ROLE_OBJECT_FIELDS: &[&str] = &[
+    "manager_retirement",
+    "login_runtime",
+    "opencode_binding",
+    "account_binding",
+];
 const ROLE_BOOL_FIELDS: &[&str] = &[
     "hermes_native",
     "manager_native_cli",
@@ -284,10 +289,12 @@ fn qualified_role(meta: &Value) -> io::Result<()> {
             "Go schema {schema:?} requires offline qualification"
         )));
     }
-    if !matches!(field(meta, "agent_type"), "claude" | "agy" | "codex")
-        || ROLE_TEXT_FIELDS
-            .iter()
-            .any(|key| !meta[*key].is_null() && meta[*key] != "")
+    if !matches!(
+        field(meta, "agent_type"),
+        "claude" | "agy" | "codex" | "opencode"
+    ) || ROLE_TEXT_FIELDS
+        .iter()
+        .any(|key| !meta[*key].is_null() && meta[*key] != "")
         || ROLE_OBJECT_FIELDS.iter().any(|key| !meta[*key].is_null())
         || ROLE_BOOL_FIELDS
             .iter()
@@ -335,15 +342,26 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
         ],
     )?;
     let launch = launch_evidence(file, meta)?;
-    if meta["agent_type"] == "agy" {
-        // The classic agy shim writes exit.json after joining its PTY group.
+    if matches!(field(meta, "agent_type"), "agy" | "opencode") {
+        // Classic PTY shims write exit.json after joining their PTY group.
         // Managed-native custody uses a different proof and is excluded here.
         absent_sidefiles(
             file,
             &[c"native-process.json", c"native-writers-stopped.json"],
         )?;
         if !exit["backend_exit"].is_null() {
-            return Err(io::Error::other("unqualified Go agy backend exit"));
+            return Err(io::Error::other("unqualified Go classic backend exit"));
+        }
+        if meta["agent_type"] == "opencode" {
+            absent_sidefiles(
+                file,
+                &[
+                    c"opencode-binding.json",
+                    c"opencode-input-embargo.json",
+                    c"opencode-tui.json",
+                    c"opencode-tui.mjs",
+                ],
+            )?;
         }
         return Ok(());
     }
@@ -442,8 +460,21 @@ fn completed(file: &File, meta: &Value) -> io::Result<Option<Value>> {
 }
 
 fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
-    let launch = read_at(file, c"shim-launch.json")
-        .map_err(|e| io::Error::other(format!("Go launch evidence unavailable: {e}")))?;
+    let launch = (|| {
+        let launch = open_at(file, c"shim-launch.json", libc::O_RDONLY)?;
+        let bytes = runtime::read_private_file(launch, 1 << 20)?;
+        let text = std::str::from_utf8(&bytes).map_err(io::Error::other)?;
+        let fields = RawFields::parse(text)?;
+        if fields
+            .0
+            .keys()
+            .any(|key| key.bytes().any(|byte| byte.is_ascii_uppercase()))
+        {
+            return Err(io::Error::other("noncanonical Go launch field"));
+        }
+        Ok::<Value, io::Error>(serde_json::from_str(text)?)
+    })()
+    .map_err(|err| io::Error::other(format!("Go launch evidence unavailable: {err}")))?;
     // The original directory can differ on an offline copy, but the durable
     // ID and config's two physical path components must all identify the same session.
     let launch_dir = Path::new(field(&launch, "session_dir"));
@@ -455,6 +486,7 @@ fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
         || (meta["agent_type"] == "claude" && launch["native_provider"] != "claude")
         || (meta["agent_type"] == "agy" && !classic_agy(meta, &launch))
         || (meta["agent_type"] == "codex" && !classic_codex(meta, &launch))
+        || (meta["agent_type"] == "opencode" && !classic_opencode(meta, &launch))
         || [
             "claude_input",
             "require_launch_identity",
@@ -463,13 +495,24 @@ fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
         ]
         .iter()
         .any(|key| !launch[*key].is_null() && launch[*key] != false)
-        || ["login_runtime", "opencode", "hermes_input", "agy_input"]
-            .iter()
-            .any(|key| !launch[*key].is_null())
+        || [
+            "login_runtime",
+            "opencode",
+            "hermes_input",
+            "agy_input",
+            "account_binding",
+        ]
+        .iter()
+        .any(|key| !launch[*key].is_null())
         || (meta["agent_type"] != "codex" && backend_declared(&launch))
-        || ["manager_replay_id", "input_embargo"]
-            .iter()
-            .any(|key| !launch[*key].is_null() && launch[*key] != "")
+        || [
+            "manager_replay_id",
+            "input_embargo",
+            "account_projection_ref",
+            "account_state_root",
+        ]
+        .iter()
+        .any(|key| !launch[*key].is_null() && launch[*key] != "")
     {
         return Err(io::Error::other(
             "Go launch binding or native writer is unqualified",
@@ -569,6 +612,46 @@ fn classic_agy(meta: &Value, launch: &Value) -> bool {
                     return false;
                 }
             }
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn classic_opencode(meta: &Value, launch: &Value) -> bool {
+    if meta["shim_wire_version"] != 1 || !launch["native_provider"].is_null() {
+        return false;
+    }
+    if (!launch["cli_identity"].is_null() || !meta["cli_identity"].is_null())
+        && !executable_binding(meta, launch, "opencode")
+    {
+        return false;
+    }
+    let thread = field(meta, "conversation_id");
+    if !thread.is_empty()
+        && !thread.strip_prefix("ses_").is_some_and(|id| {
+            (10..=128).contains(&id.len()) && id.bytes().all(|c| c.is_ascii_alphanumeric())
+        })
+    {
+        return false;
+    }
+    let Some((program, rest)) = launch["argv"]
+        .as_array()
+        .and_then(|args| args.split_first())
+    else {
+        return false;
+    };
+    let Some(program) = program.as_str().map(Path::new) else {
+        return false;
+    };
+    if !program.is_absolute() || program.file_name().and_then(|n| n.to_str()) != Some("opencode") {
+        return false;
+    }
+    let mut args = rest.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            Some("--model" | "--agent" | "--prompt" | "--session")
+                if args.next().is_some_and(Value::is_string) => {}
             _ => return false,
         }
     }
