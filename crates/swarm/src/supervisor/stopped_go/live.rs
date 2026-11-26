@@ -13,9 +13,9 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-mod agy;
 pub(super) mod codex;
 pub(super) mod open_code;
+mod pty;
 
 pub(in crate::supervisor) const OPT_IN: &str = "SWARM_DAEMON_LIVE_GO_COMPAT";
 const SHIM_WIRE_VERSION: u64 = 2;
@@ -131,7 +131,7 @@ impl Owner {
             super::qualified_role(meta)?;
         }
         let agent = field(meta, "agent_type");
-        if !(managed_opencode || matches!(agent, "claude" | "codex" | "agy"))
+        if !(managed_opencode || matches!(agent, "claude" | "codex" | "agy" | "hermes"))
             || meta["status"]["Process"] != "running"
             || meta["shim_wire_version"] != SHIM_WIRE_VERSION
             || !meta["exit_code"].is_null()
@@ -165,10 +165,13 @@ impl Owner {
         if agent != "codex" {
             super::absent_sidefiles(directory, &[c"backend.json", c"codex.sock"])?;
         }
+        if agent == "hermes" {
+            super::absent_hermes_sidefiles(directory)?;
+        }
         let shim = Process::new(&meta["shim_pid"], &meta["shim_start_time"])?;
-        let (worker, backend) = if agent == "agy" || managed_opencode {
+        let (worker, backend) = if matches!(agent, "agy" | "hermes") || managed_opencode {
             super::absent_sidefiles(directory, &[c"native-process.json"])?;
-            (agy::pty_worker(&shim)?, None)
+            (pty::worker(&shim)?, None)
         } else {
             managed_processes(agent, &path, directory, &launch, meta)?
         };

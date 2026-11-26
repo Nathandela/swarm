@@ -291,7 +291,7 @@ fn qualified_role(meta: &Value) -> io::Result<()> {
     }
     if !matches!(
         field(meta, "agent_type"),
-        "claude" | "agy" | "codex" | "opencode"
+        "claude" | "agy" | "codex" | "opencode" | "hermes"
     ) || ROLE_TEXT_FIELDS
         .iter()
         .any(|key| !meta[*key].is_null() && meta[*key] != "")
@@ -342,7 +342,7 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
     if !managed_codex || codex_version != "0.172.0" {
         absent_sidefiles(file, &[c"codex.sock"])?;
     }
-    if matches!(field(meta, "agent_type"), "agy" | "opencode") {
+    if matches!(field(meta, "agent_type"), "agy" | "opencode" | "hermes") {
         // Classic PTY shims write exit.json after joining their PTY group.
         // Managed-native custody uses a different proof and is excluded here.
         absent_sidefiles(
@@ -351,6 +351,9 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
         )?;
         if !exit["backend_exit"].is_null() {
             return Err(io::Error::other("unqualified Go classic backend exit"));
+        }
+        if meta["agent_type"] == "hermes" {
+            absent_hermes_sidefiles(file)?;
         }
         if meta["agent_type"] == "opencode" {
             absent_sidefiles(
@@ -491,6 +494,7 @@ fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
         || Path::new(field(&launch, "socket_path")) != launch_dir.join("shim.sock")
         || (meta["agent_type"] == "claude" && launch["native_provider"] != "claude")
         || (meta["agent_type"] == "agy" && !classic_agy(meta, &launch))
+        || (meta["agent_type"] == "hermes" && !classic_hermes(meta, &launch))
         || (meta["agent_type"] == "codex" && !classic_codex(meta, &launch))
         || (meta["agent_type"] == "opencode" && !classic_opencode(meta, &launch))
         || [
@@ -663,6 +667,45 @@ fn classic_agy_statusline(settings: &Value) -> bool {
         && line["type"] == "command"
         && line["enabled"] == true
         && line["stack_with_default"] == true
+}
+
+fn absent_hermes_sidefiles(file: &File) -> io::Result<()> {
+    absent_sidefiles(file, &[c"hermes-input.json", c"hermes-stopped.json"])
+}
+
+fn classic_hermes(meta: &Value, launch: &Value) -> bool {
+    use crate::providers::hermes;
+
+    let thread = field(meta, "conversation_id");
+    if meta["shim_wire_version"] != 2
+        || !launch["native_provider"].is_null()
+        || !thread.is_empty() && !hermes::classic_id(thread)
+        || (!launch["cli_identity"].is_null() || !meta["cli_identity"].is_null())
+            && !executable_binding(meta, launch, "hermes")
+    {
+        return false;
+    }
+    let Some((program, args)) = launch["argv"]
+        .as_array()
+        .and_then(|argv| argv.split_first())
+    else {
+        return false;
+    };
+    if !program.as_str().map(Path::new).is_some_and(|path| {
+        path.is_absolute() && path.file_name().and_then(|name| name.to_str()) == Some("hermes")
+    }) {
+        return false;
+    }
+    let request = json!({"options":meta["launch_options"]});
+    let Ok(expected) = hermes::argv(&request) else {
+        return false;
+    };
+    let expected = expected.into_iter().map(Value::String).collect::<Vec<_>>();
+    match args.strip_prefix(expected.as_slice()) {
+        Some([]) => true,
+        Some([flag, prompt]) => flag == "-q" && prompt.as_str().is_some_and(|s| !s.is_empty()),
+        _ => false,
+    }
 }
 
 fn classic_opencode(meta: &Value, launch: &Value) -> bool {
@@ -1107,6 +1150,23 @@ pub(super) fn verify_daemon_stopped(root: &Path, socket: &Path) -> io::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hermes_requires_a_bound_classic_command() {
+        let mut meta = json!({"schema_version":1, "agent_type":"hermes", "shim_wire_version":2,
+            "conversation_id":"20240229_000000_abcdef",
+            "launch_options":{"profile":"work", "model":"m"}});
+        let mut launch = json!({"argv":["/bin/hermes", "--profile", "work", "chat", "--cli", "--model", "m", "-q", "hello"]});
+        assert!(qualified_role(&meta).is_ok());
+        assert!(classic_hermes(&meta, &launch));
+        launch["argv"][4] = json!("--tui");
+        assert!(!classic_hermes(&meta, &launch));
+        launch["argv"][4] = json!("--cli");
+        launch["argv"][2] = json!("another-profile");
+        assert!(!classic_hermes(&meta, &launch));
+        meta["hermes_native"] = json!(true);
+        assert!(qualified_role(&meta).is_err());
+    }
 
     #[test]
     fn label_retry_syncs_after_rename_and_preserves_opaque_numbers() {
