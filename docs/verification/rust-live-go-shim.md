@@ -17,3 +17,5 @@ A genuine authenticated Go callback posted while Rust owns the terminal is retai
 This slice qualifies terminal custody and hook preservation for the existing Go shim. When the worker exits while Rust owns the supervisor, Rust verifies the original Go exit side-file, matching native writer stop record and inactive kernel identities before publishing completion. The same completion is reconstructed after a Rust restart without changing the Go metadata. Go folds its own durable terminal transition on rollback. Go hook ingestion remains with Go. New Rust launches while a Go shim is active, the remaining provider custody models, Go clients on Rust-created shims, and the remaining interoperability combinations have separate gates.
 
 Managed Codex terminal adoption has a separate [native round-trip witness](rust-live-go-codex.md).
+
+Classic agy terminal adoption has a separate [native round-trip witness](rust-live-go-agy.md).

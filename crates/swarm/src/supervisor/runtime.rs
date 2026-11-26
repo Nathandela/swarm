@@ -312,7 +312,7 @@ pub(crate) fn birth_clock() -> io::Result<u64> {
 }
 
 #[cfg(target_os = "macos")]
-fn job_control(pid: u32) -> io::Result<(u32, u32, u32, u32)> {
+pub(crate) fn job_control(pid: u32) -> io::Result<(u32, u32, u32, u32)> {
     let size = size_of::<libc::proc_bsdinfo>();
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
     let received = unsafe {
@@ -332,7 +332,7 @@ fn job_control(pid: u32) -> io::Result<(u32, u32, u32, u32)> {
 }
 
 #[cfg(target_os = "linux")]
-fn job_control(pid: u32) -> io::Result<(u32, u32, u32, u32)> {
+pub(crate) fn job_control(pid: u32) -> io::Result<(u32, u32, u32, u32)> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat"))?;
     let fields: Vec<_> = stat
         .rsplit_once(") ")

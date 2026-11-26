@@ -36,8 +36,9 @@ def exercise(go, rust, base):
             local=session.split("/")[1]
             src=source/local
             await_value(lambda:disk(src/"meta.json")["conversation_id"]==THREAD)
-        refused(rust, fixture_env(base,source,tools,compat=True)|{"SWARM_DAEMON_LIVE_GO_COMPAT":"1"},
-                "unsupported live Go shim state or wire version")
+        live_env = fixture_env(base, source, tools, compat=True) | {"SWARM_DAEMON_LIVE_GO_COMPAT":"1"}
+        with daemon(rust, live_env, base / "live-rust.log"):
+            assert listed(live_env)[0]["id"] == session
         assert disk(src/"meta.json")["status"]["Process"]=="running"
     finally:
         if session:
@@ -63,6 +64,8 @@ def exercise(go, rust, base):
         {"backend_required":[]},
         {"agy_input":{}},
         {"argv":[str(agy),"acp"]},
+        {"argv":[str(agy),"--settings",'{"statusLine":{"command":"/unqualified/hook"}}']},
+        {"argv":[str(agy),"--settings",'{"statusLine":{},"statusLine":{}}']},
         {"backend_program":str(agy)},
         {"cli_identity":disk(launchfile)["cli_identity"]|{"path":str(tools/"foreign-actor")}},
     ):

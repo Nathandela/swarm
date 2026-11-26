@@ -603,6 +603,15 @@ fn classic_agy(meta: &Value, launch: &Value) -> bool {
     let remaining = &launch["argv"]
         .as_array()
         .expect("established launch arguments")[1..];
+    let remaining = match remaining {
+        [flag, settings, rest @ ..] if flag == "--settings" => {
+            if !classic_agy_statusline(settings) {
+                return false;
+            }
+            rest
+        }
+        _ => remaining,
+    };
     let mut args = remaining.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -616,6 +625,38 @@ fn classic_agy(meta: &Value, launch: &Value) -> bool {
         }
     }
     true
+}
+
+fn classic_agy_statusline(settings: &Value) -> bool {
+    let Some(settings) = settings.as_str().filter(|text| text.len() <= 4096) else {
+        return false;
+    };
+    let Ok(fields) = RawFields::parse(settings) else {
+        return false;
+    };
+    let Some(line) = fields.0.get("statusLine").filter(|_| fields.0.len() == 1) else {
+        return false;
+    };
+    if !RawFields::parse(line).is_ok_and(|fields| fields.0.len() == 4) {
+        return false;
+    }
+    let Ok(line) = serde_json::from_str::<Value>(line) else {
+        return false;
+    };
+    let quoted = field(&line, "command")
+        .strip_prefix("'")
+        .and_then(|command| command.strip_suffix("' hook AgyStatusLine ''"));
+    let Some(quoted) = quoted else {
+        return false;
+    };
+    // Go's default hook accepts only one shell-quoted executable and the
+    // fixed empty chain argument. The bridge never evaluates the command.
+    quoted.starts_with('/')
+        && !quoted.replace("'\\''", "").contains('\'')
+        && !quoted.chars().any(char::is_control)
+        && line["type"] == "command"
+        && line["enabled"] == true
+        && line["stack_with_default"] == true
 }
 
 fn classic_opencode(meta: &Value, launch: &Value) -> bool {
