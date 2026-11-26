@@ -635,12 +635,12 @@ impl Launch {
     }
 }
 
-const PLAIN: &str = "\x1b[0m";
-const DIM: &str = "\x1b[0;38;5;60m";
-const ACCENT: &str = "\x1b[0;38;5;110m";
-const TITLE: &str = "\x1b[0;1;38;5;110m";
+pub(super) const PLAIN: &str = "\x1b[0m";
+pub(super) const DIM: &str = "\x1b[0;38;5;60m";
+pub(super) const ACCENT: &str = "\x1b[0;38;5;110m";
+pub(super) const TITLE: &str = "\x1b[0;1;38;5;110m";
 
-fn spans(output: &mut String, row: u16, cols: u16, pieces: &[(&str, String)]) {
+pub(super) fn spans(output: &mut String, row: u16, cols: u16, pieces: &[(&str, String)]) {
     let _ = write!(output, "\x1b[{row};1H");
     let mut remaining = cols;
     for (style, text) in pieces {

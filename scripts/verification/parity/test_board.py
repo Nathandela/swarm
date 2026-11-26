@@ -60,7 +60,7 @@ def owner_request(path, capability, body, *, discard=False):
         return receive(conn)
 
 
-def witness(root, tmux=None, cycle=False, automations=False, form_grid=False):
+def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False):
     env = p.environment(root)
     cwd = root / "work"
     binary = root / "bin/swarm"
@@ -348,6 +348,8 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False):
     if tmux is not None:
         if form_grid:
             launch_grid_witness(root, roster, start, tmux)
+        elif board_grid:
+            roster_grid_witness(root, cli, roster, start, tmux)
         else:
             grid_witness(root, cli, roster, start, tmux)
         return
@@ -410,6 +412,9 @@ def resolve_cells(raw, width, height):
                 if "\x1b" in token:
                     raise ValueError("unexpected control in tmux cell capture")
                 for ch in token:
+                    if ch == "\t":
+                        cells.extend([[" ", 1, sorted(scope), *colors] for _ in range(8 - len(cells) % 8)])
+                        continue
                     if unicodedata.combining(ch):
                         base = cells[-2] if cells[-1][1] == 0 else cells[-1]
                         base[0] += ch
@@ -611,6 +616,140 @@ def launch_grid_witness(root, roster, start, tmux):
     p.write_json(root / "grid.json", {"form_frames": frames, "form_cwd": str(root / "work"), "first_divergence": None})
 
 
+def roster_grid_witness(root, cli, roster, start, tmux):
+    (root / "effects/board-events").touch()
+    daemon = start()
+    ids = {}
+    for name in ("amber", "teal", "violet", "slate"):
+        session = cli("spawn", "--cli", "claude", "--name", name, "--dir", root / "work",
+                      "--prompt", "offline board fixture")
+        assert session.returncode == 0, session.stderr
+        ids[name] = session.stdout.decode().strip()
+    for name, text, event in (("amber", "fixture permission", "PermissionRequest"),
+                               ("teal", "fixture busy", "UserPromptSubmit"),
+                               ("violet", "fixture review", "Stop")):
+        sent = cli("send", ids[name], "--text", text)
+        assert sent.returncode == 0, sent.stderr
+        receipt = root / f"effects/event-{event}"
+        status = p.wait_for(lambda: receipt.read_text() if receipt.exists() else "",
+                            f"fixture hook {event}")
+        assert status == "0", (name, event, status)
+    assert cli("kill", ids["slate"]).returncode == 0
+    reply = owner_request(str(root / "d.sock"), "subscribe", {
+        "op":"set_tag", "session_id":ids["teal"], "tag":"fixture",
+    })
+    assert reply["op"] == "ok", reply
+
+    def grouped():
+        rows, = roster()
+        groups = {row["name"]:row["group"] for row in rows}
+        expected = {"amber":"needs_input", "teal":"working",
+                    "violet":"ready_for_review", "slate":"completed"}
+        return rows if groups == expected else None
+
+    rows = p.wait_for(grouped, "mixed public roster")
+    state = [{key: row[key] for key in ("name", "group", "status") if key in row} for row in rows]
+    command = [tmux, "-S", root / "tmux.sock", "-f", "/dev/null"]
+    def run(*argv):
+        proc = subprocess.run([*command, *argv], env=p.environment(root), cwd=root / "work",
+                              capture_output=True, timeout=4)
+        assert proc.returncode == 0, (argv, proc.stderr)
+        return proc.stdout
+
+    def snapshot(cols, height):
+        raw = run("capture-pane", "-pe", "-S", "0", "-E", str(height - 1), "-t", "roster:0.0")
+        fmt = "|".join(f"#{{{mode}}}" for mode in TMUX_MODES)
+        modes = run("display-message", "-p", "-t", "roster:0.0", fmt).decode().strip().split("|")
+        return {"ansi_base64": base64.b64encode(raw).decode(), "cells": resolve_cells(raw, cols, height),
+                "terminal_modes": dict(zip(TMUX_MODES, modes, strict=True))}
+
+    def capture(cols, height, fragment):
+        def observed():
+            frame = snapshot(cols, height)
+            text = "\n".join("".join(cell[0] for cell in row) for row in frame["cells"]).lower()
+            if fragment in ("more", "options"):
+                return frame if fragment in text.splitlines()[0].strip() else None
+            if fragment.startswith("selected:"):
+                label = fragment.split(":", 1)[1]
+                return frame if any(line.startswith("▌ ") and label in line for line in text.splitlines()) else None
+            return frame if fragment in text else None
+        return p.wait_for(observed, f"{cols}x{height} {fragment}")
+
+    def key(*names):
+        run("send-keys", "-t", "roster:0.0", *names)
+
+    frames = []
+    for cols, height in ((120, 24), (80, 24), (40, 8), (24, 4)):
+        run("new-session", "-d", "-s", "roster", "-x", str(cols), "-y", str(height),
+            "-c", root / "work", root / "bin/board")
+        initial = capture(cols, height, "amber")
+        key("Left")
+        folded = capture(cols, height, "▌ needs input")
+        key("Right")
+        expanded = capture(cols, height, "amber")
+        case = {"cols":cols, "rows":height, "initial":initial, "folded":folded, "expanded":expanded}
+        key("Down")
+        case["down"] = capture(cols, height, "selected:teal")
+        key("Up")
+        case["up"] = capture(cols, height, "selected:amber")
+        key("g")
+        case["attention"] = capture(cols, height, "selected:violet")
+        key("g")
+        capture(cols, height, "selected:amber")
+        if cols == 40:
+            key("End")
+            case["bottom"] = capture(cols, height, "selected:slate")
+            run("send-keys", "-H", "-t", "roster:0.0", *(f"{byte:02x}" for byte in b"\x1b[<64;10;4M"))
+            case["wheel"] = capture(cols, height, "show (")
+            key("Home")
+            capture(cols, height, "selected:amber")
+        if cols == 80:
+            run("resize-window", "-t", "roster:0", "-x", "40", "-y", "8")
+            case["resized"] = capture(40, 8, "approval")
+            run("resize-window", "-t", "roster:0", "-x", str(cols), "-y", str(height))
+            capture(cols, height, "group: ")
+        if cols >= 40:
+            key("m")
+            case["more"] = capture(cols, height, "more")
+            key("o")
+            case["options"] = capture(cols, height, "options")
+        frames.append(case)
+        run("kill-session", "-t", "roster")
+
+    for name in ("amber", "teal", "violet"):
+        assert cli("kill", ids[name]).returncode == 0
+    daemon.terminate()
+    daemon.wait(timeout=5)
+    p.write_json(root / "grid.json", {"roster_frames":frames, "roster":state,
+                                      "form_cwd":str(root / "work"), "first_divergence":None})
+
+
+def compare_rosters(reference, candidate):
+    ref, rust = (json.loads(Path(path).read_bytes()) for path in (reference, candidate))
+    assert ref["tmux"] == rust["tmux"] and ref["form_cwd"] == rust["form_cwd"]
+    assert {s["name"]:s["group"] for s in ref["roster"]} == {s["name"]:s["group"] for s in rust["roster"]}
+    mismatches = 0
+    for left, right in zip(ref["roster_frames"], rust["roster_frames"], strict=True):
+        assert left.keys() == right.keys() and (left["cols"], left["rows"]) == (right["cols"], right["rows"])
+        for frame in (key for key in left if key not in ("cols", "rows")):
+            delta = []
+            for y, (expected, observed) in enumerate(zip(left[frame]["cells"], right[frame]["cells"], strict=True)):
+                for x, (a, b) in enumerate(zip(expected, observed, strict=True)):
+                    if a != b:
+                        delta.append((x, y, a, b))
+            print(f"{left['cols']}×{left['rows']} {frame}: {len(delta)} differing cells")
+            if delta:
+                print(f"  first difference {delta[0]}")
+            for mode, expected in left[frame]["terminal_modes"].items():
+                actual = right[frame]["terminal_modes"][mode]
+                if expected != actual:
+                    print(f"  {mode}: {expected} → {actual}")
+                    mismatches += 1
+            mismatches += len(delta)
+    if mismatches:
+        raise SystemExit(1)
+
+
 def compare_forms(reference, candidate):
     ref, rust = (json.loads(Path(path).read_bytes()) for path in (reference, candidate))
     assert ref["tmux"] == rust["tmux"], "form receipts use different terminal engines"
@@ -635,13 +774,13 @@ def compare_forms(reference, candidate):
 
 
 def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False,
-        form_root=None):
+        form_root=None, board_grid=False):
     scratch = Path("/tmp").resolve()
     if form_root is None:
         root = Path(tempfile.mkdtemp(prefix="pb-", dir=scratch))
     else:
         root = form_root.resolve()
-        if not form_grid or root.parent != scratch:
+        if not (form_grid or board_grid) or root.parent != scratch:
             raise ValueError("form root must be a new direct child of /tmp")
         root.mkdir(mode=0o700)
     child = driver = None
@@ -665,6 +804,8 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             command.append(tmux)
             if form_grid:
                 command.append("--form-grid")
+            elif board_grid:
+                command.append("--board-grid")
         child = subprocess.Popen(command, cwd=root / "work", env=p.environment(root),
                                  start_new_session=True)
         driver = (child.pid, p.generation(child.pid))
@@ -692,21 +833,25 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
         if child is not None:
             child.wait(timeout=2)
         shutil.rmtree(root)
-    exercise = ("comparative launch-form grids" if form_grid else
+    exercise = ("comparative roster grids" if board_grid else
+                "comparative launch-form grids" if form_grid else
                 "local automation CLI and owner dashboard catalog/disconnect" if automations else
                 "running-session cycling" if cycle else "board launch, attach and live reattach")
-    print(f"{exercise} {'captured' if form_grid else 'passed'}; cleanup {cleanup}")
+    print(f"{exercise} {'captured' if form_grid or board_grid else 'passed'}; cleanup {cleanup}")
 
 
 if __name__ == "__main__":
-    if sys.argv[1:2] == ["--compare-forms"] and len(sys.argv) == 4:
+    if sys.argv[1:2] == ["--compare-rosters"] and len(sys.argv) == 4:
+        compare_rosters(sys.argv[2], sys.argv[3])
+    elif sys.argv[1:2] == ["--compare-forms"] and len(sys.argv) == 4:
         compare_forms(sys.argv[2], sys.argv[3])
     elif sys.argv[1:2] == ["--compare-grids"] and len(sys.argv) == 4:
         compare_grid_receipts(sys.argv[2], sys.argv[3])
     elif len(sys.argv) in (3, 4, 5) and sys.argv[1] == "_inside":
         mode = sys.argv[3] if len(sys.argv) >= 4 else None
         witness(Path(sys.argv[2]), Path(mode) if mode and not mode.startswith("--") else None,
-                mode == "--cycle", mode == "--automations", len(sys.argv) == 5)
+                mode == "--cycle", mode == "--automations", sys.argv[-1] == "--form-grid",
+                sys.argv[-1] == "--board-grid")
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
@@ -717,11 +862,13 @@ if __name__ == "__main__":
         modes.add_argument("--cycle", action="store_true", help="drive two live sessions through next, previous and detach")
         parser.add_argument("--grid-evidence", type=Path)
         parser.add_argument("--form-root", type=Path, help="reuse the same new /tmp path in sequential form arms")
-        parser.add_argument("--form-grid", action="store_true", help="capture launch form across reference terminal sizes")
+        grids = parser.add_mutually_exclusive_group()
+        grids.add_argument("--form-grid", action="store_true", help="capture launch form across reference terminal sizes")
+        grids.add_argument("--board-grid", action="store_true", help="capture populated roster across reference terminal sizes")
         args = parser.parse_args()
         if bool(args.tmux) != bool(args.grid_evidence):
             parser.error("--tmux and --grid-evidence are required together")
-        if args.form_grid and not args.tmux:
+        if (args.form_grid or args.board_grid) and not args.tmux:
             parser.error("--form-grid requires --tmux")
         run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
-            args.form_grid, args.form_root)
+            args.form_grid, args.form_root, args.board_grid)

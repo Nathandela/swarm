@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import signal
 import struct
+import subprocess
 import sys
 import termios
 import time
@@ -35,7 +36,16 @@ with (effects / "input").open("ab", buffering=0) as log:
     while data := os.read(0, 1):
         log.write(data)
         if data in (b"\n", b"\r"):
-            if (effects / "grid").exists() and pending == b"before":
+            if (effects / "board-events").exists() and pending in (
+                b"fixture permission", b"fixture review", b"fixture busy",
+            ):
+                event = {b"fixture permission":"PermissionRequest", b"fixture review":"Stop",
+                         b"fixture busy":"UserPromptSubmit"}[bytes(pending)]
+                owner = Path(sys.argv[0]).parent / "swarm"
+                post = subprocess.run([owner, "hook", event], input=b'{"last_assistant_message":"fixture review"}',
+                                      capture_output=True, timeout=3)
+                (effects / f"event-{event}").write_text(str(post.returncode))
+            elif (effects / "grid").exists() and pending == b"before":
                 os.write(1, b"\x1b[?1049h\x1b[?25l\x1b[?1h\x1b[?1002h\x1b[?1006h"
                             b"\x1b[?2004h\x1b[2J\x1b[1;1Hfixture grid"
                             b"\x1b[2;3H\x1b[1;4;38;2;20;130;200m"

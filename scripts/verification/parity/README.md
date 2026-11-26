@@ -70,3 +70,13 @@ provider before recording the settled agent frame. Compare the two receipts
 with `test_board.py --compare-forms GO.json RUST.json`. The comparator requires
 the same workspace path and terminal engine, and reports cell differences
 without substitutions.
+
+The `--board-grid` mode populates an isolated roster through public launches,
+sends synthetic Claude hook events, and tags a row. It captures the ordinary
+board, fold/expand, direction keys, attention jump, wheel reveal, live resize,
+More and Options at 120×24, 80×24, 40×8 and 24×4. Use the same
+`--form-root` for the sequential arms and compare the receipts with
+`--compare-rosters GO.json RUST.json`. It reports unmasked cell and terminal
+mode differences, including animation, elapsed time and hidden cursor
+positions. The capture and action witness can pass while the comparator still
+reports rendering differences.

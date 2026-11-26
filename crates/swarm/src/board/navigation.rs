@@ -17,13 +17,15 @@ pub(super) enum Row<'a> {
         folded: bool,
     },
     Session(&'a Value),
+    Spacer,
 }
 
 impl Row<'_> {
-    pub(super) fn focus(&self) -> Focus {
+    pub(super) fn focus(&self) -> Option<Focus> {
         match self {
-            Self::Section { id, .. } => Focus::Section((*id).to_owned()),
-            Self::Session(row) => Focus::Session(field(row, "id").to_owned()),
+            Self::Section { id, .. } => Some(Focus::Section((*id).to_owned())),
+            Self::Session(row) => Some(Focus::Session(field(row, "id").to_owned())),
+            Self::Spacer => None,
         }
     }
 
@@ -68,7 +70,7 @@ impl Board {
                 .display_rows()
                 .into_iter()
                 .find(Row::selectable)
-                .map(|row| row.focus());
+                .and_then(|row| row.focus());
             if let Some(first) = first {
                 self.set_focus(first);
             }
@@ -118,6 +120,9 @@ impl Board {
             });
             if !folded {
                 rows.extend(indexes.iter().map(|&index| Row::Session(&self.rows[index])));
+                if !super::roster::compact(self.columns) {
+                    rows.push(Row::Spacer);
+                }
             }
         }
         rows
@@ -145,14 +150,14 @@ impl Board {
 
     pub(super) fn visible(&self, rows: u16) -> bool {
         self.focus_line()
-            .is_some_and(|line| line >= self.top && line < self.top + capacity(rows))
+            .is_some_and(|line| line >= self.top && line < self.top + board_capacity(rows))
     }
 
     fn focus_line(&self) -> Option<usize> {
         let focus = self.current_focus()?;
         self.display_rows()
             .iter()
-            .position(|row| row.focus() == focus)
+            .position(|row| row.focus().as_ref() == Some(&focus))
     }
 
     pub(super) fn reveal_focus(&mut self, rows: u16) {
@@ -161,23 +166,13 @@ impl Board {
             self.top = self
                 .top
                 .min(line)
-                .max((line + 1).saturating_sub(capacity(rows)));
+                .max((line + 1).saturating_sub(board_capacity(rows)));
         }
     }
 
     pub(super) fn clamp_top(&mut self, rows: u16) {
-        let count = self
-            .sections
-            .iter()
-            .map(|(id, rows)| {
-                1 + if self.folded.contains(&(self.layout.group, id.clone())) {
-                    0
-                } else {
-                    rows.len()
-                }
-            })
-            .sum::<usize>();
-        self.top = self.top.min(count.saturating_sub(capacity(rows)));
+        let count = self.display_rows().len();
+        self.top = self.top.min(count.saturating_sub(board_capacity(rows)));
     }
 
     pub(super) fn move_selection(&mut self, offset: isize, wrap: bool, rows: u16) {
@@ -185,7 +180,7 @@ impl Board {
             .display_rows()
             .iter()
             .filter(|row| row.selectable())
-            .map(Row::focus)
+            .filter_map(Row::focus)
             .collect();
         if focuses.is_empty() {
             return;
@@ -251,6 +246,14 @@ impl Board {
             self.reveal_focus(rows);
         }
     }
+}
+
+pub(super) fn board_first(rows: u16) -> u16 {
+    if rows >= 12 { 3 } else { 2 }
+}
+
+pub(super) fn board_capacity(rows: u16) -> usize {
+    usize::from(rows.saturating_sub(board_first(rows)).max(1))
 }
 
 pub(super) fn capacity(rows: u16) -> usize {

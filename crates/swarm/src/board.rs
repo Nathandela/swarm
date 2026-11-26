@@ -4,6 +4,7 @@ mod keys;
 mod launch;
 mod navigation;
 mod preferences;
+mod roster;
 mod term;
 
 use crate::ipc::{self, Client, field};
@@ -14,7 +15,7 @@ use crate::schedule::catalog::{
 use automation::Automation;
 use keys::{Key, Keys, Mouse, MouseAction};
 use launch::Launch;
-use navigation::{Focus, GROUPS, ORDERS, Row, capacity, truncation, usable};
+use navigation::{Focus, GROUPS, ORDERS, Row, board_capacity, board_first, capacity, usable};
 use preferences::Layout;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -24,7 +25,7 @@ use std::io::{self, Write};
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::time::{Duration, Instant};
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const POLL: Duration = Duration::from_millis(40);
 const ROSTER_CAPS: &[&str] = &[
@@ -64,6 +65,8 @@ fn board(path: &Path) -> io::Result<()> {
     output.write_all(term::ENTER_BOARD.as_bytes())?;
     let mut connection = Some(client);
     let mut geometry = term::size();
+    board.columns = geometry.0;
+    let clock = Instant::now();
     board.reveal_focus(geometry.1);
     let mut keys = Keys::default();
     let mut raw_input = [0; 4096];
@@ -75,9 +78,22 @@ fn board(path: &Path) -> io::Result<()> {
         if let Some(Modal::Launch(form)) = &mut board.modal {
             needs_paint |= form.update_detection();
         }
+        let spinner = (clock.elapsed().as_millis() / 90) as usize % 10;
+        let second = clock.elapsed().as_secs();
+        if board.modal.is_none() && !board.rows.is_empty() {
+            needs_paint |= board.second != second
+                || board.spinner != spinner
+                    && board
+                        .rows
+                        .iter()
+                        .any(|row| field(row, "group") == "working");
+        }
+        board.spinner = spinner;
+        board.second = second;
         if dimensions != geometry || needs_paint {
             if dimensions != geometry {
                 geometry = dimensions;
+                board.columns = geometry.0;
                 board.press = None;
                 board.reveal_focus(geometry.1);
             }
@@ -254,6 +270,9 @@ fn connect(path: &Path) -> io::Result<Client> {
 #[derive(Default)]
 struct Board {
     rows: Vec<Value>,
+    columns: u16,
+    spinner: usize,
+    second: u64,
     selected: String,
     focused_section: Option<String>,
     folded: BTreeSet<(usize, String)>,
@@ -418,7 +437,7 @@ impl Board {
             }
             return self.update_modal(modal, key, geometry, online);
         }
-        let step = capacity(rows) as isize;
+        let step = board_capacity(rows) as isize;
         let navigation = match key {
             Key::Escape | Key::CtrlC => return Action::Quit,
             Key::Up | Key::Text('k') => Some((-1, true)),
@@ -690,6 +709,7 @@ impl Board {
                         return self.command(
                             match chosen {
                                 '⏎' => Key::Enter,
+                                '⎋' => Key::Escape,
                                 'x' => Key::CtrlX,
                                 other => Key::Text(other),
                             },
@@ -805,20 +825,31 @@ impl Board {
         entries
     }
 
-    fn buttons(&self, cols: u16) -> Vec<(&'static str, char)> {
-        if cols < 50 {
-            return vec![("New (n)", 'n'), ("More (m)", 'm')];
-        }
+    fn buttons(&self, cols: u16, rows: u16) -> Vec<(&'static str, char)> {
         let mut buttons = vec![("New (n)", 'n')];
-        if self.row().is_some_and(running) {
-            buttons.push(("Open (⏎)", '⏎'));
+        let target = self.row();
+        if self.focused_section.is_some() {
+            buttons.push(("Expand (⏎)", '⏎'));
+        } else if let Some(row) = target {
+            if !self.visible(rows) {
+                buttons.push(("Show (⏎)", '⏎'));
+            } else if running(row) || scheduled_review(row) || linked_dispatcher(row) {
+                buttons.push(("Open (⏎)", '⏎'));
+            } else if resumable(row) {
+                buttons.push(("Resume (r)", 'r'));
+            }
         }
         buttons.push(("More (m)", 'm'));
-        if let Some(row) = self.row().filter(|row| !linked_dispatcher(row)) {
-            if cols >= 64 {
-                buttons.push(("Rename (e)", 'e'));
-                buttons.push(("Tag (t)", 't'));
-            }
+        let required = buttons
+            .iter()
+            .map(|(label, _)| label.width() + 3)
+            .sum::<usize>()
+            - 1;
+        if required > usize::from(cols) {
+            buttons.remove(0);
+        }
+        if let Some(row) = target.filter(|row| self.visible(rows) && !linked_dispatcher(row)) {
+            buttons.extend([("Rename (e)", 'e'), ("Tag (t)", 't')]);
             let lifecycle = if running(row) {
                 "Kill (ctrl+x)"
             } else {
@@ -826,15 +857,20 @@ impl Board {
             };
             buttons.push((lifecycle, 'x'));
         }
+        buttons.extend([
+            ("Options (o)", 'o'),
+            ("Attention (g)", 'g'),
+            ("Quit (esc)", '⎋'),
+        ]);
         buttons
     }
 
-    fn button_view(&self, cols: u16) -> Vec<(String, char, u16, u16)> {
+    fn button_view(&self, cols: u16, rows: u16) -> Vec<(String, char, u16, u16)> {
         let mut x = 1;
         let mut bars = Vec::new();
-        for (entry, key) in self.buttons(cols) {
+        for (entry, key) in self.buttons(cols, rows) {
             let text = format!("[{entry}]");
-            let right = x + (text.chars().count() as u16) - 1;
+            let right = x + (text.width() as u16) - 1;
             if right > cols {
                 break;
             }
@@ -873,7 +909,7 @@ impl Board {
         }
         if event.y == rows {
             return self
-                .button_view(cols)
+                .button_view(cols, rows)
                 .into_iter()
                 .find(|(_, _, left, right)| (*left..=*right).contains(&event.x))
                 .map(|(_, key, _, _)| Hit::Button {
@@ -882,14 +918,16 @@ impl Board {
                     running: self.row().is_some_and(running),
                 });
         }
-        self.display_rows()
-            .get(self.top + usize::from(event.y - 2))
-            .map(|row| {
-                Hit::Row(
-                    row.focus(),
-                    matches!(row, Row::Session(row) if running(row)),
-                )
-            })
+        let first = board_first(rows);
+        if event.y < first {
+            return None;
+        }
+        let row = self
+            .display_rows()
+            .into_iter()
+            .nth(self.top + usize::from(event.y - first))?;
+        row.focus()
+            .map(|focus| Hit::Row(focus, matches!(row, Row::Session(row) if running(row))))
     }
 
     fn mouse(&mut self, event: Mouse, geometry: (u16, u16), online: bool) -> Action {
@@ -907,7 +945,12 @@ impl Board {
             MouseAction::Drag => self.press = None,
             MouseAction::WheelUp | MouseAction::WheelDown => {
                 self.press = None;
-                if (2..geometry.1).contains(&event.y) {
+                let first = if self.modal.is_some() {
+                    2
+                } else {
+                    board_first(geometry.1)
+                };
+                if (first..geometry.1).contains(&event.y) {
                     let down = event.action == MouseAction::WheelDown;
                     if let Some(Modal::More {
                         target, running, ..
@@ -963,6 +1006,7 @@ impl Board {
                         Hit::Button { key: button, .. } => {
                             let key = match button {
                                 '⏎' => Key::Enter,
+                                '⎋' => Key::Escape,
                                 'x' => Key::CtrlX,
                                 ch => Key::Text(ch),
                             };
@@ -1116,85 +1160,7 @@ impl Board {
     }
 
     fn roster_view(&self, screen: &mut String, cols: u16, rows: u16) {
-        let input = self
-            .rows
-            .iter()
-            .filter(|row| field(row, "group") == "needs_input")
-            .count();
-        let review = self
-            .rows
-            .iter()
-            .filter(|row| field(row, "group") == "ready_for_review")
-            .count();
-        let header = format!(
-            "swarm · {input} input · {review} review · group: {} · order: {}",
-            GROUPS[self.layout.group], ORDERS[self.layout.order]
-        );
-        form_header(screen, cols, &header);
-        let focus = self.current_focus();
-        let display = self.display_rows();
-        if display.is_empty() {
-            line(
-                screen,
-                2,
-                cols,
-                "\x1b[2m",
-                "No sessions · press n to launch one",
-            );
-        }
-        for (index, row) in display
-            .iter()
-            .skip(self.top)
-            .take(capacity(rows))
-            .enumerate()
-        {
-            let selected = focus.as_ref() == Some(&row.focus());
-            let marker = if selected { "▌" } else { " " };
-            let text = match row {
-                Row::Section { id, count, folded } => {
-                    let arrow = if *folded { "▸" } else { "▾" };
-                    format!("{marker} {arrow} {} ({count})", self.section_title(id))
-                }
-                Row::Session(row) => {
-                    let tag = field(row, "tag");
-                    let separator = if tag.is_empty() { "" } else { " #" };
-                    let automation = if tag == "automation" && row["scheduled_completed"] == true {
-                        " ◆"
-                    } else {
-                        ""
-                    };
-                    let details = if cols >= 64 {
-                        format!("   {:<8}  {}", field(row, "agent"), field(row, "cwd"))
-                    } else {
-                        String::new()
-                    };
-                    format!(
-                        "{marker} {}{automation}{separator}{tag}{details}",
-                        name(row)
-                    )
-                }
-            };
-            let style = if selected {
-                "\x1b[38;2;142;180;230;1m"
-            } else if matches!(row, Row::Section { .. }) {
-                "\x1b[38;2;111;195;188;1m"
-            } else {
-                ""
-            };
-            line(
-                screen,
-                index as u16 + 2,
-                cols,
-                style,
-                &truncation(&text, cols),
-            );
-        }
-        let buttons: Vec<_> = self
-            .button_view(cols)
-            .into_iter()
-            .map(|(button, ..)| button)
-            .collect();
-        line(screen, rows, cols, "\x1b[2m", &buttons.join(" "));
+        roster::view(self, screen, cols, rows);
     }
 }
 
@@ -1221,6 +1187,10 @@ fn scroll(offset: usize, down: bool) -> usize {
     } else {
         offset.saturating_sub(1)
     }
+}
+
+fn scheduled_review(row: &Value) -> bool {
+    field(row, "tag") == "automation" && row["scheduled_completed"] == true
 }
 
 fn running(row: &Value) -> bool {
@@ -1453,7 +1423,7 @@ mod tests {
         board.rebuild_sections();
         let geometry = (80, 24);
         let (_, _, x, _) = board
-            .button_view(80)
+            .button_view(80, 24)
             .into_iter()
             .find(|(_, key, ..)| *key == '⏎')
             .unwrap();
