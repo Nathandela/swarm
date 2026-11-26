@@ -1,3 +1,5 @@
+mod operator;
+
 use crate::ipc::wire;
 use serde_json::Value;
 use std::fs::{self, DirBuilder, File, OpenOptions};
@@ -257,7 +259,7 @@ pub(crate) fn birth(pid: u32) -> io::Result<u64> {
         .ok_or_else(|| io::Error::other("could not read process birth ticks"))
 }
 
-pub(crate) fn terminal_peer(socket: &UnixStream, route: &str) -> io::Result<Value> {
+pub(crate) fn terminal_peer(socket: &UnixStream, route: &str, observe: bool) -> io::Result<Value> {
     let pid = peer_pid(socket)?;
     let born = birth(pid)?;
     let (parent, group, tty, foreground) = job_control(pid)?;
@@ -270,8 +272,17 @@ pub(crate) fn terminal_peer(socket: &UnixStream, route: &str) -> io::Result<Valu
     {
         return Err(io::Error::other("permission operator context is unproved"));
     }
+    let output = observe
+        .then(|| operator::stdout(pid, route, tty))
+        .transpose()?;
+    let parent_birth = birth(parent)?;
+    if !operator::matches_image(pid)? || birth(pid)? != born {
+        return Err(io::Error::other(
+            "permission operator executable is unproved",
+        ));
+    }
     Ok(
-        serde_json::json!({"scope":[parent,birth(parent)?,session,route,if route == "tty" {tty} else {0}],"born":born,"pid":pid}),
+        serde_json::json!({"scope":[parent,parent_birth,session,route,if route == "tty" {tty} else {0}],"born":born,"pid":pid,"output":output}),
     )
 }
 

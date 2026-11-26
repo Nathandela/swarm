@@ -1327,7 +1327,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 } else {
                     let session = state.session(&request)?;
                     let route = field(&request,"permission_route");
-                    let context = (session.is_scheduled_agy() && caps.contains(&"agy-permission-cli-v1")).then(|| runtime::terminal_peer(&stream,route).ok()).flatten();
+                    let context = (session.is_scheduled_agy() && caps.contains(&"agy-permission-cli-v1")).then(|| runtime::terminal_peer(&stream,route,true).ok()).flatten();
                     let mut terminal = session.status_exchange(&json!({
                         "type":"snapshot_req","permission_snapshot":context.is_some(),
                     }))?;
@@ -1344,7 +1344,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             "agy_permission_peeked" if caps.contains(&"agy-permission-cli-v1") => (|| {
                 let (session, offered, context, route) = peek_offer.take().ok_or_else(|| io::Error::other("no pending Antigravity peek proof"))?;
                 if request["session_id"] != session || request["request"] != offered
-                    || runtime::terminal_peer(&stream,&route)? != context
+                    || runtime::terminal_peer(&stream,&route,true)? != context
                 {
                     return Err(io::Error::other("Antigravity peek proof does not match this foreground client"));
                 }
@@ -1391,7 +1391,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 };
                 let mut command = json!({"type":"input","data":bytes,"submit":submit,"paste":paste});
                 if submit && session.is_scheduled_agy() && caps.contains(&"agy-permission-cli-v1") {
-                    command["permission_contexts"] = json!(["tty","pipe"].iter().filter_map(|route| runtime::terminal_peer(&stream,route).ok()).collect::<Vec<_>>());
+                    command["permission_contexts"] = json!(["tty","pipe"].iter().filter_map(|route| runtime::terminal_peer(&stream,route,false).ok()).collect::<Vec<_>>());
                 }
                 let result = session.status_exchange(&command)?;
                 if field(&result, "type") != "ok" {
