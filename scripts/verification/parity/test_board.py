@@ -248,6 +248,9 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
 
             step(b"\x1b[D", b"Status")
             step(b"\x1b[27u", b"[New (n)]")
+            step(b"v", b"No jobs in this view.")
+            step(b"\r", b"No jobs in this view.")
+            step(b"v", b"Fixture automation")
             step(b"\x1b[<0;2;24M\x1b[<0;2;24m", b"New automation")
             step(b"Created from board\x1b[B\x1b[B\x1b[200~first line\nsecond line\x1b[201~"
                  b"\x1b[B\x15claude\r", b"Status")
@@ -329,6 +332,20 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             assert shown(created_id)["state"] == "archived"
             assert shown(job)["state"] == "active"
             assert {run["id"] for run in history_for(created_id)} == ids
+
+            archived_catalog = schedule_db.read_bytes()
+            step(b"\x1b[27u", b"[Active (v)]")
+            step(b"\r", "Status · archived".encode())
+            step(b"h", "Open (⏎)".encode())
+            run_id = history_for(created_id)[0]["id"]
+            assert run_id in ids
+            step(b"\r", f"Run · {run_id}".encode())
+            step(b"\x1b[D", "Open (⏎)".encode())
+            step(b"\x1b[D", "Status · archived".encode())
+            step(b"\x1b[27u", b"[Active (v)]")
+            step(b"v", b"[Archived (v)]")
+            step(b"\x1b[<0;4;2M\x1b[<0;4;2m", "Status · active".encode())
+            assert schedule_db.read_bytes() == archived_catalog
 
             daemon.terminate()
             daemon.wait(timeout=5)

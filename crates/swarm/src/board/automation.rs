@@ -13,6 +13,7 @@ pub(super) struct Automation {
     records: Option<Records>,
     error: String,
     selected: usize,
+    archived: bool,
     job: String,
     draft: Option<Draft>,
     archive: Option<ArchivePrompt>,
@@ -160,11 +161,35 @@ impl Automation {
             self.error.clear();
             return Some(Action::None);
         }
-        (online && matches!(self.records, Some(Records::Get(_))))
-            .then_some(Action::Catalog(Read::List))
+        if online && let Some(Records::Get(job)) = &self.records {
+            return Some(self.list(job.state == "archived"));
+        }
+        None
+    }
+
+    fn list(&mut self, archived: bool) -> Action {
+        self.archived = archived;
+        self.selected = 0;
+        Action::Catalog(Read::List)
+    }
+
+    fn visible_jobs(&self) -> impl Iterator<Item = &Job> {
+        let jobs = match &self.records {
+            Some(Records::List(jobs)) => jobs.as_slice(),
+            _ => &[],
+        };
+        jobs.iter()
+            .filter(|job| (job.state == "archived") == self.archived)
     }
 
     fn buttons(&self, (cols, rows): (u16, u16)) -> Vec<Button> {
+        let list_controls = [
+            ("New", 'n'),
+            (if self.archived { "Active" } else { "Archived" }, 'v'),
+            ("Refresh", 'u'),
+            ("Open", '⏎'),
+            ("Back", '⎋'),
+        ];
         let controls: &[(&str, char)] = if self.enabling.is_some() {
             &[]
         } else if let Some(run) = &self.run {
@@ -191,9 +216,7 @@ impl Automation {
             &[("Archive job", 'y'), ("Cancel", '⎋')]
         } else {
             match &self.records {
-                Some(Records::List(_)) => {
-                    &[("New", 'n'), ("Refresh", 'u'), ("Open", '⏎'), ("Back", '⎋')]
-                }
+                Some(Records::List(_)) => &list_controls,
                 Some(Records::Get(job)) if job.state == "archived" => {
                     &[("History", 'h'), ("List", '←'), ("Back", '⎋')]
                 }
@@ -311,7 +334,7 @@ impl Automation {
             );
         }
         let count = match &self.records {
-            Some(Records::List(items)) => items.len(),
+            Some(Records::List(_)) => self.visible_jobs().count(),
             Some(Records::History(items)) => items.len(),
             _ => 0,
         };
@@ -516,12 +539,21 @@ impl Automation {
                     intent: Manual::Run { previous },
                 }
             }
+            (Some(Records::List(_)), Key::Text('v')) => self.list(!self.archived),
+            (Some(Records::Get(job)), Key::Left | Key::Text('u')) => {
+                self.list(job.state == "archived")
+            }
             (_, Key::Text('u')) => Action::Catalog(Read::List),
-            (Some(Records::List(jobs)), Key::Enter) if !jobs.is_empty() => {
-                self.job = jobs[self.selected.min(jobs.len() - 1)].id.clone();
-                Action::Catalog(Read::Get {
-                    id: self.job.clone(),
-                })
+            (Some(Records::List(_)), Key::Enter) => {
+                let Some(id) = self
+                    .visible_jobs()
+                    .nth(self.selected)
+                    .map(|job| job.id.clone())
+                else {
+                    return Action::None;
+                };
+                self.job.clone_from(&id);
+                Action::Catalog(Read::Get { id })
             }
             (Some(Records::Get(job)), Key::Text('h')) => {
                 Action::Catalog(Read::History { id: job.id.clone() })
@@ -533,10 +565,9 @@ impl Automation {
             (Some(Records::History(_)), Key::Left) => Action::Catalog(Read::Get {
                 id: self.job.clone(),
             }),
-            (Some(Records::Get(_)), Key::Left) => Action::Catalog(Read::List),
             (records, key) => {
                 let count = match records {
-                    Some(Records::List(items)) => items.len(),
+                    Some(Records::List(_)) => self.visible_jobs().count(),
                     Some(Records::History(items)) => items.len(),
                     _ => 0,
                 };
@@ -619,13 +650,23 @@ impl Automation {
             self.footer(output, cols, rows);
             return;
         }
-        form_header(output, cols, "Automations");
+        let title = match &self.records {
+            Some(Records::List(_)) if self.archived && cols < 32 => "Archived",
+            Some(Records::List(_)) if self.archived => "Automations / Archived",
+            _ => "Automations",
+        };
+        form_header(output, cols, title);
         let items = match &self.records {
-            Some(Records::List(jobs)) if jobs.is_empty() => vec!["No automations".into()],
-            Some(Records::List(jobs)) => jobs
-                .iter()
-                .map(|job| format!("{} · {}", job.name(), job.state))
-                .collect(),
+            Some(Records::List(_)) => {
+                let mut items: Vec<_> = self
+                    .visible_jobs()
+                    .map(|job| format!("{} · {}", job.name(), job.state))
+                    .collect();
+                if items.is_empty() {
+                    items.push("No jobs in this view.".into());
+                }
+                items
+            }
             Some(Records::Get(job)) => vec![
                 job.name().to_owned(),
                 format!("Status · {}", job.state),
