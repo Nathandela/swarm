@@ -442,6 +442,16 @@ impl State {
         } else {
             handoff::bind(self, &request)?
         };
+        if let Some(scope) = managed
+            .as_ref()
+            .filter(|scope| scope["launch"]["agent"] == "claude")
+        {
+            crate::providers::claude::verify_project_authority(
+                std::path::Path::new(field(scope, "claude_home")),
+                std::path::Path::new(field(&scope["launch"], "cwd")),
+                &scope["project_authority"],
+            )?;
+        }
         let mut prepared = Session::prepare(&bound)?;
         if let Some(scope) = mailbox {
             prepared.bind_mail(scope);
@@ -452,7 +462,20 @@ impl State {
                     "manager cannot inherit an ordinary handoff scope",
                 ));
             }
-            prepared.bind_manager(scope.clone())?;
+            let mut binding = scope.clone();
+            let previous = &scope["resume_request"];
+            if scope["launch"]["agent"] == "claude" && !previous.is_null() {
+                let predecessor =
+                    self.session(&json!({"session_id":previous["binding"]["session"]}))?;
+                if !predecessor.manager_parked(previous)? {
+                    return Err(io::Error::other(
+                        "Claude manager predecessor is not proved parked",
+                    ));
+                }
+                binding["claude_resume"] =
+                    predecessor.claude_park_resume_record(&previous["binding"])?;
+            }
+            prepared.bind_manager(binding)?;
         }
         if self.stopped_go.is_some() {
             prepared.bind_go_rollback(&bound)?;
@@ -906,6 +929,10 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         );
     }
     let manager_available = state.stopped_go.is_none()
+        && hello["capabilities"].as_array().is_some_and(|caps| {
+            caps.iter()
+                .any(|cap| cap.as_str().is_some_and(|cap| cap.starts_with("manager-")))
+        })
         && crate::discord::native_manager_available(state.socket.to_string_lossy().as_ref());
     let worker_origin_available = state.stopped_go.is_none()
         && state.root.parent().is_some_and(|root| {
@@ -942,6 +969,8 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                             | "message-origin"
                             | "manager-retire"
                             | "manager-retire-resume-v1"
+                            | manager::NATIVE_CLI_CAP
+                            | crate::discord::enrolled_worker::CAP
                     )
                 || matches!(
                     *cap,
@@ -1210,6 +1239,25 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             "manager_runtime" | "manager_input_status" | "manager_resolve_call"
                 if caps.contains(&"manager-provenance") => state.session(&request).and_then(|session| {
                     let body = session.manager_operation(&request)?;
+                    reply(&writer,state,body)
+                }),
+            "manager_worker_read" if caps.contains(&crate::discord::enrolled_worker::CAP) =>
+                state.session(&request).and_then(|manager| {
+                    let call=&request["manager_worker_read"];
+                    let context=manager.enrolled_tool_context(&request,call,"swarm_read")?;
+                    let args=&call["arguments"];
+                    let target=state.session(&json!({"session_id":args["session"]}))?;
+                    let result=target.enrolled_worker_result(&context,args)?;
+                    reply(&writer,state,json!({"op":"manager_worker_read","session_id":request["session_id"],
+                        "worker_result":result}))
+                }),
+            "manager_worker_action" if caps.contains(&crate::discord::enrolled_worker::CAP) =>
+                state.session(&request).and_then(|session| {
+                    let (launch, association) = session.enrolled_worker_action(&request)?;
+                    let operation = field(&request,"operation_id");
+                    let body = reliable::handle_structured(state,&json!({
+                        "op":"owner_launch","operation_id":operation,"launch":launch
+                    }),association,&|| session.enrolled_worker_action(&request).map(drop))?;
                     reply(&writer,state,body)
                 }),
             "manager_retire" | "manager_retire_status" if caps.contains(&"manager-retire") =>

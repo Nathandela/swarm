@@ -574,14 +574,19 @@ impl Inbox {
             .cloned()
     }
 
-    pub(super) fn reject_oversized_input(&mut self, id: &str, revision: &Value) -> io::Result<()> {
+    pub(super) fn reject_manager_input(
+        &mut self,
+        id: &str,
+        revision: &Value,
+        reason: &str,
+    ) -> io::Result<()> {
         let source = &self.data["messages"][id];
         if source["state"] != "prepared" || source["revision"] != *revision {
-            return Err(invalid("manager input changed before size refusal"));
+            return Err(invalid("manager input changed before refusal"));
         }
         let mut next = self.data.clone();
         next["messages"][id]["state"] = json!("rejected");
-        next["messages"][id]["error"] = json!("manager input exceeds native dispatch limit");
+        next["messages"][id]["error"] = json!(reason);
         self.save(next)
     }
 

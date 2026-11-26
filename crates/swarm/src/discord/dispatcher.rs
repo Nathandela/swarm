@@ -40,6 +40,40 @@ impl Audience for Discord {
     }
 }
 
+pub(super) fn enrolled_source(
+    cfg: &Config,
+    inbox: &mut Inbox,
+    api: &impl Audience,
+    input: &Value,
+) -> io::Result<()> {
+    let id = field(input, "source_id");
+    let origin = &input["composer"]["origin"];
+    let wake = &input["worker_wake"];
+    let revision = if wake.is_null() {
+        &origin["revision"]
+    } else {
+        &wake["owner_revision"]
+    };
+    if !super::config::snowflake(id) || origin["message_id"] != id || !revision.is_string() {
+        return Err(invalid(
+            "enrolled worker tools require a current Discord source card",
+        ));
+    }
+    let fresh = api
+        .current(cfg, id)?
+        .ok_or_else(|| invalid("original enrolled worker source is no longer visible"))?;
+    if fresh["id"] != id
+        || fresh["author"]["id"] != origin["actor_id"]
+        || fresh["channel_id"] != origin["channel_id"]
+        || api.admit(inbox, &fresh)?.is_none_or(|receipt| {
+            receipt["state"] != "accepted" || receipt["revision"] != *revision
+        })
+    {
+        return Err(invalid("enrolled worker source or audience changed"));
+    }
+    Ok(())
+}
+
 pub(super) struct Dispatcher {
     owner: Manager,
     listener: UnixListener,
@@ -53,10 +87,6 @@ pub(super) struct Dispatcher {
 
 impl Dispatcher {
     pub(super) fn open(cfg: &Config, place: &Path) -> io::Result<Option<Self>> {
-        // This first discussion path uses the native restricted manager harness.
-        if cfg.text("project_access") == "vm" {
-            return Ok(None);
-        }
         let owner = Manager::new(cfg)?;
         if owner.verify_supervisor().is_err() {
             return Ok(None);
@@ -90,6 +120,9 @@ impl Dispatcher {
             "channel_id":self.owner.channel(),"supervisor_socket":cfg.text("daemon_socket")});
         if !self.owner.guild().is_empty() {
             scope["guild_id"] = json!(self.owner.guild());
+        }
+        if cfg.0["projects"].is_object() {
+            scope["projects"] = cfg.0["projects"].clone();
         }
         scope
     }
@@ -297,8 +330,31 @@ impl Dispatcher {
             (id, current)
         };
         let starting_prompt = crate::manager_prompt::load(&self.owner.supervisor_root()?)?;
-        if field(&current, "text").len() > crate::manager_prompt::input_budget(&starting_prompt) {
-            return inbox.reject_oversized_input(&id, &current["revision"]);
+        let provider = field(&status["binding"], "provider");
+        let body = field(&current, "text");
+        if body.len()
+            > crate::manager_prompt::provider_input_budget(
+                provider,
+                &starting_prompt,
+                cfg.text("project_access") == "vm",
+            )
+        {
+            return inbox.reject_manager_input(
+                &id,
+                &current["revision"],
+                "manager input exceeds native dispatch limit",
+            );
+        }
+        if provider == "claude"
+            && [body, starting_prompt.as_str()].iter().any(|text| {
+                text.contains(crate::providers::codex_proof::claude::PREFIX) || text.contains('\0')
+            })
+        {
+            return inbox.reject_manager_input(
+                &id,
+                &current["revision"],
+                "manager input contains a reserved Claude envelope delimiter",
+            );
         }
         let composer = self.owner.composer(&current, &status, &starting_prompt)?;
         let semantic = operation("semantic")?;
@@ -329,6 +385,7 @@ impl Dispatcher {
         if cfg.0["calls"].is_object()
             || status["ready_for_input"] != true
             || status["turn"]["state"] != "completed"
+            || status["binding"]["provider"] == "claude" && status["retirement_ready"] != true
         {
             self.idle_since.set(None);
             return Ok(());
@@ -515,7 +572,11 @@ impl Dispatcher {
             let starting_prompt = crate::manager_prompt::load(&root)?;
             wake_input["text"] = json!(mail_wake::text(
                 &note,
-                crate::manager_prompt::input_budget(&starting_prompt)
+                crate::manager_prompt::provider_input_budget(
+                    field(binding, "provider"),
+                    &starting_prompt,
+                    cfg.text("project_access") == "vm"
+                )
             )?);
             let mut composer = self.owner.composer(&wake_input, status, &starting_prompt)?;
             let semantic = operation("semantic")?;
@@ -714,6 +775,81 @@ impl Dispatcher {
         Ok(())
     }
 
+    fn enrolled_worker_tool(
+        &self,
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        mut state: Value,
+        call: &Value,
+    ) -> io::Result<Value> {
+        if cfg.text("project_access") == "vm" {
+            return Err(invalid(
+                "VM managers use their separately enrolled ordinary CLI",
+            ));
+        }
+        let tool = field(call, "name");
+        let input = &state["input"];
+        let mut args = call["arguments"].clone();
+        args.sort_all_objects();
+        let proof =
+            self.owner
+                .prove_publication(&input["composer"], tool, &hash(&args)?, &call["meta"])?;
+        if proof["native_turn_id"] != input["turn_id"] {
+            return Err(invalid(
+                "worker action must belong to the current native manager turn",
+            ));
+        }
+        enrolled_source(cfg, inbox, api, input)?;
+        let session = field(&state, "session").to_owned();
+        if tool == "swarm_list" {
+            return self.owner.enrolled_roster(&state["worker_actions"], &args);
+        }
+        if tool == "swarm_status" {
+            let key = field(&args, "action_id");
+            let action = &state["worker_actions"][key];
+            if args.as_object().is_none_or(|object| object.len() != 1)
+                || key.is_empty()
+                || action.is_null()
+            {
+                return Err(invalid("unknown enrolled worker action reference"));
+            }
+            return self.owner.enrolled_worker(&session, action, false);
+        }
+        if tool == "swarm_read" {
+            return self.owner.enrolled_read(&session, call);
+        }
+        if !input["worker_wake"].is_null() {
+            return Err(invalid(
+                "worker creation requires a current human Discord admission",
+            ));
+        }
+        let key = super::enrolled_worker::key(input, &args)?;
+        let prior = &state["worker_actions"][&key];
+        if !prior.is_null() {
+            if prior["arguments"] != args {
+                return Err(invalid(
+                    "enrolled worker action already belongs to different arguments",
+                ));
+            }
+            return self.owner.enrolled_worker(&session, prior, false);
+        }
+        if state["worker_actions"]
+            .as_object()
+            .is_some_and(|actions| actions.len() >= 64)
+        {
+            return Err(invalid("enrolled worker action quota is full"));
+        }
+        let mut native_call = call.clone();
+        native_call["arguments"] = args.clone();
+        let action = json!({"key":key,"operation_id":operation("launch")?,"arguments":args,"call":native_call});
+        super::enrolled_worker::launch(&self.scope(cfg), input, &action)?;
+        state["worker_actions"][&key] = action.clone();
+        state["input"]["worker_actions"][&key] = action.clone();
+        inbox.set_manager(state)?;
+        self.owner.enrolled_worker(&session, &action, true)
+    }
+
     fn tool(
         &self,
         cfg: &Config,
@@ -732,7 +868,14 @@ impl Dispatcher {
             || state["input"].is_null()
             || !matches!(
                 field(&request["call"], "name"),
-                "publish" | "swarm_read_note" | "swarm_reply" | "swarm_read_attachment"
+                "publish"
+                    | "swarm_read_note"
+                    | "swarm_reply"
+                    | "swarm_read_attachment"
+                    | "swarm_create"
+                    | "swarm_status"
+                    | "swarm_list"
+                    | "swarm_read"
             )
         {
             return Err(invalid("unbound manager publication"));
@@ -747,6 +890,12 @@ impl Dispatcher {
         let call = &request["call"];
         let mut args = call["arguments"].clone();
         let tool = field(call, "name");
+        if matches!(
+            tool,
+            "swarm_create" | "swarm_status" | "swarm_list" | "swarm_read"
+        ) {
+            return self.enrolled_worker_tool(cfg, inbox, api, state, call);
+        }
         if tool == "swarm_read_attachment" {
             if args.as_object().is_none_or(|fields| fields.len() != 3)
                 || !args["id"].as_str().is_some_and(super::config::snowflake)

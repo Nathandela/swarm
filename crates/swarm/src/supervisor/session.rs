@@ -87,9 +87,11 @@ impl Prepared {
             version.get(1).copied().unwrap_or(0),
             version.get(2).copied().unwrap_or(0),
         );
-        if self.provider.agent != "codex" || release < (0, 167, 0) {
+        let claude = self.provider.agent == "claude"
+            && providers::claude_input::qualified(&self.provider.version);
+        if !claude && (self.provider.agent != "codex" || release < (0, 167, 0)) {
             return Err(io::Error::other(
-                "manager requires a qualified Codex native-turn runtime",
+                "manager requires a qualified native-turn runtime",
             ));
         }
         let home = self
@@ -99,7 +101,25 @@ impl Prepared {
             .find(|(name, _)| name == "HOME")
             .map(|(_, home)| PathBuf::from(home))
             .ok_or_else(|| io::Error::other("manager requires native account HOME"))?;
-        scope["account"] = json!(super::manager::account(&home)?);
+        scope["account"] = json!(if claude {
+            if self.provider.env.iter().any(|(key, value)| {
+                !value.is_empty()
+                    && matches!(
+                        key.as_str(),
+                        "ANTHROPIC_API_KEY"
+                            | "ANTHROPIC_AUTH_TOKEN"
+                            | "ANTHROPIC_BASE_URL"
+                            | "CLAUDE_CODE_OAUTH_TOKEN"
+                    )
+            }) {
+                return Err(io::Error::other(
+                    "Claude manager refuses explicit API credential substitution",
+                ));
+            }
+            providers::claude::manager_account(&home)?
+        } else {
+            super::manager::account(&home)?
+        });
         let predecessor = &scope["resume_request"]["binding"];
         if !predecessor.is_null() {
             let native = field(predecessor, "native_session_id");
@@ -110,11 +130,29 @@ impl Prepared {
                     "manager successor cannot resume a different native account or thread",
                 ));
             }
-            self.provider
-                .argv
-                .splice(0..0, ["resume".to_owned(), native.to_owned()]);
+            if claude {
+                let retained = scope["claude_resume"].clone();
+                if retained["conversation_id"] != native
+                    || retained["resumed_from"] != predecessor["session"]
+                {
+                    return Err(io::Error::other(
+                        "Claude successor lacks its exact retained transcript",
+                    ));
+                }
+                self.claude_resume = retained;
+                self.provider
+                    .argv
+                    .extend(["--resume".to_owned(), native.to_owned()]);
+            } else {
+                self.provider
+                    .argv
+                    .splice(0..0, ["resume".to_owned(), native.to_owned()]);
+            }
         }
         scope["account_home"] = json!(home);
+        if claude {
+            providers::claude::verify_manager_origin(&scope, &self.cwd)?;
+        }
         self.manager = scope;
         Ok(())
     }
@@ -1104,6 +1142,20 @@ impl Session {
                     );
                 })?;
         }
+        if !self.mailbox.is_null()
+            && self.mailbox["structured"] != true
+            && !meta["checkout"].is_null()
+        {
+            use std::os::unix::fs::MetadataExt;
+            let effective = self.verify_effective()?;
+            let identity = effective.metadata()?;
+            runtime::write_json(
+                &self.dir.join("mail-checkout.json"),
+                &json!({
+                    "token":self.token,"path":effective,"identity":[identity.dev(),identity.ino()]
+                }),
+            )?;
+        }
         let mut shim = Command::new(env::current_exe()?);
         shim.env_clear()
             .envs(provider.env)
@@ -1133,6 +1185,19 @@ impl Session {
         let mut transient = json!({"argv":provider.argv,"schedule":scheduled,"native":provider.native,"hermes":provider.hermes});
         if self.owner_interactive || !self.manager.is_null() || !self.mailbox.is_null() {
             transient["owner_socket"] = json!(crate::ipc::socket_path()?);
+        }
+        if self.manager["launch"]["manager"]["native_cli"] == true {
+            let root = self
+                .dir
+                .parent()
+                .and_then(Path::parent)
+                .ok_or_else(|| io::Error::other("missing VM supervisor root"))?;
+            transient["owner_root"] = json!(root);
+            transient["owner_lock"] = json!(
+                crate::ipc::env_path("SWARM_DAEMON_LOCK")
+                    .unwrap_or_else(|| root.join("daemon.lock"))
+            );
+            transient["owner_log"] = json!(log_path);
         }
         runtime::write_control(&mut bootstrap, &transient)
     }
@@ -1294,7 +1359,8 @@ impl Session {
     }
 
     pub(super) fn requires_worker_origin_cap(&self) -> bool {
-        matches!(self.agent.as_str(), "agy" | "claude") || self.hermes_native
+        self.manager.is_null() && matches!(self.agent.as_str(), "agy" | "claude")
+            || self.hermes_native
     }
 
     pub(super) fn semantic_target(&self) -> io::Result<String> {
@@ -1487,7 +1553,7 @@ impl Session {
                 "invalid or stale provider semantic request",
             ));
         }
-        if self.agent == "codex" {
+        if self.agent == "codex" || self.agent == "claude" && !self.manager.is_null() {
             self.check_manager_input(session, operation, body)?;
         } else if !self.manager.is_null() || !body["manager_admission"].is_null() {
             return Err(io::Error::other(
@@ -1495,7 +1561,8 @@ impl Session {
             ));
         }
         let thread = self.semantic_thread()?;
-        let worker_origin = matches!(self.agent.as_str(), "agy" | "claude");
+        let worker_origin =
+            self.manager.is_null() && matches!(self.agent.as_str(), "agy" | "claude");
         let origin = if worker_origin {
             let origin = providers::agy_input::origin(&body["origin"])?;
             if self.worker_native_installation.as_deref() != origin["installation_id"].as_str() {
@@ -2319,14 +2386,22 @@ impl Session {
         Ok(())
     }
 
+    pub(super) fn native_cli_manager(&self) -> bool {
+        self.manager["launch"]["manager"]["native_cli"] == true
+    }
+
     pub(super) fn authorize_mail_child(
         &self,
         full: &str,
         claim: &str,
         cwd: &Path,
     ) -> io::Result<Value> {
+        let project = std::fs::canonicalize(cwd)?;
+        let vm = self.native_cli_manager();
         if !super::mail::matches_binding(&self.manager, &self.token, claim)
-            || std::fs::canonicalize(cwd)? != self.effective
+            || !project.is_dir()
+            || project != cwd
+            || !vm && project != self.effective
         {
             return Err(io::Error::other(
                 "dispatcher worker authority or project does not match",
@@ -2334,7 +2409,7 @@ impl Session {
         }
         let status = self.manager_operation(
             &json!({"op":"manager_runtime","body_version":1,"session_id":full,
-            "manager_runtime_request":{"session_instance":codex_receipt::instance(&self.token)}}),
+            "manager_runtime_request":{"session_instance":codex_receipt::provider_instance(&self.agent, &self.token)}}),
         )?;
         let native = &status["manager_runtime"];
         let nonce = field(&native["turn"], "native_input_id");
@@ -2349,21 +2424,26 @@ impl Session {
         Ok(
             json!({"discussion":native["binding"]["conversation_id"],"parent":self.id,
             "parent_incarnation":native["binding"]["session_instance"],"parent_input_hash":super::mail::parent_hash(nonce),
-            "project":self.effective}),
+            "project":project}),
         )
     }
 
     pub(super) fn mail_checkout(&self) -> io::Result<(&Path, (u64, u64))> {
         let path = self.verify_effective()?;
         let data = runtime::read_json(&self.dir.join("session.json"))?;
-        if data["token"] == self.token
-            && data["id"] == self.id
-            && let (Some(device), Some(inode)) = (
-                data["cwd_identity"][0].as_u64(),
-                data["cwd_identity"][1].as_u64(),
-            )
-        {
-            return Ok((path, (device, inode)));
+        if data["token"] == self.token && data["id"] == self.id {
+            let identity = if data["checkout"].is_null() {
+                data["cwd_identity"].clone()
+            } else {
+                let witness = runtime::read_json(&self.dir.join("mail-checkout.json"))?;
+                if witness["token"] != self.token || witness["path"] != json!(path) {
+                    return Err(io::Error::other("worker checkout custody changed"));
+                }
+                witness["identity"].clone()
+            };
+            if let (Some(device), Some(inode)) = (identity[0].as_u64(), identity[1].as_u64()) {
+                return Ok((path, (device, inode)));
+            }
         }
         Err(io::Error::other("worker checkout identity unavailable"))
     }
@@ -2371,6 +2451,7 @@ impl Session {
     pub(super) fn mail_binding(&self, session: &str, proof: &str) -> io::Result<Value> {
         use subtle::ConstantTimeEq;
         if self.mailbox.is_null()
+            || self.mailbox["structured"] == true
             || !self.is_live()
             || proof.len() != 64
             || !bool::from(
@@ -2470,13 +2551,17 @@ impl Session {
             view["role"] = json!("worker");
             view["worker_discussion"] = self.mailbox["discussion"].clone();
             view["worker_attempt"] = self.mailbox["attempt"].clone();
-            view["worker_instance"] = json!(codex_receipt::instance(&self.token));
+            view["worker_instance"] = json!(if self.mailbox["structured"] == true {
+                codex_receipt::provider_instance(&self.agent, &self.token)
+            } else {
+                codex_receipt::instance(&self.token)
+            });
         }
         if !self.manager.is_null() {
             view["role"] = json!("manager");
             view["manager_conversation_id"] =
                 self.manager["launch"]["manager"]["conversation_id"].clone();
-            view["capabilities"] = json!({"session_instance":codex_receipt::instance(&self.token)});
+            view["capabilities"] = json!({"session_instance":codex_receipt::provider_instance(&self.agent,&self.token)});
         }
         view
     }

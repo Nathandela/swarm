@@ -82,12 +82,43 @@ fn serve(socket: &Path, auth: &Path, conversation: &str, session: &str) -> io::R
                 "inputSchema":{"type":"object","additionalProperties":false,
                     "properties":{"id":{"type":"string"},"sha256":{"type":"string"},"offset":{"type":"integer","minimum":0}},
                     "required":["id","sha256","offset"]}
+            },{
+                "name":"swarm_create","description":"Launch a worker in an approved project using a stable action ID.",
+                "inputSchema":{"type":"object","additionalProperties":false,"properties":{
+                    "action_id":{"type":"string"},"agent":{"enum":["codex","claude"]},
+                    "cwd":{"type":"string"},"prompt":{"type":"string"},"name":{"type":"string"},
+                    "model":{"type":"string"},"worktree":{"type":"boolean"}
+                },"required":["action_id","agent","cwd","prompt"]}
+            },{
+                "name":"swarm_status","description":"Check an exact returned worker action ID after an uncertain launch.",
+                "inputSchema":{"type":"object","additionalProperties":false,
+                    "properties":{"action_id":{"type":"string"}},"required":["action_id"]}
+            },{
+                "name":"swarm_list","description":"List exact enrolled workers belonging to this discussion.",
+                "inputSchema":{"type":"object","additionalProperties":false,"properties":{
+                    "limit":{"type":"integer","minimum":0,"maximum":50},"after_session_id":{"type":"string"}
+                }}
+            },{
+                "name":"swarm_read","description":"Read the exact qualified native worker result for the selected session incarnation.",
+                "inputSchema":{"type":"object","additionalProperties":false,"properties":{
+                    "session":{"type":"string"},"session_instance":{"type":"string"},
+                    "limit":{"type":"integer","minimum":1,"maximum":2048},"source":{"type":"string"}
+                },"required":["session","session_instance"]}
             }]}}),
             Some("tools/call") => {
                 let params = &request["params"];
                 let reply = if matches!(
                     params["name"].as_str(),
-                    Some("publish" | "swarm_read_note" | "swarm_reply" | "swarm_read_attachment")
+                    Some(
+                        "publish"
+                            | "swarm_read_note"
+                            | "swarm_reply"
+                            | "swarm_read_attachment"
+                            | "swarm_create"
+                            | "swarm_status"
+                            | "swarm_list"
+                            | "swarm_read"
+                    )
                 ) && params["arguments"].is_object()
                     && params["_meta"].is_object()
                 {
@@ -110,6 +141,17 @@ fn serve(socket: &Path, auth: &Path, conversation: &str, session: &str) -> io::R
             _ => json!({"error":{"code":-32601,"message":"Method not found"}}),
         };
         let mut response = response;
+        if request["method"] == "tools/list"
+            && std::env::var("SWARM_MANAGER_VM_CLI").as_deref() == Ok("1")
+            && let Some(tools) = response["result"]["tools"].as_array_mut()
+        {
+            tools.retain(|tool| {
+                !matches!(
+                    tool["name"].as_str(),
+                    Some("swarm_create" | "swarm_status" | "swarm_list" | "swarm_read")
+                )
+            });
+        }
         response["jsonrpc"] = json!("2.0");
         response["id"] = id.clone();
         serde_json::to_writer(&mut output, &response)?;

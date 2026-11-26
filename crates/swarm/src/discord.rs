@@ -19,6 +19,7 @@ mod call_room;
 mod config;
 mod dispatcher;
 mod doctor;
+pub(crate) mod enrolled_worker;
 mod gateway;
 mod guild;
 pub(crate) mod linked_board;
@@ -77,13 +78,16 @@ pub(crate) fn manager_nonce(
 
 /// Re-read the active, owned personal enrollment at the supervisor admission boundary.
 pub(crate) fn native_manager_enrollment(launch: &Value) -> io::Result<Value> {
+    native_manager_enrollment_at(&ipc::state_path()?, launch)
+}
+
+fn native_manager_enrollment_at(supervisor: &Path, launch: &Value) -> io::Result<Value> {
     let auth = Path::new(ipc::field(&launch["manager"], "auth_file"));
     let directory = auth
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| invalid("missing enrolled manager directory"))?;
-    let supervisor = ipc::state_path()?;
-    manager_scope_for_directory(Place::enrolled(&supervisor)?, directory)
+    manager_scope_for_directory(Place::enrolled(supervisor)?, directory)
 }
 
 fn manager_scope_for_directory(
@@ -131,13 +135,24 @@ pub(crate) fn native_manager_available(socket: &str) -> bool {
 fn manager_scope(directory: &Path, cfg: &Config) -> io::Result<Value> {
     if !cfg.enabled()
         || cfg.text("mode") != "personal" && team_thread::Route::configured(cfg)?.is_none()
-        || cfg.text("project_access") == "vm"
-        || cfg.text("manager_cli") != "codex"
+        || !matches!(cfg.text("manager_cli"), "codex" | "claude")
     {
         return Err(invalid(
-            "qualified Rust manager requires an active enrolled Codex discussion",
+            "qualified Rust manager requires an active enrolled discussion",
         ));
     }
+    let claude_origin = if cfg.text("manager_cli") == "claude" {
+        let cwd = Path::new(cfg.text("work_dir"));
+        let home = ipc::env_path("HOME")
+            .ok_or_else(|| invalid("Claude manager HOME is missing"))?
+            .canonicalize()?;
+        // Reject authority overrides before probing or launching the provider.
+        let authority = crate::providers::claude::project_authority(&home, cwd)?;
+        crate::providers::claude_manager_runtime(cwd)?;
+        Some((home, authority))
+    } else {
+        None
+    };
     let owner = manager::Manager::new(cfg)?;
     let bridge = std::fs::canonicalize(directory)?.join("manager-v1");
     let mut scope = json!({"launch":owner.launch_request(&bridge.join("bridge.sock"), &bridge.join("bridge.auth")),
@@ -145,6 +160,13 @@ fn manager_scope(directory: &Path, cfg: &Config) -> io::Result<Value> {
         "owner_id":cfg.text("owner_id"),"channel_id":owner.channel(),"supervisor_socket":cfg.text("daemon_socket")});
     if !owner.guild().is_empty() {
         scope["guild_id"] = json!(owner.guild());
+    }
+    if let Some((home, authority)) = claude_origin {
+        scope["claude_home"] = json!(home);
+        scope["project_authority"] = authority;
+    }
+    if cfg.0["projects"].is_object() {
+        scope["projects"] = cfg.0["projects"].clone();
     }
     Ok(scope)
 }
@@ -194,12 +216,36 @@ pub(crate) fn lock_manager_mail_effect(scope: &Value) -> io::Result<std::fs::Fil
     crate::supervisor::runtime::lock(&place.join(".rust-manager-mail-effect.lock"))
 }
 
+pub(crate) fn verify_manager_vm_scope(scope: &Value, supervisor: Option<&Path>) -> io::Result<()> {
+    if scope["launch"]["manager"]["native_cli"] != true {
+        return Ok(());
+    }
+    let root = supervisor.ok_or_else(|| invalid("missing VM supervisor custody root"))?;
+    let current = native_manager_enrollment_at(root, &scope["launch"])?;
+    if current["launch"] != scope["launch"]
+        || [
+            "installation_id",
+            "owner_id",
+            "application_id",
+            "channel_id",
+            "guild_id",
+            "supervisor_socket",
+        ]
+        .iter()
+        .any(|coordinate| current[*coordinate] != scope[*coordinate])
+    {
+        return Err(invalid("VM manager enrollment authority changed"));
+    }
+    Ok(())
+}
+
 pub(crate) fn verify_connector_input(
     scope: &Value,
     operation: &str,
     composer: &Value,
     supervisor_root: Option<&Path>,
 ) -> io::Result<()> {
+    verify_manager_vm_scope(scope, supervisor_root)?;
     let data = connector_intent(scope)?;
     let manager = &data["manager"];
     let input = &manager["input"];
@@ -239,7 +285,11 @@ pub(crate) fn verify_connector_input(
                 || source["author"]["id"] != origin["actor_id"]
                 || source["authority"] != origin["kind"])
         || composer["text"]
-            != crate::manager_prompt::saved_input(input, ipc::field(source, "text"))?
+            != crate::manager_prompt::saved_input(
+                input,
+                ipc::field(source, "text"),
+                scope["launch"]["manager"]["native_cli"] == true,
+            )?
         || source["revision"] != composer["origin"]["revision"]
         || source["operation_id"] != composer["origin"]["request_id"]
         || !voice
@@ -549,6 +599,13 @@ fn connect(req: &Request<'_>, place: Place) -> io::Result<bool> {
     });
     if !cfg.text("dm_channel_id").is_empty() {
         report["dm_channel_id"] = cfg.0["dm_channel_id"].clone();
+    }
+    if cfg.managed() {
+        report["project_access"] = json!(if cfg.text("project_access") == "vm" {
+            "vm"
+        } else {
+            "enrolled"
+        });
     }
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(true)

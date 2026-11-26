@@ -418,3 +418,76 @@ esac
     assert!(!install(&one).status.success());
     assert_eq!(fs::read_to_string(&unit).unwrap(), "foreign unit");
 }
+
+#[test]
+fn preview_vm_setting_requires_an_explicit_verified_connection() {
+    let place = Place::new("vm-preview");
+    let connector = place.installed();
+    let path = connector.join("config.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    config["project_access"] = json!("vm");
+    fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    place.private(
+        "existing/.rust-offline-owner.json",
+        b"\"historical-personal-id\"",
+    );
+    place.private("existing/discord-adoption.json", b"{\"no_effects\":true}");
+    let grant = connector.join(".rust-vm-manager-grant-v1.json");
+    assert_eq!(
+        json_output(place.run(&["status"]))["project_access"],
+        "enrolled"
+    );
+    assert!(!grant.exists());
+    assert!(
+        place
+            .run(&[
+                "connect",
+                "--state-dir",
+                connector.to_str().unwrap(),
+                "--project-access",
+                "vm"
+            ])
+            .status
+            .success()
+    );
+    assert_eq!(json_output(place.run(&["status"]))["project_access"], "vm");
+    assert!(grant.is_file());
+    let mut changed: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let other = place.0.join("different-project");
+    fs::create_dir(&other).unwrap();
+    changed["work_dir"] = json!(other.canonicalize().unwrap());
+    fs::write(&path, serde_json::to_vec(&changed).unwrap()).unwrap();
+    assert_eq!(
+        json_output(place.run(&["status"]))["project_access"],
+        "enrolled"
+    );
+}
+
+#[test]
+fn new_managed_connection_retains_the_historical_vm_default() {
+    let place = Place::new("vm-new");
+    let token = place.private("token", "synthetic fixture token");
+    let connector = place.0.join("new");
+    let configured = json_output(place.run(&[
+        "connect",
+        "--state-dir",
+        connector.to_str().unwrap(),
+        "--mode",
+        "teammate",
+        "--name",
+        "Fixture",
+        "--application-id",
+        "123",
+        "--owner-id",
+        "456",
+        "--guild",
+        "234",
+        "--token-file",
+        token.to_str().unwrap(),
+        "--workdir",
+        place.0.to_str().unwrap(),
+    ]));
+    assert_eq!(configured["project_access"], "vm");
+    assert!(connector.join(".rust-vm-manager-grant-v1.json").is_file());
+    assert_eq!(json_output(place.run(&["status"]))["project_access"], "vm");
+}

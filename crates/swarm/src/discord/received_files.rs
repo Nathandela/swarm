@@ -276,6 +276,16 @@ pub(super) fn capture(
     capture_with(place, source, channel, manifest_budget, download)
 }
 
+#[cfg(test)]
+pub(super) fn fixture_capture_bytes(
+    place: &Path,
+    source: &Value,
+    channel: &str,
+    bytes: &[u8],
+) -> io::Result<Vec<Value>> {
+    capture_with(place, source, channel, usize::MAX, |_| Ok(bytes.to_vec()))
+}
+
 fn capture_with(
     place: &Path,
     source: &Value,

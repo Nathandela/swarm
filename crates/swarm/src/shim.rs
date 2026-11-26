@@ -192,12 +192,21 @@ fn serve(dir: &Path) -> io::Result<()> {
         let auth = Path::new(field(&scope["launch"]["manager"], "auth_file"));
         let credential = crate::manager_mcp::read_credential(auth)?;
         use sha2::{Digest, Sha256};
-        if scope["credential_hash"] != format!("{:x}", Sha256::digest(credential.as_bytes()))
-            || scope["account"]
-                != crate::supervisor::manager::account(Path::new(field(scope, "account_home")))?
+        if scope["credential_hash"] != format!("{:x}", Sha256::digest(credential.as_bytes())) {
+            return Err(io::Error::other(
+                "manager bridge custody changed before exec",
+            ));
+        }
+        if scope["launch"]["agent"] == "claude" {
+            providers::claude::verify_manager_origin(
+                scope,
+                Path::new(field(&scope["launch"], "cwd")),
+            )?;
+        } else if scope["account"]
+            != crate::supervisor::manager::account(Path::new(field(scope, "account_home")))?
         {
             return Err(io::Error::other(
-                "manager launch custody changed before exec",
+                "manager account custody changed before exec",
             ));
         }
         crate::supervisor::manager::mcp_args(scope, field(&config, "id"))?
@@ -239,11 +248,31 @@ fn serve(dir: &Path) -> io::Result<()> {
         environment.push(("SWARM_DAEMON_SOCK".into(), owner_socket.into()));
         environment.push(("SWARM_SESSION_ID".into(), field(&config, "id").into()));
         if !config["manager"].is_null() {
-            environment.push((
-                "SWARM_DISPATCHER_SPAWN_PROOF".into(),
-                crate::supervisor::mail::proof(token, "spawn"),
-            ));
-        } else {
+            if scope["launch"]["manager"]["native_cli"] == true {
+                crate::discord::verify_manager_vm_scope(
+                    scope,
+                    dir.parent().and_then(Path::parent),
+                )?;
+                environment.push((
+                    "SWARM_DISPATCHER_SPAWN_PROOF".into(),
+                    crate::supervisor::mail::proof(token, "spawn"),
+                ));
+                environment.push(("SWARM_MANAGER_VM_CLI".into(), "1".into()));
+                for (key, field) in [
+                    ("SWARM_DAEMON_STATE", "owner_root"),
+                    ("SWARM_DAEMON_LOCK", "owner_lock"),
+                    ("SWARM_DAEMON_LOG", "owner_log"),
+                ] {
+                    let value = bootstrap[field]
+                        .as_str()
+                        .filter(|value| Path::new(value).is_absolute())
+                        .ok_or_else(|| {
+                            io::Error::other("VM manager supervisor environment is unavailable")
+                        })?;
+                    environment.push((key.into(), value.into()));
+                }
+            }
+        } else if config["mailbox"]["structured"] != true {
             environment.push((crate::teammate::SOCKET_ENV.into(), owner_socket.into()));
             environment.push((
                 crate::teammate::PROOF_ENV.into(),
@@ -317,7 +346,9 @@ fn serve(dir: &Path) -> io::Result<()> {
     } else {
         None
     };
-    let claude_broker = if schedule.is_none() && provider["claude_native_installation"].is_string()
+    let claude_broker = if schedule.is_none()
+        && (provider["claude_native_installation"].is_string()
+            || provider["name"] == "claude" && !scope.is_null())
     {
         let mut flags = Vec::new();
         let broker = providers::claude_input::Broker::prepare(
@@ -403,6 +434,9 @@ fn serve(dir: &Path) -> io::Result<()> {
             ));
         }
         command.current_dir(working_dir);
+        if scope["launch"]["manager"]["native_cli"] == true {
+            crate::discord::verify_manager_vm_scope(scope,dir.parent().and_then(Path::parent))?;
+        }
         if provider["name"]=="claude" && config["claude_resume"].is_object() {
             let saved=&config["claude_profile"];
             let live=providers::claude::profile(&environment,&Value::Null,&saved["options"])?;
@@ -443,10 +477,13 @@ fn serve(dir: &Path) -> io::Result<()> {
             let cwd=Path::new(working_dir);
             let profile=&config["claude_profile"];
             let home=Path::new(field(profile,"home"));
+            if !scope.is_null() {
+                providers::claude::verify_manager_origin(scope,cwd)?;
+            }
             if let Ok(authority)=providers::claude::project_authority(home,cwd) {
                 runtime::write_json(&dir.join("claude-authority.json"),
                     &json!({"token":token,"home":home,"cwd":cwd,"authority":authority}))?;
-            } else if config["claude_resume"].is_object() || config["lineage"]["hands_off"].is_object() {
+            } else if !scope.is_null() || config["claude_resume"].is_object() || config["lineage"]["hands_off"].is_object() {
                 return Err(io::Error::other("Claude project authority cannot be proved before exec"));
             }
         }
@@ -1080,6 +1117,12 @@ fn accept(listener: UnixListener, state: Arc<State>) {
     }
 }
 
+fn claude_manager_has_empty_composer(state: &State) -> bool {
+    let terminal = state.control.lock().unwrap();
+    *terminal == 0
+        && providers::claude::manager_empty_composer(state.screen.lock().unwrap().parser.screen())
+}
+
 fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
     stream.set_read_timeout(Some(runtime::IO_TIMEOUT))?;
     stream.set_write_timeout(Some(runtime::IO_TIMEOUT))?;
@@ -1142,13 +1185,31 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         "manager park lacks persisted connector custody",
                     ));
                 }
-                let observed = runtime::read_json(&state.dir.join("observation.json"))?;
-                let native = providers::codex_proof::Ledger::snapshot(&state.dir, binding)?;
+                let (native, quiescent) = if state.provider == "claude" {
+                    let broker = state
+                        .claude_broker
+                        .as_ref()
+                        .ok_or_else(|| io::Error::other("Claude manager broker is unavailable"))?;
+                    let native = broker.manager_snapshot()?;
+                    let quiescent = native["binding"] == *binding
+                        && native["thread_state"] == "idle"
+                        && native["externally_steered"] != true
+                        && providers::claude::manager_empty_composer(
+                            state.screen.lock().unwrap().parser.screen(),
+                        );
+                    (native, quiescent)
+                } else {
+                    let observed = runtime::read_json(&state.dir.join("observation.json"))?;
+                    let native = providers::codex_proof::Ledger::snapshot(&state.dir, binding)?;
+                    let quiescent =
+                        observation_is_quiescent(&observed, &state.token, binding, &native);
+                    (native, quiescent)
+                };
                 let turn = providers::codex_proof::input_status(
                     &native,
                     field(&request["expected_turn"], "native_input_id"),
                 );
-                if observation_is_quiescent(&observed, &state.token, binding, &native)
+                if quiescent
                     && native["current"] == turn["native_turn_id"]
                     && turn == request["expected_turn"]
                 {
@@ -1220,6 +1281,22 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             };
             runtime::write_control(&mut stream, &reply)
         }
+        "claude_manager_proof" if state.manager && state.provider == "claude" => {
+            let result = state
+                .claude_broker
+                .as_ref()
+                .ok_or_else(|| io::Error::other("Claude manager broker is unavailable"))
+                .and_then(|broker| broker.manager_snapshot());
+            let reply = result.map_or_else(
+                |error| json!({"type":"error","error":error.to_string()}),
+                |mut evidence| {
+                    evidence["owned_ingress_ready"] =
+                        json!(claude_manager_has_empty_composer(state));
+                    json!({"type":"ok","evidence":evidence})
+                },
+            );
+            runtime::write_control(&mut stream, &reply)
+        }
         "claude_ready" => {
             let ready = state
                 .claude_broker
@@ -1234,6 +1311,18 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             )
         }
         "semantic" if state.provider == "claude" => {
+            let terminal = state.manager.then(|| state.control.lock().unwrap());
+            if terminal.as_ref().is_some_and(|owner| {
+                **owner != 0
+                    || !providers::claude::manager_empty_composer(
+                        state.screen.lock().unwrap().parser.screen(),
+                    )
+            }) {
+                return runtime::write_control(
+                    &mut stream,
+                    &json!({"type":"error","error":"Claude manager terminal has a draft, attachment or native dialog"}),
+                );
+            }
             let result = state
                 .claude_broker
                 .as_ref()

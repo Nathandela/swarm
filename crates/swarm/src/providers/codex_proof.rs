@@ -1,4 +1,5 @@
 //! Native manager evidence from the owned Codex observer. The model's text is never authority.
+pub(crate) mod claude;
 use super::codex_receipt;
 use crate::{ipc::field, supervisor::runtime};
 use serde_json::{Value, json};
@@ -172,6 +173,10 @@ impl Ledger {
                                     | "swarm_read_note"
                                     | "swarm_reply"
                                     | "swarm_read_attachment"
+                                    | "swarm_create"
+                                    | "swarm_status"
+                                    | "swarm_list"
+                                    | "swarm_read"
                             )
                             && valid(id) =>
                     {
@@ -247,8 +252,12 @@ pub(crate) fn input_status(evidence: &Value, nonce: &str) -> Value {
         None if !evidence["prepared"][nonce].is_null() => ("", "prepared"),
         None => ("", "unknown"),
     };
-    json!({"native_input_id":nonce,"native_turn_id":turn,
-        "state":state,"external_input":evidence["external_input"]})
+    let mut result = json!({"native_input_id":nonce,"native_turn_id":turn,
+        "state":state,"external_input":evidence["external_input"]});
+    if evidence["externally_steered"] == true {
+        result["externally_steered"] = json!(true);
+    }
+    result
 }
 
 pub(crate) fn resolve(evidence: &Value, input: &Value) -> io::Result<Value> {
@@ -260,11 +269,15 @@ pub(crate) fn resolve(evidence: &Value, input: &Value) -> io::Result<Value> {
     let receipt = &evidence["turns"][turn];
     let nonce = field(receipt, "nonce");
     if evidence["blocked"] != false
+        || evidence["externally_steered"] == true
         || input["binding"] != *binding
         || field(input, "tool_name") != call["tool"].as_str().unwrap_or("publish")
         || call["closed"] != false
         || call["arguments_hash"] != input["arguments_hash"]
-        || coordinates.turn != Some(turn)
+        || match binding["provider"].as_str() {
+            Some("claude") => coordinates.turn.is_some() || !call["agent"].is_null(),
+            _ => coordinates.turn != Some(turn),
+        }
         || evidence["current"] != turn
         || receipt["closed"] != false
         || !is_hash(nonce)

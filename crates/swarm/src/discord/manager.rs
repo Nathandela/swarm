@@ -63,8 +63,12 @@ impl Manager {
     }
 
     fn dial(&self) -> io::Result<Client> {
-        let client = Client::dial(Path::new(self.cfg.text("daemon_socket")), CAPS)?;
-        self.cfg.check_supervisor(&client, CAPS)?;
+        let mut caps = CAPS.to_vec();
+        if self.cfg.text("project_access") == "vm" {
+            caps.push(crate::supervisor::manager::NATIVE_CLI_CAP);
+        }
+        let client = Client::dial(Path::new(self.cfg.text("daemon_socket")), &caps)?;
+        self.cfg.check_supervisor(&client, &caps)?;
         Ok(client)
     }
 
@@ -73,7 +77,7 @@ impl Manager {
     }
 
     pub(super) fn launch_request(&self, bridge_socket: &Path, auth_file: &Path) -> Value {
-        json!({
+        let mut launch = json!({
             "agent": self.cfg.text("manager_cli"),
             "name": self.cfg.text("name"),
             "cwd": self.cfg.text("work_dir"),
@@ -84,7 +88,11 @@ impl Manager {
                 "conversation_id": self.conversation,
                 "bridge_socket": bridge_socket, "auth_file": auth_file
             }
-        })
+        });
+        if self.cfg.text("project_access") == "vm" {
+            launch["manager"]["native_cli"] = json!(true);
+        }
+        launch
     }
 
     pub(super) fn launch(&self, operation: &str, launch: &Value) -> io::Result<Value> {
@@ -223,6 +231,7 @@ impl Manager {
             || binding["session_instance"] != instance
             || binding["conversation_id"] != self.conversation
             || binding["provider"] != self.cfg.text("manager_cli")
+            || (status["native_cli"] == true) != (launch["manager"]["native_cli"] == true)
             || status["bridge_socket"] != launch["manager"]["bridge_socket"]
             || status["auth_file"] != launch["manager"]["auth_file"]
             || [
@@ -276,7 +285,11 @@ impl Manager {
             binding,
             &runtime["turn"]["external_input"],
         )?;
-        let text = crate::manager_prompt::render(starting_prompt, field(input, "text"))?;
+        let text = crate::manager_prompt::render_dispatch(
+            starting_prompt,
+            field(input, "text"),
+            self.cfg.text("project_access") == "vm",
+        )?;
         let mut composer = json!({
             "session": binding["session"], "session_instance": binding["session_instance"],
             "text": text,
@@ -379,6 +392,144 @@ impl Manager {
         Ok(proof.clone())
     }
 
+    pub(super) fn enrolled_read(&self, session: &str, call: &Value) -> io::Result<Value> {
+        let mut caps = CAPS.to_vec();
+        caps.push(super::enrolled_worker::CAP);
+        let mut client = Client::dial(Path::new(self.cfg.text("daemon_socket")), &caps)?;
+        self.cfg.check_supervisor(&client, &caps)?;
+        let reply = client
+            .request_body(
+                json!({"op":"manager_worker_read","body_version":1,
+            "session_id":session,"manager_worker_read":call}),
+                "manager_worker_read",
+            )
+            .map_err(|_| invalid("enrolled native worker result is unavailable"))?;
+        self.verify_endpoint(&client, &reply)?;
+        let result = &reply["worker_result"];
+        if reply["session_id"] != session
+            || result["session"] != call["arguments"]["session"]
+            || result["session_instance"] != call["arguments"]["session_instance"]
+            || !matches!(field(result, "state"), "pending" | "completed")
+        {
+            return Err(invalid("uncorrelated enrolled worker result"));
+        }
+        Ok(result.clone())
+    }
+
+    pub(super) fn enrolled_roster(&self, actions: &Value, args: &Value) -> io::Result<Value> {
+        let fields = args
+            .as_object()
+            .ok_or_else(|| invalid("invalid enrolled worker roster request"))?;
+        if fields
+            .keys()
+            .any(|name| !matches!(name.as_str(), "limit" | "after_session_id"))
+            || !args["after_session_id"].is_null()
+                && !args["after_session_id"].as_str().is_some_and(valid)
+            || !args["limit"].is_null() && !args["limit"].as_u64().is_some_and(|limit| limit <= 50)
+        {
+            return Err(invalid("invalid enrolled worker roster page"));
+        }
+        let limit = args["limit"]
+            .as_u64()
+            .filter(|limit| *limit > 0)
+            .unwrap_or(50) as usize;
+        let after = field(args, "after_session_id");
+        let mut client = self.dial()?;
+        let mut rows = client.sessions()?;
+        rows.sort_by(|a, b| field(a, "id").cmp(field(b, "id")));
+        let mut workers = Vec::new();
+        let mut bytes = 2;
+        let mut next = None;
+        for row in rows {
+            let Some(reference) = actions.as_object().and_then(|actions| {
+                actions.values().find(|action| {
+                    row["worker_attempt"] == action["operation_id"]
+                        && row["agent"] == action["arguments"]["agent"]
+                        && row["cwd"] == action["arguments"]["cwd"]
+                })
+            }) else {
+                continue;
+            };
+            let id = field(&row, "id");
+            if id <= after
+                || row["endpoint_id"] != client.endpoint()
+                || row["role"] != "worker"
+                || row["worker_discussion"] != self.conversation
+                || !valid(field(&row, "worker_instance"))
+            {
+                continue;
+            }
+            let worker = json!({"session":id,"session_instance":row["worker_instance"],"agent":row["agent"],
+                    "name":row["name"],"cwd":row["cwd"],"group":row["group"],
+                    "tracking":{"action_id":reference["key"],"attempt_id":row["worker_attempt"]}});
+            let size = serde_json::to_vec(&worker)?.len() + 1;
+            if workers.len() >= limit || bytes + size > 8000 {
+                next = workers
+                    .last()
+                    .map(|previous| field(previous, "session").to_owned());
+                break;
+            }
+            bytes += size;
+            workers.push(worker);
+        }
+        let mut page = json!({"workers":workers});
+        if let Some(next) = next {
+            page["next_session_id"] = json!(next);
+        }
+        Ok(page)
+    }
+
+    pub(super) fn enrolled_worker(
+        &self,
+        session: &str,
+        action: &Value,
+        launch: bool,
+    ) -> io::Result<Value> {
+        let id = field(action, "operation_id");
+        if launch {
+            let mut caps = CAPS.to_vec();
+            caps.push(super::enrolled_worker::CAP);
+            let mut client = Client::dial(Path::new(self.cfg.text("daemon_socket")), &caps)?;
+            self.cfg.check_supervisor(&client, &caps)?;
+            if let Ok(reply) = client.exchange(
+                json!({"op":"manager_worker_action","body_version":1,
+                "operation_id":id,"session_id":session,"manager_worker_action":action}),
+                "launch",
+                crate::ipc::launch_timeout(field(&action["arguments"], "agent")),
+            ) {
+                self.verify_endpoint(&client, &reply)?;
+                if reply["operation_id"] != id {
+                    return Err(invalid("uncorrelated enrolled worker response"));
+                }
+            }
+        }
+        let mut result = json!({"action_id":action["key"],"state":"outcome_unknown"});
+        let status = self.launch_status(id)?;
+        if status["state"] != "applied" {
+            return Ok(result);
+        }
+        let id = &status["session_id"];
+        let mut client = self.dial()?;
+        let child = client
+            .sessions()?
+            .into_iter()
+            .find(|row| {
+                row["id"] == *id
+                    && row["endpoint_id"] == client.endpoint()
+                    && row["role"] == "worker"
+                    && row["worker_discussion"] == self.conversation
+                    && row["worker_attempt"] == action["operation_id"]
+                    && row["agent"] == action["arguments"]["agent"]
+                    && row["cwd"] == action["arguments"]["cwd"]
+                    && valid(field(row, "worker_instance"))
+            })
+            .ok_or_else(|| invalid("enrolled worker receipt no longer matches its scope"))?;
+        result["state"] = json!("created");
+        result["session"] = child["id"].clone();
+        result["session_instance"] = child["worker_instance"].clone();
+        Ok(result)
+    }
+
     fn verify_endpoint(&self, client: &Client, reply: &Value) -> io::Result<()> {
         if reply["endpoint_id"] != client.endpoint() {
             return Err(invalid("uncorrelated historical supervisor response"));
@@ -430,11 +581,31 @@ mod tests {
         source: Value,
         posts: std::cell::RefCell<Vec<(String, String)>>,
         file_ack: std::cell::RefCell<Value>,
+        forwarded_revocation: Option<std::path::PathBuf>,
+        source_deletion: Option<std::path::PathBuf>,
     }
 
     impl super::super::dispatcher::Audience for FixtureAudience {
         fn current(&self, _cfg: &Config, id: &str) -> io::Result<Option<Value>> {
-            Ok((self.source["id"] == id).then(|| self.source.clone()))
+            if self
+                .source_deletion
+                .as_ref()
+                .is_some_and(|marker| marker.is_file())
+            {
+                return Ok(None);
+            }
+            Ok((self.source["id"] == id).then(|| {
+                let mut source = self.source.clone();
+                if self
+                    .forwarded_revocation
+                    .as_ref()
+                    .is_some_and(|marker| marker.is_file())
+                {
+                    source["message_snapshots"][0]["message"]["content"] =
+                        json!("Changed forwarded content");
+                }
+                source
+            }))
         }
 
         fn verify(&self, cfg: &Config) -> io::Result<()> {
@@ -467,6 +638,391 @@ mod tests {
                 return super::super::rest::Post::Unconfirmed;
             }
             super::super::rest::Post::Acknowledged(receipt)
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the guarded installed-Claude loopback fixture"]
+    fn installed_claude_manager_producer() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_ROOT").unwrap(),
+        );
+        let place = root.join("s/discord");
+        let cfg = super::super::config::Place::for_supervisor(&root.join("s"))
+            .unwrap()
+            .load()
+            .unwrap();
+        let fault = std::env::var("SWARM_CLAUDE_MANAGER_FIXTURE_PROJECT_FAULT").unwrap_or_default();
+        if fault == "before" {
+            assert!(
+                super::super::dispatcher::Dispatcher::open(&cfg, &place)
+                    .unwrap()
+                    .is_none()
+            );
+            let legacy = Client::dial(Path::new(cfg.text("daemon_socket")), CAPS).unwrap();
+            assert!(!legacy.supports("manager-launch"));
+            assert!(!root.join(".fixture-provider-executed").is_file());
+            return;
+        }
+        let dispatcher = super::super::dispatcher::Dispatcher::open(&cfg, &place)
+            .unwrap()
+            .expect("Claude owner supervisor capability");
+        let mut inbox = super::super::receipt::Inbox::open(&place, &cfg).unwrap();
+        let forwarded = std::env::var("SWARM_CLAUDE_MANAGER_FIXTURE_FORWARDED").unwrap_or_default();
+        let mut source = json!({"id":"401","channel_id":"400","author":{"id":"300","bot":false},
+            "type":0,"content":"Use the approved publish tool with the bounded answer.","attachments":[]});
+        if !forwarded.is_empty() {
+            source["content"] = json!("");
+            source["message_reference"] = json!({"type":1,"channel_id":"901","message_id":"991"});
+            source["message_snapshots"] = json!([{"message":{"content":"Visible forwarded fixture quote","attachments":[{
+                "id":"421","filename":"data.csv","size":8,
+                "url":"https://cdn.discordapp.com/attachments/400/421/data.csv?sig=fixture"
+            }]}}]);
+            let files = super::super::received_files::fixture_capture_bytes(
+                &place,
+                &source,
+                "400",
+                b"a,b\n1,2\n",
+            )
+            .unwrap();
+            assert_eq!(files[0]["forwarded"], true);
+        }
+        inbox.checkpoint("400").unwrap();
+        let api = FixtureAudience {
+            source: source.clone(),
+            posts: Default::default(),
+            file_ack: Default::default(),
+            forwarded_revocation: (forwarded == "revoked")
+                .then(|| root.join(".fixture-hide-forward")),
+            source_deletion: std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_DELETED")
+                .map(|_| root.join(".fixture-enrolled-deleted")),
+        };
+        let launch = dispatcher.scope(&cfg)["launch"].clone();
+        let operation = format!("launch:{}:{:032x}", crate::ipc::spawn::now_ms(), 1);
+        if cfg.text("project_access") == "vm" {
+            let mut legacy = Client::dial(Path::new(cfg.text("daemon_socket")), CAPS).unwrap();
+            let denied = legacy
+                .request_body(
+                    json!({"op":"owner_launch","operation_id":operation,
+                "launch":launch}),
+                    "launch",
+                )
+                .unwrap_err();
+            assert!(denied.to_string().contains("manager-native-cli"));
+            assert!(legacy.sessions().unwrap().is_empty());
+        }
+        inbox
+            .set_manager(json!({"generation":1,"launch_operation":operation,"launch":launch}))
+            .unwrap();
+        let manager = Manager::new(&cfg).unwrap();
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let runtime = loop {
+            dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+            let session = field(inbox.manager(), "session");
+            let instance = field(&inbox.manager()["binding"], "session_instance");
+            if let Ok(status) = manager.runtime(session, instance, &launch)
+                && status["ready_for_input"] == true
+            {
+                break status;
+            }
+            assert!(
+                std::time::Instant::now() < limit,
+                "Claude native composer did not become ready"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let session = field(&runtime["binding"], "session");
+        let instance = field(&runtime["binding"], "session_instance");
+        if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_VM_REVOKED").is_some() {
+            let local = session.rsplit('/').next().unwrap();
+            let data = runtime::read_json(&root.join("s/rust-v1").join(local).join("session.json"))
+                .unwrap();
+            let scope = &data["manager"];
+            assert!(crate::discord::verify_manager_vm_scope(scope, Some(&root.join("s"))).is_ok());
+            fs::remove_file(place.join(".rust-vm-manager-grant-v1.json")).unwrap();
+            assert!(crate::discord::verify_manager_vm_scope(scope, Some(&root.join("s"))).is_err());
+            assert!(manager.runtime(session, instance, &launch).is_err());
+            inbox.admit(&source).unwrap().unwrap();
+            assert!(dispatcher.tick(&cfg, &mut inbox, &api).is_err());
+            assert!(inbox.manager()["input"].is_null());
+            assert!(api.posts.borrow().is_empty());
+            return;
+        }
+        if fault == "after" {
+            let config = root.join("work/.claude");
+            runtime::private_dir(&config).unwrap();
+            runtime::write_json(
+                &config.join("settings.local.json"),
+                &json!({"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:3"}}),
+            )
+            .unwrap();
+            assert!(manager.runtime(session, instance, &launch).is_err());
+            inbox.admit(&source).unwrap().unwrap();
+            assert!(dispatcher.tick(&cfg, &mut inbox, &api).is_err());
+            assert!(inbox.manager()["input"].is_null());
+            assert!(api.posts.borrow().is_empty());
+            let local = session.rsplit('/').next().unwrap();
+            let evidence = runtime::read_json(
+                &root
+                    .join("s/rust-v1")
+                    .join(local)
+                    .join("manager-proof.json"),
+            )
+            .unwrap();
+            assert_eq!(evidence["evidence"]["observed_turn"], false);
+            assert_eq!(evidence["evidence"]["prepared"], json!({}));
+            return;
+        }
+        let mut terminal = Client::dial(Path::new(cfg.text("daemon_socket")), &["attach"]).unwrap();
+        let lease = terminal.request("attach", Some(session), "lease").unwrap();
+        let snapshot_len = lease["snapshot_len"].as_u64().unwrap() as usize;
+        terminal.take_snapshot(snapshot_len).unwrap();
+        assert_eq!(
+            manager.runtime(session, instance, &launch).unwrap()["ready_for_input"],
+            false
+        );
+        inbox.admit(&source).unwrap().unwrap();
+        dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        assert!(inbox.manager()["input"].is_null());
+        drop(terminal);
+        let credentials = root.join("h/.claude.json");
+        let original = runtime::read_json(&credentials).unwrap();
+        let mut changed = original.clone();
+        changed["oauthAccount"]["organizationUuid"] = json!("different-org");
+        runtime::write_json(&credentials, &changed).unwrap();
+        assert!(manager.runtime(session, instance, &launch).is_err());
+        runtime::write_json(&credentials, &original).unwrap();
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(35);
+        loop {
+            dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+            if root.join(".fixture-enrolled-deleted-checked").is_file() {
+                assert!(api.posts.borrow().is_empty());
+                assert_eq!(
+                    manager
+                        .dial()
+                        .unwrap()
+                        .sessions()
+                        .unwrap()
+                        .iter()
+                        .filter(|row| row["role"] == "worker")
+                        .count(),
+                    1
+                );
+                return;
+            }
+            if forwarded == "revoked" && root.join(".fixture-forwarded-checked").is_file() {
+                assert!(api.posts.borrow().is_empty());
+                return;
+            }
+            if !api.posts.borrow().is_empty() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < limit,
+                "Claude publication unavailable: {}, native {:?}",
+                inbox.manager(),
+                Manager::new(&cfg).unwrap().runtime(
+                    field(inbox.manager(), "session"),
+                    field(&inbox.manager()["binding"], "session_instance"),
+                    &inbox.manager()["launch"]
+                )
+            );
+            std::thread::sleep(std::time::Duration::from_millis(65));
+        }
+        let posts = api.posts.borrow();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(
+            posts[0].1,
+            if forwarded.is_empty() {
+                "Bounded native Claude reply."
+            } else {
+                "Read the pinned forwarded file."
+            }
+        );
+        let entry = inbox.publication(&posts[0].0);
+        assert_eq!(entry["rest_acknowledged"], true);
+        assert_eq!(entry["proof"]["binding"]["provider"], "claude");
+        assert_eq!(
+            entry["proof"]["native_call_id"],
+            "toolu_fixture_swarm_publish"
+        );
+        drop(posts);
+        if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_ENROLLED").is_some() {
+            assert_eq!(runtime["native_cli"], false);
+            let rows = manager.dial().unwrap().sessions().unwrap();
+            let workers: Vec<_> = rows.iter().filter(|row| row["role"] == "worker").collect();
+            assert_eq!(workers.len(), 1);
+            assert_eq!(workers[0]["cwd"], json!(root.join("approved")));
+            let local = field(workers[0], "id").rsplit('/').next().unwrap();
+            let metadata =
+                runtime::read_json(&root.join("s/rust-v1").join(local).join("session.json"))
+                    .unwrap();
+            assert_eq!(metadata["mailbox"]["structured"], true);
+        }
+        if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_VM").is_some() {
+            assert_eq!(runtime["native_cli"], true);
+            let worker = manager
+                .dial()
+                .unwrap()
+                .sessions()
+                .unwrap()
+                .into_iter()
+                .find(|row| row["role"] == "worker" && row["cwd"] == json!(root.join("child")))
+                .unwrap();
+            assert_eq!(
+                worker["worker_discussion"],
+                runtime["binding"]["conversation_id"]
+            );
+            assert!(
+                worker["worker_attempt"]
+                    .as_str()
+                    .is_some_and(|attempt| attempt.starts_with("launch:"))
+            );
+            if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_WORKTREE").is_some() {
+                let binary = std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_BINARY").unwrap();
+                let local = field(&worker, "id").rsplit('/').next().unwrap();
+                let meta =
+                    runtime::read_json(&root.join("s/rust-v1").join(local).join("session.json"))
+                        .unwrap();
+                let checkout = Path::new(field(&meta["checkout"], "path"));
+                assert!(checkout.is_dir() && checkout != root.join("child"));
+                let file = checkout.join("result.csv");
+                fs::write(&file, "scope,result\nworker,ok\n").unwrap();
+                let note = Command::new(binary)
+                    .env(crate::teammate::SOCKET_ENV, cfg.text("daemon_socket"))
+                    .env(
+                        crate::teammate::PROOF_ENV,
+                        crate::supervisor::mail::proof(field(&meta, "token"), "worker"),
+                    )
+                    .env("SWARM_SESSION_ID", local)
+                    .args(["teammate", "message", "--kind", "complete", "--file"])
+                    .arg(&file)
+                    .output()
+                    .unwrap();
+                assert!(
+                    note.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&note.stderr)
+                );
+                let note: Value = serde_json::from_slice(&note.stdout).unwrap();
+                assert_eq!(note["files"][0]["name"], "result.csv");
+                assert_eq!(note["files"][0]["size"], 23);
+            }
+        }
+
+        if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_PARK").is_some() {
+            let binary = std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_BINARY").unwrap();
+            let local = session.rsplit('/').next().unwrap();
+            let state = root.join("s/rust-v1");
+            let manager_meta = runtime::read_json(&state.join(local).join("session.json")).unwrap();
+            let task = root.join("work/fixture-delegation.md");
+            fs::write(
+                &task,
+                "Perform the bounded fixture task and await owner observation.",
+            )
+            .unwrap();
+            // The synthetic owner establishes a prior association without granting
+            // the restricted Claude manager an ambient VM shell credential.
+            let launch = Command::new(&binary)
+                .env("SWARM_SESSION_ID", local)
+                .env(
+                    "SWARM_DISPATCHER_SPAWN_PROOF",
+                    crate::supervisor::mail::proof(field(&manager_meta, "token"), "spawn"),
+                )
+                .arg("spawn")
+                .args(["--cli", "claude", "--worktree=false", "--delegate"])
+                .arg(&task)
+                .args(["--dir", cfg.text("work_dir")])
+                .output()
+                .unwrap();
+            assert!(
+                launch.status.success(),
+                "{}",
+                String::from_utf8_lossy(&launch.stderr)
+            );
+            let worker = String::from_utf8(launch.stdout).unwrap().trim().to_owned();
+            let worker_local = worker.rsplit('/').next().unwrap();
+            fs::write(root.join(".fixture-release-turn"), "").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(18);
+            loop {
+                dispatcher.fixture_idle_elapsed();
+                dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+                let retire = &inbox.manager()["retirement"];
+                if !retire.is_null() && manager.retirement(retire, true).unwrap() == "retired" {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "Claude did not park: {}, status {:?}",
+                    inbox.manager(),
+                    manager.runtime(session, instance, &inbox.manager()["launch"])
+                );
+                std::thread::sleep(Duration::from_millis(40));
+            }
+            assert!(
+                manager
+                    .dial()
+                    .unwrap()
+                    .sessions()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["id"] == worker && row["status"]["Process"] == "running")
+            );
+            drop(dispatcher);
+            let worker_meta =
+                runtime::read_json(&state.join(worker_local).join("session.json")).unwrap();
+            let note = Command::new(&binary)
+                .env(crate::teammate::SOCKET_ENV, cfg.text("daemon_socket"))
+                .env(
+                    crate::teammate::PROOF_ENV,
+                    crate::supervisor::mail::proof(field(&worker_meta, "token"), "worker"),
+                )
+                .env("SWARM_SESSION_ID", worker_local)
+                .args([
+                    "teammate",
+                    "message",
+                    "--kind",
+                    "complete",
+                    "--text",
+                    "Fixture worker retained across parking.",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                note.status.success(),
+                "{}",
+                String::from_utf8_lossy(&note.stderr)
+            );
+            let note: Value = serde_json::from_slice(&note.stdout).unwrap();
+            assert_eq!(note["state"], "queued");
+            let dispatcher = super::super::dispatcher::Dispatcher::open(&cfg, &place)
+                .unwrap()
+                .unwrap();
+            let mut inbox = super::super::receipt::Inbox::open(&place, &cfg).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while api.posts.borrow().len() < 2 {
+                dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+                assert!(
+                    Instant::now() < deadline,
+                    "Claude did not resume and publish its original worker's note: {}",
+                    inbox.manager()
+                );
+                std::thread::sleep(Duration::from_millis(45));
+            }
+            let posts = api.posts.borrow();
+            assert_eq!(posts.len(), 2);
+            assert_eq!(posts[1].1, "Restored worker note reached Claude.");
+            let reply = inbox.publication(&posts[1].0);
+            assert_eq!(reply["rest_acknowledged"], true);
+            assert_eq!(
+                reply["proof"]["binding"]["native_session_id"],
+                runtime["binding"]["native_session_id"]
+            );
+            assert_ne!(
+                reply["proof"]["binding"]["session_instance"],
+                runtime["binding"]["session_instance"]
+            );
+            assert_eq!(inbox.manager()["generation"], 2);
         }
     }
 
@@ -764,6 +1320,8 @@ mod tests {
                     source,
                     posts: std::cell::RefCell::new(Vec::new()),
                     file_ack: Default::default(),
+                    forwarded_revocation: None,
+                    source_deletion: None,
                 };
                 let local = id.split_once('/').unwrap().1;
                 let mut retained_worker = None;
@@ -1174,6 +1732,8 @@ mod tests {
                             source: withdrawal,
                             posts: Default::default(),
                             file_ack: Default::default(),
+                            forwarded_revocation: None,
+                            source_deletion: None,
                         };
                         dispatcher.tick(&cfg, &mut inbox, &withdrawn).unwrap();
                         assert_eq!(inbox.manager()["input"]["composer"], refused);
@@ -1195,6 +1755,8 @@ mod tests {
                                 source: replacement.clone(),
                                 posts: Default::default(),
                                 file_ack: Default::default(),
+                                forwarded_revocation: None,
+                                source_deletion: None,
                             };
                             inbox.admit(&replacement).unwrap().unwrap();
                             dispatcher.tick(&cfg, &mut inbox, &other).unwrap();

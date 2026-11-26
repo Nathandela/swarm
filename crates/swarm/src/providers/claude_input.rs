@@ -1,5 +1,5 @@
 //! Private bridge for Claude's prompt queue and its independent lifecycle guard.
-use super::{agy_input, claude, codex_receipt as receipt};
+use super::{agy_input, claude, codex_proof, codex_receipt as receipt};
 use crate::{ipc::field, supervisor::runtime};
 use serde_json::{Value, json};
 use std::{
@@ -42,6 +42,8 @@ struct Joined {
     sender: Option<(Worker, Instant)>,
     guard: Option<(Worker, Instant)>,
     revoked: bool,
+    proof: Option<codex_proof::Ledger>,
+    manager_initial_idle: bool,
     operations: BTreeMap<String, Pending>,
 }
 
@@ -58,12 +60,17 @@ impl Joined {
     }
 }
 
+enum Effect {
+    Worker { _locks: (File, File, File) },
+    Manager { _lock: File },
+}
+
 struct Pending {
     composer: Value,
     intent: String,
     result: Value,
     claimed: bool,
-    hold: Option<(File, File, File)>,
+    hold: Option<Effect>,
 }
 
 pub(crate) struct Broker {
@@ -75,6 +82,8 @@ pub(crate) struct Broker {
     auth: String,
     generation: String,
     session: String,
+    manager: Value,
+    sender_name: String,
     joined: Mutex<Joined>,
     progress: Condvar,
 }
@@ -88,11 +97,26 @@ impl Broker {
     ) -> io::Result<Arc<Self>> {
         let provider = &config["provider"];
         let token = field(config, "token");
-        let installation = field(provider, "claude_native_installation");
+        let manager = &config["manager"];
+        let installation = if manager.is_null() {
+            field(provider, "claude_native_installation")
+        } else {
+            field(manager, "installation_id")
+        };
         let supervisor = dir.parent().and_then(Path::parent).ok_or_else(refused)?;
         if provider["name"] != "claude"
             || !qualified(field(provider, "version"))
-            || !crate::discord::worker_installation_enrolled(supervisor, owner_socket, installation)
+            || if manager.is_null() {
+                !crate::discord::worker_installation_enrolled(
+                    supervisor,
+                    owner_socket,
+                    installation,
+                )
+            } else {
+                manager["launch"]["agent"] != "claude"
+                    || manager["supervisor_socket"] != owner_socket
+                    || crate::discord::connector_intent(manager).is_err()
+            }
         {
             return Err(refused());
         }
@@ -105,15 +129,25 @@ impl Broker {
         let descriptor = dir.join("claude-input.json");
         let descriptor_js = serde_json::to_string(&descriptor)?;
         let listener = runtime::bind(&socket)?;
+        let sender_name = if manager.is_null() {
+            SENDER.to_owned()
+        } else {
+            format!("swarm-manager-input-{generation}")
+        };
         runtime::write_json(
             &descriptor,
             &json!({
                 "socket_path":socket,"token":auth.strip_prefix("Bearer "),
-                "generation":generation,"provider_version":VERSION,"sender_name":SENDER,
+                "generation":generation,"provider_version":VERSION,"sender_name":sender_name,
+                "manager_conversation_id":manager["launch"]["manager"]["conversation_id"],
+                "native_turns":!manager.is_null(),
             }),
         )?;
         for (name, source) in [
-            (SENDER, include_str!("../../assets/claude/plugin.js")),
+            (
+                sender_name.as_str(),
+                include_str!("../../assets/claude/plugin.js"),
+            ),
             (
                 "swarm-native-input-guard",
                 include_str!("../../assets/claude/guard.js"),
@@ -135,7 +169,7 @@ impl Broker {
                 &json!({"modules":["./input.js"]}),
             )?;
             let mut body = source.replace("__CONFIG_PATH__", &descriptor_js);
-            if name == SENDER {
+            if name == sender_name {
                 if body.matches(NATIVE_SUBMIT).count() != 1 {
                     return Err(refused());
                 }
@@ -155,6 +189,8 @@ impl Broker {
             token: token.into(),
             auth,
             generation,
+            manager: manager.clone(),
+            sender_name,
             joined: Mutex::new(Joined::default()),
             progress: Condvar::new(),
         });
@@ -176,13 +212,37 @@ impl Broker {
             .ok_or_else(refused)
     }
 
+    fn verify_manager_origin(&self) -> io::Result<()> {
+        claude::verify_manager_origin(
+            &self.manager,
+            Path::new(field(&self.manager["launch"], "cwd")),
+        )
+    }
+
+    pub(crate) fn manager_snapshot(&self) -> io::Result<Value> {
+        self.verify_manager_origin()?;
+        let joined = self.joined.lock().unwrap();
+        joined.ready().ok_or_else(refused)?;
+        let proof = joined.proof.as_ref().ok_or_else(refused)?;
+        codex_proof::Ledger::snapshot(&self.dir, proof.binding())
+    }
+
     pub(crate) fn submit(&self, request: &Value) -> io::Result<Value> {
         let operation = field(request, "operation_id");
         let session = field(request, "session");
         let text = field(request, "text");
         let instance = receipt::provider_instance("claude", &self.token);
-        let origin = agy_input::origin(&request["origin"])?;
-        let intent = agy_input::intent(text, &origin)?;
+        let manager = !self.manager.is_null();
+        let origin = if manager {
+            request["composer_send"]["origin"].clone()
+        } else {
+            agy_input::origin(&request["origin"])?
+        };
+        let intent = if manager {
+            receipt::hash(text)
+        } else {
+            agy_input::intent(text, &origin)?
+        };
         if !receipt::timely(operation)
             || text.is_empty()
             || text.len() > 4096
@@ -194,8 +254,18 @@ impl Broker {
         {
             return Err(refused());
         }
-        let composer =
-            json!({"session":session,"session_instance":instance,"text":text,"origin":origin});
+        let composer = if manager {
+            let composer = &request["composer_send"];
+            if composer["text"] != text
+                || composer["session"] != session
+                || composer["session_instance"] != instance
+            {
+                return Err(refused());
+            }
+            composer.clone()
+        } else {
+            json!({"session":session,"session_instance":instance,"text":text,"origin":origin})
+        };
         let mut joined = self.joined.lock().unwrap();
         let native = joined.ready().ok_or_else(refused)?.to_owned();
         if let Some(saved) = receipt::load_for(
@@ -217,14 +287,43 @@ impl Broker {
         }
         let root = self.dir.parent().ok_or_else(refused)?;
         receipt::verify_binding(root, operation, session, &instance, &intent)?;
-        crate::discord::verify_connector_worker_input(
-            &self.supervisor,
-            &self.owner_socket,
-            &self.installation,
-            "claude",
-            operation,
-            &composer,
-        )?;
+        if manager {
+            self.verify_manager_origin()?;
+            let _effect = crate::discord::lock_manager_mail_effect(&self.manager)?;
+            let admission = &composer["manager_admission"];
+            let proof = joined.proof.as_mut().ok_or_else(refused)?;
+            let evidence = codex_proof::Ledger::snapshot(&self.dir, proof.binding())?;
+            if admission["binding"] != *proof.binding()
+                || evidence["thread_state"] != "idle"
+                || evidence["externally_steered"] == true
+                || evidence["external_input"] != admission["expected_external_input"]
+            {
+                return Err(refused());
+            }
+            let nonce = field(admission, "nonce");
+            codex_proof::claude::envelope(nonce, text)?;
+            crate::discord::verify_connector_input(
+                &self.manager,
+                operation,
+                &composer,
+                Some(&self.supervisor),
+            )?;
+            proof.prepare(
+                operation,
+                nonce,
+                text,
+                field_number(admission, "expected_external_input")?,
+            )?;
+        } else {
+            crate::discord::verify_connector_worker_input(
+                &self.supervisor,
+                &self.owner_socket,
+                &self.installation,
+                "claude",
+                operation,
+                &composer,
+            )?;
+        }
         receipt::fence_for(
             &self.dir,
             operation,
@@ -298,11 +397,66 @@ impl Broker {
             || !claude::canonical_id(&worker.native_session_id)
             || !claude::canonical_id(&worker.generation)
             || !qualified(&worker.version)
-            || !matches!(path, "/guard" | "/exchange" | "/revoke")
         {
             return Err(refused());
         }
         let mut joined = self.joined.lock().unwrap();
+        if !matches!(path, "/guard" | "/exchange" | "/revoke") {
+            if self.manager.is_null()
+                || joined.revoked
+                || joined
+                    .guard
+                    .as_ref()
+                    .is_none_or(|(guard, heard)| guard != &worker || heard.elapsed() >= HEARTBEAT)
+            {
+                return Err(refused());
+            }
+            if path == "/turn"
+                && req["turn"]["state"] == "idle"
+                && field(&req["turn"], "turn_id").is_empty()
+                && joined.proof.is_none()
+            {
+                return Ok(Value::Null);
+            }
+            if path == "/manager-idle" && field(req, "turn_id").is_empty() && joined.proof.is_none()
+            {
+                joined.manager_initial_idle = true;
+                return Ok(Value::Null);
+            }
+            if joined.ready().is_none() {
+                return Err(refused());
+            }
+            if path == "/manager-tool" {
+                self.verify_manager_origin()?;
+            }
+            if path == "/manager-prompt" {
+                self.verify_manager_origin()?;
+                let input = field(req, "text");
+                let (operation, entry) = joined
+                    .operations
+                    .iter()
+                    .find(|(_, entry)| {
+                        entry.claimed
+                            && entry.hold.is_some()
+                            && codex_proof::claude::envelope(
+                                field(&entry.composer["manager_admission"], "nonce"),
+                                field(&entry.composer, "text"),
+                            )
+                            .as_deref()
+                            .ok()
+                                == Some(input)
+                    })
+                    .ok_or_else(refused)?;
+                crate::discord::verify_connector_input(
+                    &self.manager,
+                    operation,
+                    &entry.composer,
+                    Some(&self.supervisor),
+                )?;
+            }
+            let proof = joined.proof.as_mut().ok_or_else(refused)?;
+            return proof.claude_guard(&self.sender_name, path, req);
+        }
         let role = if path == "/guard" {
             &mut joined.guard
         } else {
@@ -342,7 +496,9 @@ impl Broker {
             ) {
                 return Err(refused());
             }
-            entry.hold.take();
+            if self.manager.is_null() || disposition != "submitted" {
+                entry.hold.take();
+            }
             match disposition {
                 "submitted" => self.settle(entry, "submitted")?,
                 "started" => {
@@ -365,6 +521,31 @@ impl Broker {
         let Some(id) = joined.ready() else {
             return Ok(Value::Null);
         };
+        if !self.manager.is_null() && joined.proof.is_none() {
+            let guard = &joined.guard.as_ref().ok_or_else(refused)?.0;
+            let resume = &self.manager["resume_request"]["binding"];
+            if resume["native_session_id"]
+                .as_str()
+                .is_some_and(|expected| id != expected)
+            {
+                joined.revoked = true;
+                return Err(refused());
+            }
+            let binding = json!({
+                "session":format!("{}/{}", field(&self.manager,"endpoint_id"),self.session),
+                "session_instance":receipt::provider_instance("claude",&self.token),
+                "conversation_id":self.manager["launch"]["manager"]["conversation_id"],
+                "provider":"claude","native_session_id":id,"native_generation":self.generation,
+                "observation_generation":format!("{}:{}",self.generation,guard.generation),
+                "login_epoch":self.manager["account"]
+            });
+            let mut proof = codex_proof::Ledger::open(&self.dir, &binding)?;
+            if joined.manager_initial_idle {
+                proof.claude_guard(&self.sender_name, "/manager-idle", &json!({"turn_id":""}))?;
+            }
+            joined.proof = Some(proof);
+            return Ok(Value::Null);
+        }
         let registration = self.dir.join("claude-native.json");
         if !registration.exists() {
             runtime::write_json(
@@ -378,14 +559,28 @@ impl Broker {
                 .iter_mut()
                 .find(|(_, entry)| !entry.claimed)
         {
-            let guard = crate::discord::lock_connector_worker_input(
-                &self.supervisor,
-                &self.owner_socket,
-                &self.installation,
-                "claude",
-                operation,
-                &entry.composer,
-            );
+            let guard = if self.manager.is_null() {
+                crate::discord::lock_connector_worker_input(
+                    &self.supervisor,
+                    &self.owner_socket,
+                    &self.installation,
+                    "claude",
+                    operation,
+                    &entry.composer,
+                )
+                .map(|locks| Effect::Worker { _locks: locks })
+            } else {
+                (|| {
+                    let lock = crate::discord::lock_manager_mail_effect(&self.manager)?;
+                    crate::discord::verify_connector_input(
+                        &self.manager,
+                        operation,
+                        &entry.composer,
+                        Some(&self.supervisor),
+                    )?;
+                    Ok(Effect::Manager { _lock: lock })
+                })()
+            };
             let Ok(guard) = guard else {
                 let operation = operation.clone();
                 self.settle(entry, "rejected")?;
@@ -410,9 +605,16 @@ impl Broker {
                     entry.hold.take();
                 }
             });
-            return Ok(
-                json!({"operation_id":operation,"text":entry.composer["text"],"expires_ms":expires_ms}),
-            );
+            let raw = field(&entry.composer, "text");
+            let text = if self.manager.is_null() {
+                raw.to_owned()
+            } else {
+                codex_proof::claude::envelope(
+                    field(&entry.composer["manager_admission"], "nonce"),
+                    raw,
+                )?
+            };
+            return Ok(json!({"operation_id":operation,"text":text,"expires_ms":expires_ms}));
         }
         Ok(Value::Null)
     }
@@ -429,6 +631,10 @@ impl Broker {
         entry.result = result;
         Ok(())
     }
+}
+
+fn field_number(value: &Value, key: &str) -> io::Result<u64> {
+    value[key].as_u64().ok_or_else(refused)
 }
 
 fn write_artifact(path: &Path, body: &str) -> io::Result<()> {
