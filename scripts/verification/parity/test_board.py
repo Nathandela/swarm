@@ -63,7 +63,7 @@ def owner_request(path, capability, body, *, discard=False):
         return receive(conn)
 
 
-def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False):
+def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False, static_grid=False, roster_motion=False, layout_options=False):
     env = p.environment(root)
     cwd = root / "work"
     binary = root / "bin/swarm"
@@ -371,6 +371,74 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             return worker, birth
         finally:
             board.close()
+
+    if layout_options:
+        daemon = start()
+        capability = "context-guard-settings"
+        has_context = capability in owner_request(env["SWARM_DAEMON_SOCK"], capability, None).get("capabilities", [])
+        ids = []
+        for name, repo in (("alpha", "repo-a"), ("zulu", "repo-z")):
+            working = cwd / repo
+            working.mkdir()
+            created = cli("spawn", "--cli", "claude", "--name", name, "--dir", working,
+                          "--prompt", "Offline layout fixture")
+            assert created.returncode == 0, created.stderr
+            identity = created.stdout.decode().strip()
+            ids.append(identity)
+            response = owner_request(env["SWARM_DAEMON_SOCK"], "subscribe",
+                                     {"op":"set_tag", "session_id":identity, "tag":repo})
+            assert response["op"] == "ok"
+        layout = (root / "home/Library/Application Support/swarm/board-layout.json"
+                  if sys.platform == "darwin" else root / "home/config/swarm/board-layout.json")
+
+        def saved(group, order):
+            if not layout.exists():
+                return False
+            observed = json.loads(layout.read_bytes())
+            return (observed.get("grouping") == group and observed.get("ordering") == order
+                    and observed.get("touch_back", False) is False)
+
+        def open_form(board):
+            offset = len(board.capture)
+            board.send(b"o")
+            board.wait_bytes(b"options", offset)
+            if has_context:
+                board.wait_bytes(b"threshold", offset)
+
+        board = p.Board([str(root / "bin/board")], root, env)
+        try:
+            board.wait_bytes(b"zulu")
+            right = b"\x1b[C"
+            down = b"\x1b[B"
+            open_form(board)
+            board.send(right + down + right * 3 + b"\r")
+            p.wait_for(lambda: saved("repo", "name"), "repository grouping and name order persisted")
+            offset = len(board.capture)
+            open_form(board)
+            board.send(right + down + right + b"\r")
+            p.wait_for(lambda: saved("tag", "arrival"), "tag grouping and arrival order persisted")
+            open_form(board)
+            board.send(right + down + right * 2 + b"\x1b[27u")
+            board.wait_bytes(b"More (m)", offset)
+            board.send(b"\x1b[27u")
+            p.wait_for(lambda: (board.drain(), board.child.poll())[1] is not None, "exit after layout")
+            assert saved("tag", "arrival") and termios.tcgetattr(board.master) == board.original_mode
+        finally:
+            board.close()
+        board = p.Board([str(root / "bin/board")], root, env)
+        try:
+            board.wait_bytes(b"group: tag")
+            board.wait_bytes(b"order: arrival")
+            board.send(b"\x1b[27u")
+            p.wait_for(lambda: (board.drain(), board.child.poll())[1] is not None, "exit after layout reload")
+            assert termios.tcgetattr(board.master) == board.original_mode
+        finally:
+            board.close()
+        for identity in ids:
+            assert cli("kill", identity).returncode == 0
+        daemon.terminate()
+        daemon.wait(timeout=5)
+        return
 
     if scheduled_enter:
         daemon = start()
@@ -920,8 +988,9 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             relocation_grid_witness(root, cli, roster, start, tmux)
         elif form_grid:
             launch_grid_witness(root, roster, start, tmux)
-        elif board_grid or menu_grid or edit_grid or manager_grid or context_grid:
-            roster_grid_witness(root, cli, roster, start, tmux, menu_grid, edit_grid, manager_grid, context_grid)
+        elif board_grid or menu_grid or edit_grid or manager_grid or context_grid or static_grid or roster_motion:
+            roster_grid_witness(root, cli, roster, start, tmux, menu_grid, edit_grid, manager_grid,
+                                context_grid, static_grid, roster_motion)
         else:
             grid_witness(root, cli, roster, start, tmux)
         return
@@ -1250,7 +1319,8 @@ def relocation_grid_witness(root, cli, roster, start, tmux):
         "first_divergence":differences[0] if differences else None})
 
 
-def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_grid=False, manager_grid=False, context_grid=False):
+def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_grid=False, manager_grid=False, context_grid=False,
+                        static_grid=False, roster_motion=False):
     (root / "effects/board-events").touch()
     daemon = start()
     ids = {}
@@ -1262,7 +1332,7 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
     for name, text, event in (("amber", "fixture permission", "PermissionRequest"),
                                ("teal", "fixture busy", "UserPromptSubmit"),
                                ("violet", "fixture review", "Stop")):
-        if edit_grid and name == "teal":
+        if (edit_grid or static_grid) and name == "teal":
             # A review row makes the edit compositor independent of the
             # animation phase. The ordinary roster witness retains Working.
             text, event = "fixture review", "Stop"
@@ -1283,7 +1353,7 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
         groups = {row["name"]:row["group"] for row in rows}
         expected = {"amber":"needs_input", "teal":"working",
                     "violet":"ready_for_review", "slate":"completed"}
-        if edit_grid:
+        if edit_grid or static_grid:
             expected["teal"] = "ready_for_review"
         return rows if groups == expected else None
 
@@ -1296,10 +1366,10 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
         assert proc.returncode == 0, (argv, proc.stderr)
         return proc.stdout
 
-    def snapshot(cols, height):
-        raw = run("capture-pane", "-pe", "-S", "0", "-E", str(height - 1), "-t", "roster:0.0")
+    def snapshot(cols, height, pane="roster:0.0"):
+        raw = run("capture-pane", "-pe", "-S", "0", "-E", str(height - 1), "-t", pane)
         fmt = "|".join(f"#{{{mode}}}" for mode in TMUX_MODES)
-        modes = run("display-message", "-p", "-t", "roster:0.0", fmt).decode().strip().split("|")
+        modes = run("display-message", "-p", "-t", pane, fmt).decode().strip().split("|")
         return {"ansi_base64": base64.b64encode(raw).decode(), "cells": resolve_cells(raw, cols, height),
                 "terminal_modes": dict(zip(TMUX_MODES, modes, strict=True))}
 
@@ -1331,7 +1401,40 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
         daemon.terminate()
         daemon.wait(timeout=5)
 
-    if menu_grid or edit_grid or manager_grid or context_grid:
+    if roster_motion:
+        cols, height = 120, 24
+        run("new-session", "-d", "-s", "roster", "-x", str(cols), "-y", str(height),
+            "-c", root / "work", root / "bin/board")
+        capture(cols, height, "teal")
+        frames, observed = [], set()
+        spinner = set("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+
+        def observe():
+            frame = snapshot(cols, height)
+            teal = next(line for line in frame["cells"] if "teal" in "".join(c[0] for c in line))
+            glyph = teal[2][0]
+            assert glyph in spinner and teal[2][3] == "5fd7af", teal
+            elapsed = "".join(cell[0] for cell in teal[74:80]).strip()
+            assert elapsed.endswith("s") and elapsed[:-1].isdigit(), elapsed
+            state = (glyph, int(elapsed[:-1]))
+            if state not in observed:
+                observed.add(state)
+                frames.append({"phase":state[0], "elapsed_seconds":state[1], "actual":frame})
+            return len({glyph for glyph, _ in observed}) >= 4 and len({age for _, age in observed}) >= 2
+
+        p.wait_for(observe, "native spinner changes and elapsed clock advances while idle")
+        assert all(next_frame["elapsed_seconds"] >= frame["elapsed_seconds"]
+                   for frame, next_frame in zip(frames, frames[1:]))
+        run("kill-session", "-t", "roster")
+        close_fixture()
+        p.write_json(root / "grid.json", {"motion":frames, "cols":cols, "rows":height,
+                                         "first_divergence":None})
+        return
+
+    if menu_grid or edit_grid or manager_grid or context_grid or static_grid:
+        # Keep the isolated server alive across closing one comparison arm's
+        # last pane and opening the next. tmux 3.2a can still be exiting then.
+        run("new-session", "-d", "-s", "roster-anchor", "-c", root / "work", "/bin/sleep", "30")
         def click(x, y):
             press = f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode()
             run("send-keys", "-H", "-t", "roster:0.0", *(f"{byte:02x}" for byte in press))
@@ -1398,23 +1501,106 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
 
         def collect_context(binary):
             frames = []
-            for cols, height in ((40, 8), (24, 4)):
+            for cols, height in ((120, 24), (80, 24), (40, 8), (24, 4)):
                 run("new-session", "-d", "-s", "roster", "-x", "80", "-y", "24",
                     "-c", root / "work", root / "bin" / binary)
                 capture(80, 24, "selected:amber")
                 key("o")
                 capture(80, 24, "threshold", form=True)
                 run("resize-window", "-t", "roster:0", "-x", str(cols), "-y", str(height))
-                capture(cols, height, "options" if cols == 40 else "resize to 32", form=True)
-                key("Down", "Down", "Down", "Down")
+                capture(cols, height, "resize to 32" if cols == 24 else "options", form=True)
+                key("Down", "Down", "Down")
+                selected_manager = capture(cols, height, "▌ manager prompt", form=True)
+                manager = selected_manager if cols >= 80 else None
+                key("Down")
                 compact = capture(cols, height, "▌ auto compact", form=True)
                 key("Down")
                 threshold = capture(cols, height, "▌ threshold", form=True)
                 key("Escape")
                 capture(cols, height, "selected:amber")
-                frames.append({"cols":cols, "rows":height, "compact":compact, "threshold":threshold})
+                frames.append({"cols":cols, "rows":height, "manager":manager,
+                               "compact":compact, "threshold":threshold})
                 run("kill-session", "-t", "roster")
             return frames
+
+        def collect_static(binary):
+            frames = []
+            for cols, height in ((80, 24), (40, 8), (24, 4)):
+                run("new-session", "-d", "-s", "roster", "-x", str(cols), "-y", str(height),
+                    "-c", root / "work", root / "bin" / binary)
+                initial = capture(cols, height, "selected:amber")
+                key("Left")
+                folded = capture(cols, height, "▌ needs input")
+                key("Right")
+                expanded = capture(cols, height, "selected:amber")
+                key("Down")
+                down = capture(cols, height, "selected:violet")
+                key("Up")
+                up = capture(cols, height, "selected:amber")
+                key("g")
+                attention = capture(cols, height, "selected:violet")
+                key("End")
+                bottom = capture(cols, height, "selected:slate")
+                frames.append({"cols":cols, "rows":height, "initial":initial, "folded":folded,
+                               "expanded":expanded, "down":down, "up":up, "attention":attention,
+                               "bottom":bottom})
+                run("kill-session", "-t", "roster")
+            return frames
+
+        def collect_wide_pair():
+            cols, height = 120, 24
+            windows = (("reference-roster", "reference-board"), ("candidate-roster", "board"))
+            for session, binary in windows:
+                run("new-session", "-d", "-s", session, "-x", str(cols), "-y", str(height),
+                    "-c", root / "work", root / "bin" / binary)
+            scenes = (
+                ("initial", None, "amber"),
+                ("folded", "Left", "needs input"),
+                ("expanded", "Right", "amber"),
+                ("down", "Down", "violet"),
+                ("up", "Up", "amber"),
+                ("attention", "g", "violet"),
+                ("bottom", "End", "slate"),
+            )
+            arms = [{"cols":cols, "rows":height}, {"cols":cols, "rows":height}]
+
+            def sampled(frame, selected):
+                ages = []
+                seen = False
+                for cells in frame["cells"]:
+                    text = "".join(c[0] for c in cells).lower()
+                    if text.startswith("▌ ") and selected in text:
+                        seen = True
+                    candidate_age = "".join(c[0] for c in cells[74:80]).strip()
+                    if candidate_age and candidate_age[:-1].isdigit():
+                        ages.append(candidate_age)
+                return ages if seen and ages else None
+
+            for label, key_name, selected in scenes:
+                if key_name is not None:
+                    for session, _ in windows:
+                        run("send-keys", "-t", f"{session}:0.0", key_name)
+
+                def settled():
+                    frames = tuple(snapshot(cols, height, f"{session}:0.0") for session, _ in windows)
+                    ages = tuple(sampled(frame, selected) for frame in frames)
+                    # Capture from a shared real owner in the same elapsed
+                    # interval. Compare the original age cells as emitted.
+                    if ages[0] and ages[0] == ages[1]:
+                        return frames
+                    if all(ages):
+                        # The pinned board can leave idle age cells unchanged
+                        # until an input event. This unbound key leaves selection
+                        # and data unchanged and schedules a fresh view.
+                        for session, _ in windows:
+                            run("send-keys", "-t", f"{session}:0.0", "~")
+                    return None
+
+                for arm, frame in zip(arms, p.wait_for(settled, f"120×24 shared age interval for {label}"), strict=True):
+                    arm[label] = frame
+            for session, _ in windows:
+                run("kill-session", "-t", session)
+            return arms
 
         def collect_menu(binary):
             frames = []
@@ -1448,25 +1634,72 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
                 run("kill-session", "-t", "roster")
             return frames
 
-        collect = (collect_context if context_grid else collect_manager if manager_grid
+        collect = (collect_static if static_grid else collect_context if context_grid else collect_manager if manager_grid
                    else collect_edits if edit_grid else collect_menu)
         expected = collect("reference-board")
         actual = collect("board")
-        differences = []
+        if static_grid:
+            left, right = collect_wide_pair()
+            expected.insert(0, left)
+            actual.insert(0, right)
+        differences, coordinates, retired_rows = [], [], []
         for left, right in zip(expected, actual, strict=True):
             for view in (key for key in left if key not in ("cols", "rows")):
                 if left[view] is None:
                     assert right[view] is None
                     continue
-                first = compare_projection(left[view], right[view])
+                if static_grid:
+                    go, rust = left[view], right[view]
+                    modes_go, modes_rust = go["terminal_modes"], rust["terminal_modes"]
+                    keys = {"cursor_x", "cursor_y"}
+                    if any(modes_go[k] != modes_rust[k] for k in keys):
+                        coordinates.append({"cols":left["cols"],"frame":view,
+                                            "go":{k:modes_go[k] for k in sorted(keys)},
+                                            "rust":{k:modes_rust[k] for k in sorted(keys)}})
+                    # A hidden paint cursor's coordinates are reported separately.
+                    # Visible cursors retain all coordinate assertions.
+                    if modes_go["cursor_flag"] == modes_rust["cursor_flag"] == "0":
+                        go = {**go, "terminal_modes":{k:v for k,v in modes_go.items() if k not in keys}}
+                        rust = {**rust, "terminal_modes":{k:v for k,v in modes_rust.items() if k not in keys}}
+                    first = compare_projection(go, rust)
+                elif context_grid and left["cols"] >= 80:
+                    go, rust = left[view], right[view]
+                    modes_go, modes_rust = go["terminal_modes"], rust["terminal_modes"]
+                    cursor = ("cursor_x", "cursor_y")
+                    if any(modes_go[k] != modes_rust[k] for k in cursor):
+                        coordinates.append({"cols":left["cols"],"frame":view,
+                                            "go":{k:modes_go[k] for k in cursor},
+                                            "rust":{k:modes_rust[k] for k in cursor}})
+                    first = next(({"mode":key,"go":value,"rust":modes_rust[key]}
+                                  for key, value in modes_go.items()
+                                  if value != modes_rust[key]
+                                  and not (key in cursor and modes_go["cursor_flag"] == modes_rust["cursor_flag"] == "0")),
+                                 None)
+                    # Only the complete, named former login row is intentionally
+                    # absent. Record that difference without changing either arm.
+                    for y, (expected_row, observed_row) in enumerate(zip(go["cells"], rust["cells"], strict=True)):
+                        if expected_row == observed_row:
+                            continue
+                        text = "".join(c[0] for c in expected_row).split()
+                        if text == ["logins", "Provider", "logins", "→"] and all(
+                            cell == [" ", 1, [], None, None] for cell in observed_row
+                        ):
+                            retired_rows.append({"cols":left["cols"],"frame":view,"row":y,"control":"Provider logins →"})
+                        elif first is None:
+                            first = next({"x":x,"y":y,"go":before,"rust":after}
+                                         for x, (before, after) in enumerate(zip(expected_row, observed_row, strict=True))
+                                         if before != after)
+                else:
+                    first = compare_projection(left[view], right[view])
                 if first is not None:
                     differences.append({"cols":left["cols"], "rows":left["rows"], "frame":view,
                                         "difference":first})
+        run("kill-session", "-t", "roster-anchor")
         close_fixture()
-        prefix = "context" if context_grid else "manager" if manager_grid else "edit" if edit_grid else "menu"
+        prefix = "static" if static_grid else "context" if context_grid else "manager" if manager_grid else "edit" if edit_grid else "menu"
         p.write_json(root / "grid.json", {f"{prefix}_reference":expected, f"{prefix}_candidate":actual,
             "fixture_ids":ids, "fixture_cwd":str(root / "work"), "first_divergence":differences[0] if differences else None,
-            "differences":differences})
+            "differences":differences, "cursor_coordinates":coordinates, "retired_rows":retired_rows})
         return
 
     frames = []
@@ -1562,7 +1795,7 @@ def compare_forms(reference, candidate):
 
 
 def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False,
-        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False):
+        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False, static_grid=False, roster_motion=False, layout_options=False):
     scratch = Path("/tmp").resolve()
     if form_root is None:
         root = Path(tempfile.mkdtemp(prefix="pb-", dir=scratch))
@@ -1612,14 +1845,18 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             command.append("--relocation-board")
         elif scheduled_enter:
             command.append("--scheduled-enter")
+        elif layout_options:
+            command.append("--layout-options")
         elif tmux is not None:
             command.append(tmux)
             if form_grid:
                 command.append("--form-grid")
             elif board_grid:
                 command.append("--board-grid")
+            elif roster_motion:
+                command.append("--roster-motion")
             elif reference_board is not None:
-                command.append("--relocation-grid" if relocation_grid else "--context-grid" if context_grid else "--manager-grid" if manager_grid
+                command.append("--static-grid" if static_grid else "--relocation-grid" if relocation_grid else "--context-grid" if context_grid else "--manager-grid" if manager_grid
                                else "--edit-grid" if edit_grid else "--menu-grid")
         child = subprocess.Popen(command, cwd=root / "work", env=p.environment(root),
                                  start_new_session=True)
@@ -1639,6 +1876,10 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             if reference_board is not None:
                 receipt["reference_board_sha256"] = p.hash_file(reference_board)
             p.write_json(evidence, receipt, replace=False)
+            if receipt.get("retired_rows"):
+                print(f"{len(receipt['retired_rows'])} retired Provider logins rows recorded in {evidence}")
+            if receipt.get("cursor_coordinates"):
+                print(f"{len(receipt['cursor_coordinates'])} hidden cursor coordinate differences recorded in {evidence}")
             if receipt["first_divergence"] is not None:
                 raise RuntimeError(f"terminal grid or mode changed; captured in {evidence}")
         if child.returncode != 0:
@@ -1650,13 +1891,16 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
         if child is not None:
             child.wait(timeout=2)
         shutil.rmtree(root)
-    exercise = ("native scheduled review reopening through Enter" if scheduled_enter else
+    exercise = ("retained Options grouping, ordering and persistence" if layout_options else
+                "native scheduled review reopening through Enter" if scheduled_enter else
                 "captured Antigravity resume and relocation" if relocate_board else
                 "capability-gated Codex Context Guard Options and revision fencing" if context_options else
                 "owner manager prompt persistence and validation through Options" if manager_options else
                 "rename, tag, cancel, kill and delete through public board" if edit_rows else
                 "attached CLI button, native mouse and terminal restoration" if touch else
                 "supervised and hands-off handoff" if handoff else
+                "working spinner and elapsed-clock motion" if roster_motion else
+                "paired deterministic roster cells" if static_grid else
                 "paired native Antigravity relocation grids" if relocation_grid else
                 "paired compact Context Guard settings grids" if context_grid else
                 "paired compact manager prompt grids" if manager_grid else
@@ -1666,7 +1910,7 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
                 "comparative launch-form grids" if form_grid else
                 "local automation CLI and owner dashboard catalog/disconnect" if automations else
                 "running-session cycling" if cycle else "board launch, attach and live reattach")
-    print(f"{exercise} {'captured' if form_grid or board_grid or reference_board else 'passed'}; cleanup {cleanup}")
+    print(f"{exercise} {'captured' if form_grid or board_grid or reference_board or roster_motion else 'passed'}; cleanup {cleanup}")
 
 
 if __name__ == "__main__":
@@ -1681,7 +1925,7 @@ if __name__ == "__main__":
         witness(Path(sys.argv[2]), Path(mode) if mode and not mode.startswith("--") else None,
                 mode == "--cycle", mode == "--automations", sys.argv[-1] == "--form-grid",
                 sys.argv[-1] == "--board-grid", mode == "--handoff-board", mode == "--touch-back",
-                sys.argv[-1] == "--menu-grid", mode == "--edit-rows", sys.argv[-1] == "--edit-grid", mode == "--manager-options", sys.argv[-1] == "--manager-grid", mode == "--context-options", sys.argv[-1] == "--context-grid", mode == "--relocation-board", mode == "--scheduled-enter", sys.argv[-1] == "--relocation-grid")
+                sys.argv[-1] == "--menu-grid", mode == "--edit-rows", sys.argv[-1] == "--edit-grid", mode == "--manager-options", sys.argv[-1] == "--manager-grid", mode == "--context-options", sys.argv[-1] == "--context-grid", mode == "--relocation-board", mode == "--scheduled-enter", sys.argv[-1] == "--relocation-grid", sys.argv[-1] == "--static-grid", sys.argv[-1] == "--roster-motion", mode == "--layout-options")
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
@@ -1690,6 +1934,8 @@ if __name__ == "__main__":
         modes.add_argument("--tmux", type=p.binary_path)
         modes.add_argument("--automations", action="store_true", help="read the owner automation catalog from CLI and board")
         modes.add_argument("--handoff-board", action="store_true", help="exercise supervised and capability-gated hands-off handoff")
+        modes.add_argument("--layout-options", action="store_true",
+                           help="verify Options grouping and ordering across public board restarts")
         modes.add_argument("--scheduled-enter", action="store_true",
                            help="open a stopped synthetic scheduled review through the real native resume path")
         modes.add_argument("--relocation-board", action="store_true",
@@ -1711,8 +1957,12 @@ if __name__ == "__main__":
         grids.add_argument("--form-grid", action="store_true", help="capture launch form across reference terminal sizes")
         grids.add_argument("--reference-board", type=p.binary_path,
                            help="compare the More menu with this board using the same public owner and IDs")
+        grids.add_argument("--roster-motion", action="store_true",
+                           help="verify live working animation and age in the full width roster")
         grids.add_argument("--board-grid", action="store_true", help="capture populated roster across reference terminal sizes")
         paired = parser.add_mutually_exclusive_group()
+        paired.add_argument("--static-grid", action="store_true",
+                            help="compare deterministic ordinary roster cells with --reference-board")
         paired.add_argument("--relocation-grid", action="store_true",
                             help="compare Antigravity relocation with --reference-board")
         paired.add_argument("--context-grid", action="store_true",
@@ -1724,12 +1974,12 @@ if __name__ == "__main__":
         args = parser.parse_args()
         if bool(args.tmux) != bool(args.grid_evidence):
             parser.error("--tmux and --grid-evidence are required together")
-        if (args.form_grid or args.board_grid or args.reference_board) and not args.tmux:
+        if (args.form_grid or args.board_grid or args.reference_board or args.roster_motion) and not args.tmux:
             parser.error("grid checks require --tmux")
-        if (args.edit_grid or args.manager_grid or args.context_grid or args.relocation_grid) and not args.reference_board:
+        if (args.edit_grid or args.manager_grid or args.context_grid or args.relocation_grid or args.static_grid) and not args.reference_board:
             parser.error("paired grid checks require --reference-board")
         if args.terminal_mouse_reply and not args.touch_back:
             parser.error("--terminal-mouse-reply requires --touch-back")
         run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
             args.form_grid, args.form_root, args.board_grid, args.handoff_board, args.touch_back,
-            args.terminal_mouse_reply, args.reference_board, args.edit_rows, args.edit_grid, args.manager_options, args.manager_grid, args.context_options, args.context_grid, args.relocation_board, args.scheduled_enter, args.relocation_grid)
+            args.terminal_mouse_reply, args.reference_board, args.edit_rows, args.edit_grid, args.manager_options, args.manager_grid, args.context_options, args.context_grid, args.relocation_board, args.scheduled_enter, args.relocation_grid, args.static_grid, args.roster_motion, args.layout_options)

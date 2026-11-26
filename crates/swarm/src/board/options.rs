@@ -539,7 +539,7 @@ const ERROR: &str = "\x1b[0;38;5;173m";
 fn indented(text: &str, cols: u16, style: &'static str) -> impl Iterator<Item = Row> {
     word_wrap(text, cols.saturating_sub(2))
         .into_iter()
-        .map(move |line| Row::Text(vec![(style, format!("  {line}"))]))
+        .map(move |line| Row::Text(vec![(PLAIN, "  ".into()), (style, line)]))
 }
 
 fn cycle(current: &mut usize, len: usize, key: Key) {

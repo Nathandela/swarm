@@ -124,7 +124,13 @@ fn elapsed(row: &Value) -> String {
     }
 }
 
-fn session(board: &Board, row: &Value, selected: bool, cols: u16) -> Vec<(&'static str, String)> {
+fn session(
+    board: &Board,
+    row: &Value,
+    selected: bool,
+    cols: u16,
+    y: u16,
+) -> Vec<(&'static str, String)> {
     let group = field(row, "group");
     let style = group_style(group, false);
     let id = field(row, "id");
@@ -197,19 +203,25 @@ fn session(board: &Board, row: &Value, selected: bool, cols: u16) -> Vec<(&'stat
             || original.clone(),
             |(tag, draft)| editor_label(draft, tag, name_width),
         );
-        let remaining = usize::from(name_width).saturating_sub(label.width()) + 1;
-        // A tag replaces the same visible name cell. Erase the preceding typed
-        // glyphs in that style while leaving the untouched whitespace alone.
-        let styled = if edit.is_some_and(|(tag, _)| tag) {
-            (original.width() + 1)
+        let padding = usize::from(name_width).saturating_sub(label.width());
+        let mut leading = 0;
+        let trailing = if edit.is_some_and(|(tag, _)| tag) {
+            // Erase the glyphs replaced by the shorter tag editor.
+            leading = (original.width() + 1)
                 .saturating_sub(label.width())
-                .min(remaining.saturating_sub(1))
-        } else {
+                .min(padding);
             0
+        } else if edit.is_some() || confirm.is_some() {
+            0
+        } else {
+            let end = usize::from(prefix_width + 2 + name_width);
+            terminal_bold_padding(end - padding, end, y)
         };
         spans.extend([
-            (BOLD, label + &" ".repeat(styled)),
-            (PLAIN, " ".repeat(remaining - styled)),
+            (BOLD, label + &" ".repeat(leading)),
+            (PLAIN, " ".repeat(padding - leading - trailing)),
+            (BOLD, " ".repeat(trailing)),
+            (PLAIN, " ".into()),
             (style, state),
         ]);
     } else {
@@ -238,6 +250,27 @@ fn session(board: &Board, row: &Value, selected: bool, cols: u16) -> Vec<(&'stat
         ]);
     }
     spans
+}
+
+fn terminal_bold_padding(start: usize, end: usize, row: u16) -> usize {
+    let spaces = end - start;
+    // The reference uses ECH for long runs of blanks. xterm erases the
+    // foreground attributes there. A short run, or a short overwrite after
+    // advancing to a tab stop, still paints its styled space cells.
+    let erase_cost = format!("\x1b[{spaces}X").len() + format!("\x1b[{end};{row}H").len();
+    if spaces <= erase_cost {
+        return spaces;
+    }
+    let tabs = end / 8 - start / 8;
+    let tail = end % 8;
+    let move_cost = format!("\x1b[{spaces}C")
+        .len()
+        .min(format!("\x1b[{end}G").len());
+    if tabs > 0 && tabs + tail < move_cost {
+        tail
+    } else {
+        0
+    }
 }
 
 fn editor_label(draft: &super::Editor, tag: bool, width: u16) -> String {
@@ -285,7 +318,7 @@ pub(super) fn view(board: &Board, screen: &mut String, cols: u16, height: u16) {
         let selected = focus.is_some() && row.focus() == focus;
         let y = board_first(height) + index as u16;
         match row {
-            Row::Session(row) => spans(screen, y, cols, &session(board, row, selected, cols)),
+            Row::Session(row) => spans(screen, y, cols, &session(board, row, selected, cols, y)),
             Row::Section { id, count, folded } => {
                 let (input, review) = counts(
                     board
