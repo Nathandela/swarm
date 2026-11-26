@@ -56,6 +56,30 @@ impl Ledger {
                 .is_some_and(|prepared| prepared.is_empty())
     }
 
+    pub(crate) fn quota_retirement_turn(&self) -> Option<Value> {
+        let nonce = field(&self.data["turns"][field(&self.data, "current")], "nonce");
+        if self.data["blocked"] != false
+            || !provider_exhausted(&self.data)
+            || !is_hash(nonce)
+            || self.data["calls"]
+                .as_object()?
+                .values()
+                .any(|call| call["closed"] != true)
+            || self.data["prepared"]
+                .as_object()?
+                .keys()
+                .any(|nonce| input_status(&self.data, nonce)["state"] != "completed")
+        {
+            return None;
+        }
+        let mut turn = input_status(&self.data, nonce);
+        if turn["native_turn_id"] != self.data["current"] || turn["state"] != "completed" {
+            return None;
+        }
+        turn["reason"] = json!("error");
+        Some(turn)
+    }
+
     pub(crate) fn binding(&self) -> &Value {
         &self.data["binding"]
     }

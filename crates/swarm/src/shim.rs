@@ -102,7 +102,7 @@ struct State {
     token: String,
     hook_token: String,
     provider: String,
-    semantic: Option<SyncSender<codex_backend::SemanticAction>>,
+    semantic: Option<SyncSender<codex_backend::Action>>,
     agy_broker: Option<agy_input::Broker>,
     claude_broker: Option<Arc<providers::claude_input::Broker>>,
     schedule: Option<worker::Binding>,
@@ -244,6 +244,9 @@ fn serve(dir: &Path) -> io::Result<()> {
     } else {
         Command::new(executable)
     };
+    if scope["resume_request"]["replacement"] == crate::supervisor::manager::QUOTA_REPLACEMENT {
+        crate::supervisor::manager::ambient_codex_account(scope)?;
+    }
     let mut environment = runtime::launch_env(&Value::Null);
     let owner_socket = field(&bootstrap, "owner_socket");
     if !owner_socket.is_empty() && (!config["manager"].is_null() || !config["mailbox"].is_null()) {
@@ -949,6 +952,34 @@ fn observation_is_quiescent(
         && native["blocked"] == false
 }
 
+fn manager_park_authority(state: &State, attached: bool, request: &Value) -> io::Result<()> {
+    if manager_terminal::unresolved(state) {
+        return Err(io::Error::other(manager_terminal::UNRESOLVED));
+    }
+    if attached {
+        return Err(io::Error::other("manager is attached"));
+    }
+    let meta = runtime::read_json(&state.dir.join("session.json"))?;
+    let intent = crate::discord::connector_intent(&meta["manager"])?;
+    if intent["manager"]["retirement"]["request"] != *request
+        || !intent["manager"]["input"].is_null()
+        || intent["manager"]["session"] != request["binding"]["session"]
+    {
+        return Err(io::Error::other(
+            "manager park lacks persisted connector custody",
+        ));
+    }
+    Ok(())
+}
+
+fn claim_manager_park(state: &State, request: &Value) -> io::Result<()> {
+    runtime::write_json(
+        &state.dir.join("manager-retire.json"),
+        &json!({"token":state.token,"request":request}),
+    )?;
+    terminate(state)
+}
+
 fn terminate(state: &State) -> io::Result<()> {
     let _native = state
         .agy_broker
@@ -1182,25 +1213,30 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         }
         "manager_park" if state.manager => {
             let result = (|| {
-                let owner = state.control.lock().unwrap();
-                if manager_terminal::unresolved(state) {
-                    return Err(io::Error::other(manager_terminal::UNRESOLVED));
-                }
-                if *owner != 0 {
-                    return Err(io::Error::other("manager is attached"));
-                }
                 let request = &request["retire"];
-                let binding = &request["binding"];
-                let meta = runtime::read_json(&state.dir.join("session.json"))?;
-                let intent = crate::discord::connector_intent(&meta["manager"])?;
-                if intent["manager"]["retirement"]["request"] != *request
-                    || !intent["manager"]["input"].is_null()
-                    || intent["manager"]["session"] != binding["session"]
-                {
-                    return Err(io::Error::other(
-                        "manager park lacks persisted connector custody",
-                    ));
+                if request["replacement"] == crate::supervisor::manager::QUOTA_REPLACEMENT {
+                    if state.provider != "codex" {
+                        return Err(io::Error::other("quota retirement requires Codex"));
+                    }
+                    let sender = state
+                        .semantic
+                        .as_ref()
+                        .ok_or_else(|| io::Error::other("Codex observer is unavailable"))?;
+                    let (answer, reply) = mpsc::sync_channel(1);
+                    sender
+                        .try_send(codex_backend::Action::ParkQuota {
+                            request: request.clone(),
+                            not_after: Instant::now() + Duration::from_secs(1),
+                            answer,
+                        })
+                        .map_err(io::Error::other)?;
+                    return reply
+                        .recv_timeout(Duration::from_secs(2))
+                        .map_err(io::Error::other)?;
                 }
+                let owner = state.control.lock().unwrap();
+                manager_park_authority(state, *owner != 0, request)?;
+                let binding = &request["binding"];
                 let (native, quiescent) = if state.provider == "claude" {
                     let broker = state
                         .claude_broker
@@ -1229,14 +1265,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     && native["current"] == turn["native_turn_id"]
                     && turn == request["expected_turn"]
                 {
-                    runtime::write_json(
-                        &state.dir.join("manager-retire.json"),
-                        &json!({
-                            "token":state.token,"request":request
-                        }),
-                    )?;
-                    terminate(state)?;
-                    Ok(())
+                    claim_manager_park(state, request)
                 } else {
                     Err(io::Error::other(
                         "manager native turn is no longer quiescent",
@@ -1492,6 +1521,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 }
                 // shortcut: terminal edits make draft state uncertain until the native TUI exposes a verified empty composer.
                 if *_authority != 0
+                    || state.manager && state.dir.join("manager-retire.json").try_exists()?
                     || state.context_guard_busy.load(Ordering::Acquire)
                     || state.terminal_input.load(Ordering::Acquire)
                 {
@@ -1503,7 +1533,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     .ok_or_else(|| io::Error::other("Codex app-server is unavailable"))?;
                 let (answer, response) = mpsc::sync_channel(1);
                 sender
-                    .try_send(codex_backend::SemanticAction {
+                    .try_send(codex_backend::Action::Send(codex_backend::SemanticAction {
                         operation: operation.into(),
                         session: session.into(),
                         text: text.into(),
@@ -1517,7 +1547,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                             } else {
                                 Duration::from_secs(9)
                             },
-                    })
+                    }))
                     .map_err(|_| io::Error::other("Codex native input lane is unavailable"))?;
                 response
                     .recv_timeout(Duration::from_secs(
@@ -2203,6 +2233,9 @@ fn attach(mut stream: UnixStream, state: &State, agy_permission: bool) -> io::Re
     let mut filter = terminal_reply::Filter::default();
     {
         let mut owner = state.control.lock().unwrap();
+        if state.manager && state.dir.join("manager-retire.json").try_exists()? {
+            return Err(io::Error::other("manager retirement owns the terminal"));
+        }
         let mut screen = state.screen.lock().unwrap();
         snap = screen::snapshot(screen.parser.screen(), screen.mouse.snapshot())?;
         if let Some(previous) = screen.subscriber.replace(Subscriber {

@@ -39,6 +39,17 @@ Hermes v0.22.5 loopback probe of the pinned Rust lane. Session, profile,
 operation and admission identifiers are redacted. In particular the epoch is
 a positive number and the queued execution generation is explicitly null.
 
+## Codex quota recovery
+
+Apply `codex-manager-quota.patch` after `codex-manager.patch` to the same fake
+provider source with `git apply --unidiff-zero` and rebuild the fake binary.
+Use the Rust invocation above with `SWARM_MANAGER_QUOTA_FIXTURE=1` and the
+`pinned_go_owner_protocol_and_scoped_launch` test filter. The fake reports an
+exact terminal quota error and a pending native request. The test checks
+that the request holds retirement, the old writer exits before a same-account
+successor resumes the same thread, and the failed input is retained without
+replay.
+
 ## Ordinary worker mailbox
 
 The text fixture launches a real Rust worker through the owner protocol. The

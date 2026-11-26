@@ -139,6 +139,15 @@ impl Prepared {
             super::manager::account(&home)?
         });
         let predecessor = &scope["resume_request"]["binding"];
+        if scope["resume_request"]["replacement"] == super::manager::QUOTA_REPLACEMENT
+            && self.provider.env.iter().any(|(key, value)| {
+                matches!(key.as_str(), "OPENAI_API_KEY" | "CODEX_HOME") && !value.is_empty()
+            })
+        {
+            return Err(io::Error::other(
+                "quota recovery requires the ambient Codex login",
+            ));
+        }
         if !predecessor.is_null() {
             let native = field(predecessor, "native_session_id");
             if predecessor["login_epoch"] != scope["account"]

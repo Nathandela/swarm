@@ -997,6 +997,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                             | "message-origin"
                             | "manager-retire"
                             | "manager-retire-resume-v1"
+                            | manager::QUOTA_RETIRE_CAP
                             | manager::NATIVE_CLI_CAP
                             | crate::discord::enrolled_worker::CAP
                     )
@@ -1310,6 +1311,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 }),
             "manager_retire" | "manager_retire_status" if caps.contains(&"manager-retire") =>
                 state.session(&request).and_then(|session| {
+                    if request["manager_retire_request"]["replacement"] == manager::QUOTA_REPLACEMENT
+                        && !caps.contains(&manager::QUOTA_RETIRE_CAP)
+                    {
+                        return Err(io::Error::other("quota retirement capability was not negotiated"));
+                    }
                     let body = match session.manager_retire(&request) {
                         Err(error) if error.to_string() == manager_terminal::UNRESOLVED =>
                             json!({"op":"error","error_code":manager_terminal::CODE,"error":"unsent terminal draft prevents dispatcher replacement"}),

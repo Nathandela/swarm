@@ -1,0 +1,59 @@
+--- a/cmd/swarm-fake-codex/main.go
++++ b/cmd/swarm-fake-codex/main.go
+@@ -162,3 +162,12 @@
+-				s.broadcast("item/started", map[string]any{"threadId": fakeThreadID, "turnId": turn,
+-					"item": map[string]any{"id": "fixture-native-call", "type": "mcpToolCall", "server": "swarm_voice", "tool": "publish",
+-						"arguments": map[string]any{"output_id": "final", "sequence": 1, "text": "go-fixture text", "final": true}}})
++				if _, err := os.Stat(".fixture-quota"); err == nil {
++					count, _ := os.OpenFile(".fixture-quota-starts", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
++					if count != nil {
++						_, _ = count.WriteString("start\n")
++						_ = count.Close()
++					}
++					go s.fixtureQuota(turn)
++				} else {
++					s.broadcast("item/started", map[string]any{"threadId": fakeThreadID, "turnId": turn,
++						"item": map[string]any{"id": "fixture-native-call", "type": "mcpToolCall", "server": "swarm_voice", "tool": "publish",
++							"arguments": map[string]any{"output_id": "final", "sequence": 1, "text": "go-fixture text", "final": true}}})
++				}
+@@ -181,0 +191,6 @@
++		if _, err := os.Stat(".fixture-quota-starts"); err == nil {
++			out["result"] = map[string]any{"thread": map[string]any{
++				"id": fakeThreadID, "status": map[string]any{"type": "idle"},
++			}}
++			return out
++		}
+@@ -197,0 +213,25 @@
++}
++
++func (s *fakeAppServer) fixtureQuota(turn string) {
++	wait := func(path string) bool {
++		for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
++			if _, err := os.Stat(path); err == nil {
++				return true
++			}
++			time.Sleep(20 * time.Millisecond)
++		}
++		return false
++	}
++	if !wait(".fixture-quota-fail") {
++		return
++	}
++	s.broadcastFrame(map[string]any{"jsonrpc": "2.0", "method": "item/tool/requestUserInput", "id": 700,
++		"params": map[string]any{"threadId": fakeThreadID, "turnId": turn}})
++	s.broadcast("thread/status/changed", map[string]any{"threadId": fakeThreadID,
++		"status": map[string]any{"type": "systemError"}})
++	s.broadcast("turn/completed", map[string]any{"threadId": fakeThreadID,
++		"turn": map[string]any{"id": turn, "rootTurnId": turn, "status": "failed",
++			"error": map[string]any{"codexErrorInfo": "usageLimitExceeded"}}})
++	if wait(".fixture-quota-clear") {
++		s.broadcast("serverRequest/resolved", map[string]any{"threadId": fakeThreadID, "requestId": 700})
++	}
+@@ -220 +260 @@
+-	frame, err := json.Marshal(map[string]any{
++	s.broadcastFrame(map[string]any{
+@@ -222,0 +263,4 @@
++}
++
++func (s *fakeAppServer) broadcastFrame(message map[string]any) {
++	frame, err := json.Marshal(message)

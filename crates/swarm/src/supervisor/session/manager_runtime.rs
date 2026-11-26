@@ -87,6 +87,7 @@ impl Session {
             codex_proof::Ledger::snapshot(&self.dir, binding)?
         };
         evidence["owned_ingress_ready"] = observed["manager_ingress_ready"].clone();
+        evidence["observed_quota_turn"] = observed["manager_quota_turn"].clone();
         Ok(evidence)
     }
 
@@ -115,20 +116,24 @@ impl Session {
                         "unknown"
                     });
                 }
+                let exhausted = codex_proof::provider_exhausted(&evidence);
                 let ready = evidence["owned_ingress_ready"] == true
                     && evidence["system_error"] != true
+                    && !exhausted
                     && evidence["thread_state"] == "idle"
                     && matches!(field(&status, "state"), "idle" | "completed");
-                let exhausted = codex_proof::provider_exhausted(&evidence)
-                    && (ready || evidence["system_error"] == true);
                 if exhausted {
                     status["state"] = json!("completed");
                     status["reason"] = json!("error");
                     status["native_turn_id"] = evidence["current"].clone();
                 }
-                let retirement_ready = self.agent != "claude"
-                    || field(&status, "state") == "completed"
-                        && self.claude_park_resume_record(binding).is_ok();
+                let retirement_ready = if exhausted {
+                    evidence["observed_quota_turn"] == status
+                } else {
+                    self.agent != "claude"
+                        || field(&status, "state") == "completed"
+                            && self.claude_park_resume_record(binding).is_ok()
+                };
                 let mut view = json!({"op":"manager_runtime","session_id":session,"manager_runtime":{
                     "binding":binding,"ready_for_input":ready,"turn":status,"retirement_ready":retirement_ready,
                     "native_cli":self.manager["launch"]["manager"]["native_cli"] == true,

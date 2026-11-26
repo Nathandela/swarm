@@ -357,6 +357,18 @@ impl Observation {
             && self.scheduled_turn.is_none()
     }
 
+    fn quota_retirement_turn(&self) -> Option<Value> {
+        if !self.joined
+            || self.ambiguous
+            || self.requests_unverified
+            || self.turn.is_some()
+            || !self.requests.is_empty()
+        {
+            return None;
+        }
+        self.proof.as_ref()?.quota_retirement_turn()
+    }
+
     fn can_enter_joined_thread(&self, managed: bool) -> bool {
         self.joined
             || managed
@@ -477,6 +489,15 @@ impl Observation {
     }
 }
 
+pub(super) enum Action {
+    Send(SemanticAction),
+    ParkQuota {
+        request: Value,
+        not_after: Instant,
+        answer: SyncSender<io::Result<()>>,
+    },
+}
+
 pub(super) struct SemanticAction {
     pub operation: String,
     pub session: String,
@@ -527,6 +548,7 @@ fn persist_observation(observation: &mut Observation, target: &SemanticTarget<'_
         "rollout":observation.rollout,
         "backend_available":!observation.ambiguous, "requests_available":observation.joined && !observation.ambiguous && !observation.requests_unverified,
         "schedule_ready":target.schedule.is_some() && observation.schedule_ready(),
+        "manager_quota_turn":observation.quota_retirement_turn(),
         "manager_ingress_ready": observation.can_enter_joined_thread(true) && observation.idle
             && !observation.ambiguous && !observation.requests_unverified && observation.requests.is_empty(),
     });
@@ -626,6 +648,12 @@ fn backfill_initial_history(observation: &Observation, target: &SemanticTarget<'
 
 fn observe_frame(observation: &mut Observation, message: &Value, target: &SemanticTarget<'_>) {
     capture_history(observation, message, target);
+    // A server request without thread coordinates cannot prove this manager is quiescent.
+    let unscoped_request = !target.manager.is_null()
+        && !field(message, "method").is_empty()
+        && !message["id"].is_null()
+        && field(&message["params"], "threadId").is_empty();
+    observation.requests_unverified |= unscoped_request;
     let changed = observation.apply(message, target.cwd);
     let updated = observation.guard.as_mut().is_some_and(|guard| {
         let before = guard.view();
@@ -635,7 +663,7 @@ fn observe_frame(observation: &mut Observation, message: &Value, target: &Semant
         }
         before != guard.view()
     });
-    if changed || updated {
+    if changed || updated || unscoped_request {
         persist_observation(observation, target);
     }
 }
@@ -904,7 +932,7 @@ impl ScheduledTurn {
 pub(super) fn observe(
     mut channel: Channel,
     state: std::sync::Arc<super::State>,
-    actions: Receiver<SemanticAction>,
+    actions: Receiver<Action>,
     manager: Value,
     guard_version: Option<String>,
 ) {
@@ -985,15 +1013,54 @@ pub(super) fn observe(
             next_history = Instant::now() + Duration::from_secs(1);
         }
         if quiet && let Ok(action) = actions.try_recv() {
-            serial += 1;
-            let result = submit(
-                &mut channel.connection,
-                &mut observation,
-                serial,
-                &action,
-                &target,
-            );
-            let _ = action.answer.send(result);
+            match action {
+                Action::Send(action) => {
+                    serial += 1;
+                    let result = submit(
+                        &mut channel.connection,
+                        &mut observation,
+                        serial,
+                        &action,
+                        &target,
+                    );
+                    let _ = action.answer.send(result);
+                }
+                Action::ParkQuota {
+                    request,
+                    not_after,
+                    answer,
+                } => {
+                    let result = (|| {
+                        let control = state
+                            .control
+                            .try_lock()
+                            .map_err(|_| io::Error::other("manager terminal is busy"))?;
+                        let _effect = crate::discord::lock_manager_mail_effect(&manager)?;
+                        super::manager_park_authority(&state, *control != 0, &request)?;
+                        if Instant::now() >= not_after
+                            || state.terminal_input.load(super::Ordering::Acquire)
+                            || state.context_guard_busy.load(super::Ordering::Acquire)
+                            || observation
+                                .proof
+                                .as_ref()
+                                .is_none_or(|proof| proof.binding() != &request["binding"])
+                            || observation.quota_retirement_turn().as_ref()
+                                != Some(&request["expected_turn"])
+                        {
+                            return Err(io::Error::other(
+                                "Codex quota retirement lost native custody",
+                            ));
+                        }
+                        crate::supervisor::manager::ambient_codex_account(&manager)?;
+                        super::claim_manager_park(&state, &request)
+                    })();
+                    let claimed = result.is_ok();
+                    let _ = answer.send(result);
+                    if claimed {
+                        break;
+                    }
+                }
+            }
         }
         if quiet && let Some(mut guard) = observation.guard.take() {
             let before = guard.view();
@@ -1058,6 +1125,7 @@ pub(super) fn observe(
                         next_join = None;
                     }
                 } else {
+                    let quota_before = observation.quota_retirement_turn();
                     observe_frame(&mut observation, &message, &target);
                     if !manager.is_null() && !observation.thread.is_empty() {
                         if manager["resume_request"]["binding"]["native_session_id"]
@@ -1088,6 +1156,9 @@ pub(super) fn observe(
                             && proof.observe(&message).is_err()
                         {
                             break;
+                        }
+                        if observation.quota_retirement_turn() != quota_before {
+                            persist_observation(&mut observation, &target);
                         }
                     }
                 }

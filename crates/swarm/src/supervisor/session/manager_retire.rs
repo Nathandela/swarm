@@ -55,6 +55,7 @@ impl Session {
         let request = &input["manager_retire_request"];
         let id = field(input, "operation_id");
         let op = field(input, "op");
+        let quota = request["replacement"] == crate::supervisor::manager::QUOTA_REPLACEMENT;
         if self.manager.is_null()
             || !matches!(self.agent.as_str(), "codex" | "claude")
             || input["body_version"] != 1
@@ -63,7 +64,11 @@ impl Session {
                 != codex_receipt::provider_instance(&self.agent, &self.token)
             || request["binding"]["conversation_id"]
                 != self.manager["launch"]["manager"]["conversation_id"]
-            || !request["replacement"].is_null()
+            || !request["replacement"].is_null() && !quota
+            || quota
+                && (self.agent != "codex"
+                    || request["expected_turn"]["reason"] != "error"
+                    || request["expected_turn"]["state"] != "completed")
             || !matches!(
                 field(&request["expected_turn"], "state"),
                 "idle" | "completed"
@@ -78,7 +83,7 @@ impl Session {
             json!({"op":op,"operation_id":id,"session_id":session,
             "manager_retire":{"operation_id":id,"state":state}})
         };
-        let _effect = (op != "manager_retire_status")
+        let _effect = (op != "manager_retire_status" && !quota)
             .then(|| crate::discord::lock_manager_mail_effect(&self.manager))
             .transpose()?;
         let prior = self.manager_retirement_record()?;
@@ -115,10 +120,14 @@ impl Session {
             .manager_operation(&json!({"op":"manager_runtime","session_id":session,
             "body_version":1,"manager_runtime_request":{"session_instance":codex_receipt::provider_instance(&self.agent,&self.token)}}))?;
         let status = &status["manager_runtime"];
-        if status["ready_for_input"] != true
-            || status["binding"] != request["binding"]
+        if status["binding"] != request["binding"]
             || status["turn"] != request["expected_turn"]
-            || self.agent == "claude" && status["retirement_ready"] != true
+            || if quota {
+                status["provider_exhausted"] != true || status["retirement_ready"] != true
+            } else {
+                status["ready_for_input"] != true
+                    || self.agent == "claude" && status["retirement_ready"] != true
+            }
         {
             return Err(io::Error::other("manager or turn is no longer quiescent"));
         }
