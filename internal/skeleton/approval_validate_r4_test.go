@@ -144,7 +144,13 @@ func TestApprove_AStaleOrMismatchedApproveIsRefusedWithACodeAndAppliesNothing(t 
 		{"a foreign machine", "some-other-endpoint", nil, protocol.CodeInvalidField},
 		{"an unknown interaction", "", func(r *protocol.ApproveReq) { r.InteractionID = "01ZZZZZZZZZZZZZZZZZZZZZZZZ" }, protocol.CodeStaleApproval},
 		{"a different agent instance", "", func(r *protocol.ApproveReq) { r.AgentInstance.ShimStartTime++ }, protocol.CodeStaleApproval},
-		{"a rewritten content hash", "", func(r *protocol.ApproveReq) { r.ContentHash = "00" + r.ContentHash[2:] }, protocol.CodeStaleApproval},
+		{"a rewritten content hash", "", func(r *protocol.ApproveReq) {
+			first := "0"
+			if r.ContentHash[0] == '0' {
+				first = "1"
+			}
+			r.ContentHash = first + r.ContentHash[1:]
+		}, protocol.CodeStaleApproval},
 		{"a pushed-out expiry", "", func(r *protocol.ApproveReq) { r.ExpiresAt = &later }, protocol.CodeStaleApproval},
 		{"a decision the card never offered", "", func(r *protocol.ApproveReq) { r.Decision = "acceptEverythingForever" }, protocol.CodeInvalidField},
 		{"no decision at all", "", func(r *protocol.ApproveReq) { r.Decision = "" }, protocol.CodeInvalidField},
