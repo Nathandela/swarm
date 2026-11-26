@@ -1,4 +1,5 @@
-//! Read-only Gateway custody of one settled thread from the original Go connector.
+//! Gateway custody of one settled original Go thread.
+mod capture;
 use super::{
     config::{Config, LockDescription, Place, invalid, open_owner_file},
     gateway, guild,
@@ -8,7 +9,7 @@ use super::{
     rest::Discord,
 };
 use crate::{checkout::state::receipts::open_bolt, supervisor::runtime};
-use bbolt_rs::DbApi;
+use bbolt_rs::{DbApi, TxApi};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -19,9 +20,9 @@ use std::{
 
 const RECHECK_INTERVAL: Duration = Duration::from_secs(5);
 
-pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
+pub(super) fn run(place: &Place, cfg: &Config, capture_once: bool) -> io::Result<()> {
     let api = Discord::connect(cfg)?;
-    observe(place, cfg, &api, RECHECK_INTERVAL, |cfg| {
+    observe(place, cfg, &api, capture_once, RECHECK_INTERVAL, |cfg| {
         let (mut socket, mut cursor) = gateway::open_observer(cfg)?;
         Ok(move || cursor.event(&mut socket))
     })
@@ -31,6 +32,7 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
     place: &Place,
     cfg: &Config,
     api: &Discord,
+    capture_once: bool,
     recheck_interval: Duration,
     open: impl FnOnce(&Config) -> io::Result<ReadEvent>,
 ) -> io::Result<()> {
@@ -60,6 +62,7 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
     };
     let startup_digest = config_digest(&config_pin)?;
     let verify_config = || {
+        legacy_state::verify_controls_place(place, cfg)?;
         Ok::<_, io::Error>(
             legacy_state::unchanged(&config_pin, &config_file)?
                 && config_digest(&open_owner_file(&config_file)?)? == startup_digest,
@@ -70,24 +73,16 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
     }
     let source = place.dir.join("discord.db");
     let (pin, db) = open_bolt(&source, 64 << 20)?;
-    let (route, guard) = {
-        let tx = db.begin().map_err(io::Error::other)?;
-        let mut inventory = legacy_state::inventory(cfg);
-        legacy_state::scan(
-            &tx,
-            &mut inventory,
-            Instant::now() + Duration::from_secs(10),
-            true,
-        )?;
-        if inventory.unresolved != 0 || !inventory.issues.is_empty() {
-            return Err(invalid(
-                "observer requires a settled original connector ledger",
-            ));
-        }
-        legacy_discussions::verify(&tx, cfg, cfg.text("daemon_socket"))?;
-        legacy_discussions::observer_scope(&tx)?
+    let (route, guard) = read_scope(&db.begin().map_err(io::Error::other)?, cfg)?;
+    if capture_once {
+        capture::binding(&db.begin().map_err(io::Error::other)?, cfg, &route, &guard)?;
+    }
+    let connector_state = if capture_once {
+        "retained_teammate_capture_once"
+    } else {
+        "retained_teammate_read_only"
     };
-    let status = StatusSocket::start(place, cfg, Some("retained_teammate_read_only"))?;
+    let status = StatusSocket::start(place, cfg, Some(connector_state))?;
     api.verify_app(cfg)?;
     let mut event = open(cfg)?;
     verify_boundary(api, cfg, &route, &guard)?;
@@ -106,6 +101,34 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         let frame = event()?;
         verify_pins()?;
         if let Some(frame) = frame {
+            let data = &frame["d"];
+            if capture_once
+                && frame["t"] == "MESSAGE_CREATE"
+                && data["guild_id"] == route.guild_id
+                && data["channel_id"] == route.channel_id
+                && data["id"] != guard.route.message_id
+            {
+                status.online(false);
+                let captured = capture::read_source(api, cfg, &route, &guard, data)?;
+                if status.stopping() {
+                    return Ok(());
+                }
+                verify_pins()?;
+                let source_identity = pin.metadata()?;
+                drop(db);
+                drop(pin);
+                capture::commit(
+                    &source,
+                    &source_identity,
+                    cfg,
+                    &route,
+                    &guard,
+                    captured,
+                    || Ok(!status.stopping() && verify_config()?),
+                )?;
+                println!("Captured one thread message in the original Go ingress queue.");
+                return Ok(());
+            }
             verify_event(cfg, &route, &guard, &frame)?;
         }
         if Instant::now() >= next_authority_check && !status.stopping() {
@@ -117,6 +140,23 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         }
     }
     Ok(())
+}
+
+fn read_scope<'tx>(tx: &impl TxApi<'tx>, cfg: &Config) -> io::Result<(Route, Guard)> {
+    let mut inventory = legacy_state::inventory(cfg);
+    legacy_state::scan(
+        tx,
+        &mut inventory,
+        Instant::now() + Duration::from_secs(10),
+        true,
+    )?;
+    if inventory.unresolved != 0 || !inventory.issues.is_empty() {
+        return Err(invalid(
+            "observer requires a settled original connector ledger",
+        ));
+    }
+    legacy_discussions::verify(tx, cfg, cfg.text("daemon_socket"))?;
+    legacy_discussions::observer_scope(tx)
 }
 
 fn verify_read_authority(api: &Discord, cfg: &Config, route: &Route) -> io::Result<()> {
@@ -150,6 +190,13 @@ fn verify_read_authority(api: &Discord, cfg: &Config, route: &Route) -> io::Resu
 fn verify_boundary(api: &Discord, cfg: &Config, route: &Route, guard: &Guard) -> io::Result<()> {
     verify_read_authority(api, cfg, route)?;
     let unavailable = || invalid("original thread or settled read boundary changed");
+    let messages = human_boundary_rows(api, cfg, route)?;
+    let message = messages.first().ok_or_else(unavailable)?;
+    verify_revision(route, guard, message)
+}
+
+fn human_boundary_rows(api: &Discord, cfg: &Config, route: &Route) -> io::Result<Vec<Value>> {
+    let unavailable = || invalid("original thread or settled read boundary changed");
     let messages = api.request(
         &format!("/channels/{}/messages?limit=20", route.channel_id),
         None,
@@ -158,16 +205,22 @@ fn verify_boundary(api: &Discord, cfg: &Config, route: &Route, guard: &Guard) ->
         .as_array()
         .filter(|rows| rows.len() <= 20)
         .ok_or_else(unavailable)?;
-    let message = rows
+    Ok(rows
         .iter()
-        .find(|message| {
+        .filter(|message| {
             message["author"]["id"] != cfg.text("application_id")
                 || message["author"]["bot"] != true
                 || message["channel_id"] != route.channel_id
                 || !message["guild_id"].is_null() && message["guild_id"] != route.guild_id
                 || !message["webhook_id"].is_null()
         })
-        .ok_or_else(unavailable)?;
+        .take(2)
+        .cloned()
+        .collect())
+}
+
+fn verify_revision(route: &Route, guard: &Guard, message: &Value) -> io::Result<()> {
+    let unavailable = || invalid("original thread or settled read boundary changed");
     // shortcut: plain latest human message only, add revision formats with pinned Go witnesses.
     let content = message["content"]
         .as_str()
@@ -267,6 +320,7 @@ mod tests {
     fn rest_fixture(
         rest: TcpListener,
         revoked: Option<std::path::PathBuf>,
+        capture_fault: Option<&'static str>,
     ) -> thread::JoinHandle<()> {
         thread::spawn(move || {
             let mut responses = vec![
@@ -300,11 +354,39 @@ mod tests {
                     json!({"permissions":"0"}),
                 ));
             }
+            if let Some(fault) = capture_fault {
+                responses.extend([
+                    responses[1].clone(),
+                    responses[2].clone(),
+                    responses[3].clone(),
+                ]);
+                let mut latest = responses[4].1.as_array().unwrap().clone();
+                latest.insert(
+                    0,
+                    json!({"id":"503","channel_id":"401","author":{"id":"200","username":"fixture"},
+                    "content":"one plain follow-up","type":0,"mention_everyone":false,"mentions":[],
+                    "mention_roles":[],"attachments":[]}),
+                );
+                if fault == "wrong source" {
+                    latest[0]["author"]["id"] = json!("201");
+                }
+                responses.push(("/channels/401/messages?limit=20", json!(latest)));
+                if fault != "wrong source" {
+                    responses.extend([
+                        responses[1].clone(),
+                        responses[2].clone(),
+                        responses[3].clone(),
+                    ]);
+                    if fault == "withdrawn" {
+                        responses.last_mut().unwrap().1["permissions"] = json!("0");
+                    }
+                }
+            }
             for (index, (path, response)) in responses.into_iter().enumerate() {
-                if index == 7 {
-                    let status =
-                        super::super::local::call(revoked.as_ref().unwrap(), "status", "", None)
-                            .unwrap();
+                if index == 7
+                    && let Some(dir) = &revoked
+                {
+                    let status = super::super::local::call(dir, "status", "", None).unwrap();
                     assert_eq!(status["connected"], false);
                 }
                 let (mut stream, _) = rest.accept().unwrap();
@@ -371,12 +453,12 @@ mod tests {
             panic!("blocked observer opened a Gateway");
         }
         let held = LockDescription(runtime::lock(&dir.join("bridge.lock")).unwrap());
-        assert!(observe(&place, &cfg, &api, RECHECK_INTERVAL, unopened).is_err());
+        assert!(observe(&place, &cfg, &api, false, RECHECK_INTERVAL, unopened).is_err());
         drop(held);
         let writer = LockDescription(runtime::lock(&dir.join("discord.db")).unwrap());
-        assert!(observe(&place, &cfg, &api, RECHECK_INTERVAL, unopened).is_err());
+        assert!(observe(&place, &cfg, &api, false, RECHECK_INTERVAL, unopened).is_err());
         drop(writer);
-        let rest_worker = rest_fixture(rest, None);
+        let rest_worker = rest_fixture(rest, None, None);
         let gateway = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = gateway.local_addr().unwrap();
         let gateway_worker = thread::spawn(move || {
@@ -415,7 +497,7 @@ mod tests {
                 .unwrap();
             }
         });
-        let err = observe(&place, &cfg, &api, RECHECK_INTERVAL, |cfg| {
+        let err = observe(&place, &cfg, &api, false, RECHECK_INTERVAL, |cfg| {
             let stream = TcpStream::connect(address)?;
             stream.set_read_timeout(Some(Duration::from_secs(3)))?;
             let (mut socket, _) =
@@ -455,7 +537,7 @@ mod tests {
             let rewrite = fault == "in-place rewrite";
             let rest = TcpListener::bind("127.0.0.1:0").unwrap();
             let api = Discord::loopback_fixture(&cfg, rest.local_addr().unwrap().port()).unwrap();
-            let rest_worker = rest_fixture(rest, quiet_role_loss.then(|| dir.clone()));
+            let rest_worker = rest_fixture(rest, quiet_role_loss.then(|| dir.clone()), None);
             let config_file = dir.join("config.json");
             use std::os::unix::fs::MetadataExt;
             let original_inode = fs::metadata(&config_file).unwrap().ino();
@@ -465,7 +547,7 @@ mod tests {
             assert_ne!(disabled.as_bytes(), &protected[1]);
             assert_eq!(disabled.len(), protected[1].len());
             let error =
-                observe(&place, &cfg, &api, Duration::ZERO, |_| {
+                observe(&place, &cfg, &api, false, Duration::ZERO, |_| {
                     let mut checked = false;
                     let (dir, config_file, disabled) = (&dir, &config_file, &disabled);
                     Ok(move || {
@@ -507,11 +589,53 @@ mod tests {
             fs::write(&config_file, &protected[1]).unwrap();
         }
         assert_eq!(go(&["traffic-read", p, "sent"]).trim(), "sent");
-        assert_eq!(go(&["ingress", p, "existing", "501", "replay"]).trim(), "0");
-        assert_eq!(go(&["ingress", p, "existing", "503", "hold"]).trim(), "1");
-        let pending = read_original();
-        assert!(observe(&place, &cfg, &api, RECHECK_INTERVAL, unopened).is_err());
-        assert_eq!(read_original(), pending);
+        let original: Value = serde_json::from_str(&go(&["ingress-state", p, "existing"])).unwrap();
+        for fault in ["wrong source", "withdrawn", "valid"] {
+            let rest = TcpListener::bind("127.0.0.1:0").unwrap();
+            let api = Discord::loopback_fixture(&cfg, rest.local_addr().unwrap().port()).unwrap();
+            let server = rest_fixture(rest, None, Some(fault));
+            let result = observe(&place, &cfg, &api, true, RECHECK_INTERVAL, |_| {
+                assert!(runtime::lock(&dir.join("bridge.lock")).is_err());
+                Ok(|| {
+                    Ok(Some(json!({"t":"MESSAGE_CREATE","d":{
+                        "id":"503","guild_id":"300","channel_id":"401","author":{"id":"200"}
+                    }})))
+                })
+            });
+            assert_eq!(result.is_ok(), fault == "valid", "{result:?}");
+            server.join().unwrap();
+            assert!(!dir.join("bridge.sock").exists());
+            go(&["bridge-lease", p]);
+            if fault != "valid" {
+                assert_eq!(read_original(), protected);
+            }
+        }
+        let reopened: Value = serde_json::from_str(&go(&["ingress-state", p, "existing"])).unwrap();
+        assert_eq!(reopened["checkpoint"], original["checkpoint"]);
+        assert_eq!(
+            reopened["binding"]["Boundary"],
+            original["binding"]["Boundary"]
+        );
+        let pending = reopened["pending"].as_array().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending[0]["Route"],
+            json!({"guild_id":"300","channel_id":"401","message_id":"503"})
+        );
+        assert_eq!(pending[0]["Author"], json!({"id":"200","name":"fixture"}));
+        assert_eq!(pending[0]["State"], "prepared");
+        assert_eq!(pending[0]["Admission"], Value::Null);
+        assert_eq!(
+            pending[0]["Sequence"],
+            reopened["binding"]["LastIngressSequence"]
+        );
+        let preserved = read_original();
+        assert_eq!(&preserved[1..], &protected[1..]);
+        assert!(observe(&place, &cfg, &api, true, RECHECK_INTERVAL, unopened).is_err());
+        assert_eq!(read_original(), preserved);
+        assert_eq!(go(&["ingress", p, "existing", "501", "replay"]).trim(), "1");
+        assert_eq!(go(&["ingress", p, "existing", "503", "replay"]).trim(), "1");
+        assert_eq!(go(&["traffic-read", p, "sent"]).trim(), "sent");
         fs::remove_dir_all(root).unwrap();
     }
 }

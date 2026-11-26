@@ -187,7 +187,7 @@ func main() {
 		return
 	}
 	open := discord.OpenStore
-	if action == "route" || action == "read" || action == "traffic-read" || action == "audience-read" || action == "publication-read" || action == "publication-phases" || action == "publication-payload" || action == "vm-verify-queued-file" {
+	if action == "route" || action == "read" || action == "traffic-read" || action == "audience-read" || action == "ingress-state" || action == "publication-read" || action == "publication-phases" || action == "publication-payload" || action == "vm-verify-queued-file" {
 		open = discord.FixtureOpenRead
 	}
 	store, err := open(dir)
@@ -227,6 +227,12 @@ func main() {
 		cfg, err := discord.LoadConfig(dir)
 		check(err)
 		check(store.FixturePersonalGap(cfg.InstallationID))
+	case "ingress-state":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		state, err := store.FixtureIngressState(cfg.InstallationID, os.Args[3])
+		check(err)
+		check(json.NewEncoder(os.Stdout).Encode(state))
 	case "ingress":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)

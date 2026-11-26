@@ -427,6 +427,7 @@ impl<'a> Request<'a> {
                     "unattended",
                     "retained-personal",
                     "observe-retained-teammate",
+                    "capture-retained-teammate",
                 ];
                 &[]
             }
@@ -690,13 +691,14 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
         return Ok(true);
     }
     match req.command {
-        "run" if req.on("observe-retained-teammate") => {
-            if req.on("unattended") || req.on("retained-personal") {
-                return Err(invalid(
-                    "select only the foreground retained teammate observer",
-                ));
+        "run" if req.on("observe-retained-teammate") || req.on("capture-retained-teammate") => {
+            if req.on("unattended")
+                || req.on("retained-personal")
+                || req.on("observe-retained-teammate") && req.on("capture-retained-teammate")
+            {
+                return Err(invalid("select one foreground retained teammate mode"));
             }
-            legacy_team::run(&place, &cfg)?;
+            legacy_team::run(&place, &cfg, req.on("capture-retained-teammate"))?;
         }
         "run" if legacy_ingress::activation::selected(&place)? => {
             return legacy_ingress::service::run(&place);

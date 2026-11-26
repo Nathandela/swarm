@@ -34,6 +34,22 @@ func (s *Store) FixtureBinding(install, id string) (TeammateDiscussion, error) {
 	return row.TeammateDiscussion, err
 }
 
+func (s *Store) FixtureIngressState(installation, discussion string) (map[string]any, error) {
+	pending, err := s.teammatePending(installation)
+	if err != nil {
+		return nil, err
+	}
+	checkpoint, err := s.teammateCheckpoint(installation)
+	if err != nil {
+		return nil, err
+	}
+	binding, err := s.teammateBindingByID(installation, discussion)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"pending": pending, "checkpoint": checkpoint, "binding": binding}, nil
+}
+
 func (s *Store) FixtureIngress(d TeammateDiscussion, owner, id, action string) (int, error) {
 	route := d.Route
 	route.MessageID = id

@@ -17,7 +17,7 @@ struct Binding {
     supervisor_socket: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 pub(super) struct Route {
     pub(super) guild_id: String,
     pub(super) channel_id: String,
@@ -26,14 +26,14 @@ pub(super) struct Route {
     pub(super) parent_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub(super) struct Guard {
     pub(super) route: Route,
     #[serde(rename = "ActorID")]
     pub(super) actor_id: String,
     #[serde(rename = "DiscussionID")]
-    discussion_id: String,
+    pub(super) discussion_id: String,
     #[serde(rename = "OperationID")]
     operation_id: String,
     pub(super) revision: String,

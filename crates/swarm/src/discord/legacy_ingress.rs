@@ -891,6 +891,30 @@ fn capture_under_lease(
     if !identity(&lease.pin, &lease.source)? {
         return Err(invalid());
     }
+    write_pending_ingress(
+        &mut tx,
+        cfg,
+        &mut binding,
+        json!({"guild_id":"","channel_id":channel,"message_id":message}),
+        json!({"id":actor,"name":name}),
+    )?;
+    tx.commit().map_err(io::Error::other)?;
+    println!("Captured the personal DM in the original Go ingress queue.");
+    Ok(true)
+}
+
+pub(super) fn write_pending_ingress<'tx>(
+    tx: &mut impl TxRwApi<'tx>,
+    cfg: &Config,
+    binding: &mut Value,
+    route: Value,
+    author: Value,
+) -> io::Result<()> {
+    let install = cfg.text("installation_id");
+    let key = format!("{install}\0{}", field(&route, "message_id"));
+    let key = key.as_bytes();
+    let active_key = format!("{install}\0{}", field(&route, "channel_id"));
+    let active_key = active_key.as_bytes();
     let sequence = {
         let mut ingress = tx.bucket_mut(b"teammate_ingress").ok_or_else(invalid)?;
         let n = ingress.next_sequence().map_err(io::Error::other)?;
@@ -901,31 +925,28 @@ fn capture_under_lease(
         {
             return Err(invalid());
         }
-        let captured = json!({"Route":{"guild_id":"","channel_id":channel,"message_id":message},
-            "Author":{"id":actor,"name":name},"Opening":false,"Edited":false,"Deleted":false,
+        let captured = json!({"Route":route,"Author":author,"Opening":false,"Edited":false,"Deleted":false,
             "Mutation":0,"Sequence":n,"State":"prepared","Error":"","Admission":null});
         ingress
-            .put(&key, serde_json::to_vec(&captured)?)
+            .put(key, serde_json::to_vec(&captured)?)
             .map_err(io::Error::other)?;
         n
     };
     binding["LastIngressSequence"] = json!(sequence);
     tx.bucket_mut(b"teammate_discussions")
         .ok_or_else(invalid)?
-        .put(&active_key, serde_json::to_vec(&binding)?)
+        .put(active_key, serde_json::to_vec(&binding)?)
         .map_err(io::Error::other)?;
     let pending_key = [install.as_bytes(), b"\0", &sequence.to_be_bytes()].concat();
     tx.bucket_mut(b"teammate_pending")
         .ok_or_else(invalid)?
-        .put(pending_key, &key)
+        .put(pending_key, key)
         .map_err(io::Error::other)?;
     tx.bucket_mut(b"teammate_meta")
         .ok_or_else(invalid)?
         .put(b"active_ingress_count", 1u64.to_be_bytes())
         .map_err(io::Error::other)?;
-    tx.commit().map_err(io::Error::other)?;
-    println!("Captured the personal DM in the original Go ingress queue.");
-    Ok(true)
+    Ok(())
 }
 
 fn require_repaired<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, binding: &Value) -> io::Result<()> {
