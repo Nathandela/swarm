@@ -20,6 +20,7 @@ mod config;
 mod dispatcher;
 mod gateway;
 mod guild;
+pub(crate) mod linked_board;
 mod local;
 mod mail_wake;
 mod manager;
@@ -478,7 +479,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
     }
     let cfg = place.load()?;
     match req.command {
-        "run" => service::run(&place, &cfg)?,
+        "run" => service::run(&place, &cfg, req.on("unattended"))?,
         "status" => {
             let status = local::call(&place.dir, "status", "", None)
                 .ok()
