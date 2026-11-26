@@ -46,6 +46,8 @@ The v0.29.24 tag and main resolved to `a716dd50a5faf746ce6f0831fc31d0d73b06ffeb`
 | Darwin arm64 (universal archive) | `5e116edab170d3db7cebeaf3b5f21d832e43b39b19cbf92315cda022dce245e3` | `1527e5688243cdf98fb20f45cd00c9dc9427cb8e50faf5640c0778640359fe7a` |
 | `tf_nathan` Linux x86_64 | `4a9451ca5caa670c08406bfe091f9bf5faaff59e7a67fbcba189b8cd3ab368af` | `3eac509227792e1ef4812860ea74a7d3c56f9a2ade5a8eff26b30b6f4861f6d8` |
 
+The standalone Darwin arm64 v0.29.24 source checkout passed the full normal round with native Go 1.26.9, `-count=1 -p 2 -timeout 35m` and umask `022`. It reported 97 test-bearing packages and eight with no tests. The previous umask `077` run changed the seeded modes used by several custody fixtures. The diagnostic-log, Discord custody and daemon checks passed when repeated under the ordinary mask. Linux x86_64 passed all four scheduler and scheduled-worker regressions in a private home with the native Go 1.26.9 compiler. Its complete source round stopped at the VM disk guard.
+
 ## M0 source build repeatability on Apple Silicon
 
 Two builds in independent scratch directories on this host with Go 1.26.5 and `GOARCH=arm64` produced identical SHA-256 digests within each reference. Both binaries executed their version and Discord help probes. Running the builder with an existing output directory returned exit 2 and preserved its contents.

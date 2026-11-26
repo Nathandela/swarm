@@ -55,3 +55,12 @@ The signed archives for `ded21c92e384ac8560827ce11d3567da0ed190a6` passed the ma
 | Linux arm64 guest on Apple Silicon | `cd06e43267757469dfbaaaac11b13ed531bc136787fc30130c86bb2253a34ee7` | `f4c11874298033b9fe107c35993e77b8d77163f423ea8cd807f6e2539b57291f` |
 
 The signed `1ceed43c` build passed verification for all three archives. Its managed PTY and bundled media checks also passed on native macOS arm64, translated macOS x86_64 and native Linux x86_64. Their receipt SHA-256 values are `0459e5190c540e5dfd85ea19dab94a4f2ab31ca3cb24257f687e1db65a3c95f9`, `ecf6dbed639b2e1e7779d8f70b56c598c34aa34c71f138fae776a889b144212a` and `80719cbfe7e9cd7714b529f4ecffc8efcd86bcbaadd6f2824becd7450603e3cd`, respectively.
+
+The signed `3d15e157` build repeated the managed-install, bundled media, PTY recovery and fixture cleanup checks on all four execution environments. Native Linux x86_64 also compared signed Go v0.29.24 and this Rust archive through checkout inventory, preserving original Go metadata and proving read-only inventory across worktrees and queued receipts. Its checkout witness SHA-256 is `f6941e72de8e0b942ef25b13dd464ae89bf7b47fc9408c2f6a589b7f6eab787a`.
+
+| Execution environment | Archive SHA-256 | PTY receipt SHA-256 |
+| --- | --- | --- |
+| macOS arm64 native | `1a613de0b13557d5cf3678272909914471dfc05c50d4ede909a8d52bcc8a90cf` | `b747c65a9688a0f5d25e98de62f4cb1f56ed81e4867d92fec33fbb762022e245` |
+| macOS x86_64 under Rosetta | `1a613de0b13557d5cf3678272909914471dfc05c50d4ede909a8d52bcc8a90cf` | `0607b0822eb73c66776e40ae40103e2147f9bc9e108ebe75615d9e540076b690` |
+| Linux x86_64 native | `7d8866cbc58644448ec9b075701c3e5c384518e4e9b953220a9ce8829914de5f` | `ce65a99919709ef52dca90f5b17d42f464da55e77f961959e34bf9d164f3cbfe` |
+| Linux arm64 guest on Apple Silicon | `01ae3adea3d5f80f7ac24e1130ae334d1f5d0791bfe12aac0dc58d137528f0e3` | `ada17b958cbf57ef81dd91d41f322692407657bcc564a9d8531753ae69a5bf0d` |
