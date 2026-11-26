@@ -10,14 +10,14 @@ use ureq::unversioned::{
 };
 
 #[derive(Debug, Clone)]
-pub(super) struct LocalSocket {
+pub(crate) struct LocalSocket {
     pub path: PathBuf,
     pub worker: u32,
     pub birth: u64,
 }
 
 impl LocalSocket {
-    pub(super) fn agent(&self, seconds: u64) -> ureq::Agent {
+    pub(crate) fn agent(&self, seconds: u64) -> ureq::Agent {
         let config = ureq::config::Config::builder()
             .proxy(None)
             .max_redirects(0)
@@ -59,7 +59,7 @@ impl Connector for LocalSocket {
 }
 
 #[derive(Debug)]
-pub(super) struct LocalTransport {
+pub(crate) struct LocalTransport {
     socket: UnixStream,
     buffers: LazyBuffers,
 }

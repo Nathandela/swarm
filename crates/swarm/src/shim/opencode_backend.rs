@@ -1,4 +1,4 @@
-mod http;
+pub(crate) mod http;
 mod operations;
 
 use crate::{ipc::field, providers::opencode, supervisor::runtime};

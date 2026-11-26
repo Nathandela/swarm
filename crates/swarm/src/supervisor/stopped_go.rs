@@ -460,8 +460,8 @@ fn completed(file: &File, meta: &Value) -> io::Result<Option<Value>> {
     Ok(Some(ended))
 }
 
-fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
-    let launch = (|| {
+fn read_launch(file: &File) -> io::Result<Value> {
+    (|| {
         let launch = open_at(file, c"shim-launch.json", libc::O_RDONLY)?;
         let bytes = runtime::read_private_file(launch, 1 << 20)?;
         let text = std::str::from_utf8(&bytes).map_err(io::Error::other)?;
@@ -475,7 +475,12 @@ fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
         }
         Ok::<Value, io::Error>(serde_json::from_str(text)?)
     })()
-    .map_err(|err| io::Error::other(format!("Go launch evidence unavailable: {err}")))?;
+    .map_err(|err| io::Error::other(format!("Go launch evidence unavailable: {err}")))
+}
+
+fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
+    let launch = read_launch(file)?;
+
     // The original directory can differ on an offline copy, but the durable
     // ID and config's two physical path components must all identify the same session.
     let launch_dir = Path::new(field(&launch, "session_dir"));
@@ -788,7 +793,10 @@ impl Store {
                 }
                 let raw = read_meta(&file)?;
                 let meta = raw.parsed()?;
-                if meta["schema_version"] != 1 && meta["schema_version"].is_u64() {
+                if meta["schema_version"] != 1
+                    && !live::open_code::managed(&meta)
+                    && meta["schema_version"].is_u64()
+                {
                     return Ok((file, meta, raw));
                 }
                 if !valid_meta(&meta, id) {
@@ -808,7 +816,9 @@ impl Store {
             let (exported, live, observed_exit) =
                 if adopt_live && meta["status"]["Process"] == "running" {
                     let adopt = (|| {
-                        qualified_role(&meta)?;
+                        if !live::open_code::managed(&meta) {
+                            qualified_role(&meta)?;
+                        }
                         if let Some(ended) = completed(&file, &meta)? {
                             return Ok((false, None, Some(ended)));
                         }
@@ -916,6 +926,15 @@ impl Store {
             owner.retire();
         }
         Ok(Some(row))
+    }
+
+    pub(super) fn has_live_opencode(&self) -> bool {
+        self.rows.lock().unwrap().values().any(|entry| {
+            entry
+                .live
+                .as_ref()
+                .is_some_and(|owner| owner.has_opencode())
+        })
     }
 
     pub(super) fn has_live(&self) -> bool {

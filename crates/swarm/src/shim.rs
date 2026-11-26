@@ -1,6 +1,6 @@
 mod agy_permission;
 mod codex_backend;
-mod opencode_backend;
+pub(crate) mod opencode_backend;
 mod pty;
 mod screen;
 mod supervision;

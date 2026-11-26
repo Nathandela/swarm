@@ -980,8 +980,9 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             if *cap == crate::refresh::CAP {
                 return state.stopped_go.is_none();
             }
-            if state.stopped_go.is_some() {
-                return matches!(*cap, "subscribe" | "attach");
+            if let Some(legacy) = &state.stopped_go {
+                return matches!(*cap, "subscribe" | "attach")
+                    || *cap == "opencode-history-v1" && legacy.has_live_opencode();
             }
             matches!(*cap, crate::teammate::MAIL_CAP | crate::teammate::FILE_CAP)
                 || worker_origin_available
@@ -1064,6 +1065,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     | "terminal_subscribe"
                     | "send_input"
                     | "kill"
+                    | "opencode_history"
             )
         {
             reply(
@@ -1342,10 +1344,16 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 let bytes=request["journal_max_bytes"].as_u64().unwrap_or_default();
                 return state.journal()?.stream(stream,&state.endpoint,from,bytes);
             },
-            "opencode_history" if caps.contains(&"opencode-history-v1") => state.session(&request).and_then(|session| {
-                let page = session.opencode_history(request["limit"].as_u64().unwrap_or(50),field(&request,"before"))?;
+            "opencode_history" if caps.contains(&"opencode-history-v1") => (|| {
+                let limit = request["limit"].as_u64().unwrap_or(50);
+                let before = field(&request, "before");
+                let page = if let Some(owner) = state.live_go(&request) {
+                    owner.opencode_history(limit, before)?
+                } else {
+                    state.session(&request)?.opencode_history(limit, before)?
+                };
                 reply(&writer,state,json!({"op":"opencode_history","session_id":request["session_id"],"history_result":page}))
-            }),
+            })(),
             "native_decide" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
                 let id = field(&request,"session_id");
                 let operation = field(&request,"operation_id");

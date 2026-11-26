@@ -15,6 +15,7 @@ use std::sync::Mutex;
 
 mod agy;
 pub(super) mod codex;
+pub(super) mod open_code;
 
 pub(in crate::supervisor) const OPT_IN: &str = "SWARM_DAEMON_LIVE_GO_COMPAT";
 const SHIM_WIRE_VERSION: u64 = 2;
@@ -25,6 +26,7 @@ pub(in crate::supervisor) struct Owner {
     shim: Process,
     worker: Process,
     backend: Option<Process>,
+    opencode: Option<open_code::Bridge>,
     lease: Mutex<Option<Controller>>,
 }
 
@@ -124,9 +126,12 @@ fn managed_processes(
 
 impl Owner {
     pub(super) fn open(path: PathBuf, directory: &File, meta: &Value) -> io::Result<Self> {
-        super::qualified_role(meta)?;
+        let managed_opencode = open_code::managed(meta);
+        if !managed_opencode {
+            super::qualified_role(meta)?;
+        }
         let agent = field(meta, "agent_type");
-        if !matches!(agent, "claude" | "codex" | "agy")
+        if !(managed_opencode || matches!(agent, "claude" | "codex" | "agy"))
             || meta["status"]["Process"] != "running"
             || meta["shim_wire_version"] != SHIM_WIRE_VERSION
             || !meta["exit_code"].is_null()
@@ -135,7 +140,11 @@ impl Owner {
                 "unsupported live Go shim state or wire version",
             ));
         }
-        let launch = super::launch_evidence(directory, meta)?;
+        let launch = if managed_opencode {
+            open_code::launch(directory, meta, &path)?
+        } else {
+            super::launch_evidence(directory, meta)?
+        };
         if Path::new(field(&launch, "session_dir")) != path
             || Path::new(field(&launch, "hook_socket_path")) != path.join("hook.sock")
             || !valid_token(field(&launch, "hook_drain_token"))
@@ -157,18 +166,22 @@ impl Owner {
             super::absent_sidefiles(directory, &[c"backend.json", c"codex.sock"])?;
         }
         let shim = Process::new(&meta["shim_pid"], &meta["shim_start_time"])?;
-        let (worker, backend) = if agent == "agy" {
+        let (worker, backend) = if agent == "agy" || managed_opencode {
             super::absent_sidefiles(directory, &[c"native-process.json"])?;
             (agy::pty_worker(&shim)?, None)
         } else {
             managed_processes(agent, &path, directory, &launch, meta)?
         };
+        let opencode = managed_opencode
+            .then(|| open_code::Bridge::open(&path, directory, meta, &launch, &worker))
+            .transpose()?;
         let owner = Self {
             dir: path,
             directory: directory.try_clone()?,
             shim,
             worker,
             backend,
+            opencode,
             lease: Mutex::new(None),
         };
         owner.connect("hook.sock")?;
@@ -222,13 +235,29 @@ impl Owner {
             || hello["wire_version"] != SHIM_WIRE_VERSION
             || hello["snapshot_chunking"] != true
             || hello["snapshot_only"] != true
-            || hello["opencode_dispatch"] == true
+            || (hello["opencode_dispatch"] == true) != self.opencode.is_some()
         {
             return Err(io::Error::other(
                 "Go shim wire or snapshot capability was refused",
             ));
         }
         Ok(stream)
+    }
+
+    pub(super) fn has_opencode(&self) -> bool {
+        self.opencode.is_some()
+    }
+
+    pub(in crate::supervisor) fn opencode_history(
+        &self,
+        limit: u64,
+        before: &str,
+    ) -> io::Result<Value> {
+        self.dial()?;
+        self.opencode
+            .as_ref()
+            .ok_or_else(|| io::Error::other("Go session has no qualified OpenCode history"))?
+            .history(limit, before)
     }
 
     pub(in crate::supervisor) fn snapshot(&self) -> io::Result<Value> {
