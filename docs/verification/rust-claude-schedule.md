@@ -27,3 +27,5 @@ To rerun on Linux x86_64, stage the candidate as `swarm` beside `native_fixture_
 The same Linux launcher passed with the installed Claude Code 2.1.332 executable. The native composer submitted one opening prompt and the synthetic model observed one Bash completion call and one final answer. The receipt alone left the occurrence Working. The matching closing Stop and assistant response advanced it to Ready. Manual replay kept one occurrence. The real folder-trust gate, injected late modal, and unrepresentable control prompt checks also passed. The late-modal fixture used the same version banner as the native run.
 
 The Rust candidate SHA-256 was `36c09cbf196995cdb576ec30f0d219a981d4aa1b1c1149b58e0dd48ebe171988`. The log SHA-256 was `6d2a24c6931400f2e4b4aef79c544811342b817dae8617008b6e429a42406e69`.
+
+The same change passed the full scheduled witness with installed Claude Code 2.1.329 on Darwin arm64. The candidate SHA-256 was `4160a548a39c0260dc20e42f77b1727bb6bc4ed6db96c82952104424cd773826`. The log SHA-256 was `e6f2217e29dbaa6d2274ee77ac35eeb5ef7262d8c6dd73f56f6a731e17de6af6`.

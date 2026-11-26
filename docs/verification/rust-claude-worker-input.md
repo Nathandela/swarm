@@ -47,3 +47,7 @@ The installed x86_64 executable SHA-256 was `a2df1f41bb00250992926420d0063f89b12
 | Enrolled guild worker | `01bae57bd2762574b6c294a11417495c94fc50455ace0f44f6ac869fb3b631bd` |
 | Withdrawn guild worker | `c25b3117e45ff9e4400c69125429340902dc393142f2b33adc35fdf81fc3abb3` |
 | Enrolled manager | `16f0b00d2aa745b8e51c79ca107a167e0a3d88fc5354c97eb19efbc20fbc0268` |
+
+The same Linux candidate exercised the replaced-issuer refusal with native Codex 0.172.0. The Claude manager proved its main-loop tool call, but the replacement invalidated the original issuer and the Codex worker received no follow-up. The log SHA-256 was `c4a97286aa7ace7acd2ae3ea40aa401e347fcd8d5fdec5759e4028909db591f6`.
+
+The Darwin arm64 candidate passed the personal worker and enrolled manager witnesses with installed Claude Code 2.1.329. The focused Claude unit tests also passed on both platforms. The Darwin candidate SHA-256 was `4160a548a39c0260dc20e42f77b1727bb6bc4ed6db96c82952104424cd773826`. The personal worker and enrolled manager log SHA-256 values were respectively `b5b730a7b31b398373509bc07fef2af40b580ed7a5531bc5449b03abc3006a8d` and `c8837b2d128e8decaa66748a6e4cd8772df177683f9ac4b3f2772f6f0da01451`.
