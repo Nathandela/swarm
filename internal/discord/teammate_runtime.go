@@ -187,7 +187,12 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 	if personal {
 		starter = Route{}
 	} else if channel.Type == discordgo.ChannelTypeGuildText {
-		route, err = t.client.teammateThread(ctx, c.Route, teammateThreadName(cfg.Name, m.Content), bits&discordgo.PermissionCreatePublicThreads != 0)
+		canCreate := bits&discordgo.PermissionCreatePublicThreads != 0
+		route, err = t.client.teammateThread(ctx, c.Route, teammateThreadName(cfg.Name, m.Content), canCreate)
+		if teammateAPIStatus(err, http.StatusBadRequest) {
+			// Discord can reject a name taken from user text. The default name always works.
+			route, err = t.client.teammateThread(ctx, c.Route, clipUTF16(cfg.Name+" discussion", 95), canCreate)
+		}
 		if err != nil {
 			return binding, nil, err
 		}
