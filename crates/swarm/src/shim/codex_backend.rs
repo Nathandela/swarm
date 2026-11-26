@@ -1,4 +1,3 @@
-mod decisions;
 use super::pty;
 use crate::ipc::field;
 use crate::providers::{codex_proof, codex_receipt};
@@ -242,7 +241,7 @@ struct Observation {
     proof: Option<codex_proof::Ledger>,
     thread: String,
     turn: Option<String>,
-    requests: std::collections::BTreeMap<String, decisions::Pending>,
+    requests: std::collections::BTreeSet<String>,
     joined: bool,
     missing_rollout: bool,
     scheduled_turn: Option<ScheduledTurn>,
@@ -343,20 +342,7 @@ impl Observation {
                     self.requests_unverified = true;
                     return true;
                 }
-                let kind = match method {
-                    "item/commandExecution/requestApproval" => "command",
-                    "item/fileChange/requestApproval" => "file_change",
-                    _ => "user_input",
-                };
-                let key = message["id"].to_string();
-                match self.requests.get(&key) {
-                    Some(pending) if pending.raw != *message => self.requests_unverified = true,
-                    Some(_) => {}
-                    None => {
-                        self.requests
-                            .insert(key, decisions::Pending::new(kind, message.clone()));
-                    }
-                }
+                self.requests.insert(message["id"].to_string());
             }
             "serverRequest/resolved" => {
                 self.requests.remove(&payload["requestId"].to_string());
@@ -394,27 +380,6 @@ impl Observation {
     }
 }
 
-pub(super) enum Action {
-    Send(SemanticAction),
-    Request {
-        session: String,
-        request: String,
-        native: String,
-        answer: SyncSender<io::Result<Value>>,
-    },
-    Decide {
-        operation: String,
-        body: Value,
-        expires: Instant,
-        answer: SyncSender<io::Result<Value>>,
-    },
-    Interrupt {
-        expected: String,
-        expires: Instant,
-        answer: SyncSender<io::Result<Value>>,
-    },
-}
-
 pub(super) struct SemanticAction {
     pub operation: String,
     pub session: String,
@@ -440,21 +405,12 @@ fn persist_observation(observation: &Observation, target: &SemanticTarget<'_>) {
             &json!({"token":target.token}),
         );
     }
-    let requests: Vec<_> = observation.requests.values().map(|pending| {
-        let public_id = pending.id();
-        let (category, summary) = match pending.kind {
-            "command" => ("permission","Command execution approval"),
-            "file_change" => ("permission","File change approval"),
-            _ => ("question","User input request"),
-        };
-        json!({"kind":category,"request_id":public_id,"native_session_id":observation.thread,"summary":summary})
-    }).collect();
     let _ = runtime::write_json(
         &target.dir.join("observation.json"),
         &json!({
             "token":target.token, "conversation_id":observation.thread, "status":observation.status(),
-            "backend_available":!observation.ambiguous, "active_turn":observation.turn, "requests_available":observation.joined && !observation.ambiguous && !observation.requests_unverified,
-            "requests":requests,"schedule_ready":target.schedule.is_some() && observation.schedule_ready(),
+            "backend_available":!observation.ambiguous, "requests_available":observation.joined && !observation.ambiguous && !observation.requests_unverified,
+            "schedule_ready":target.schedule.is_some() && observation.schedule_ready(),
             "manager_ingress_ready": observation.can_enter_joined_thread(true) && observation.idle
                 && !observation.ambiguous && !observation.requests_unverified && observation.requests.is_empty(),
         }),
@@ -772,75 +728,13 @@ impl ScheduledTurn {
     }
 }
 
-fn interrupt(
-    channel: &mut Channel,
-    observation: &mut Observation,
-    target: &SemanticTarget<'_>,
-    rpc: u64,
-    expected: &str,
-    expires: Instant,
-) -> io::Result<Value> {
-    if observation.thread.is_empty() || observation.ambiguous || !observation.joined {
-        return Err(io::Error::other("Codex active turn is unavailable"));
-    }
-    let key = codex_receipt::hash(&format!(
-        "{}:{}:{}",
-        target.token, observation.thread, expected
-    ));
-    let path = target.dir.join(format!("codex-interrupt-{key}.json"));
-    let receipt = |status| json!({"token":target.token,"thread":observation.thread,"turn":expected,"state":status});
-    match runtime::read_json(&path) {
-        Ok(prior) => {
-            if prior == receipt("confirmed") {
-                return Ok(json!({"state":"confirmed","turn":expected}));
-            }
-            return Err(io::Error::other("Codex interrupt outcome is unknown"));
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => return Err(err),
-    }
-    if observation.turn.as_deref() != Some(expected) || Instant::now() >= expires {
-        return Err(io::Error::other("stale_turn"));
-    }
-    runtime::write_json(&path, &receipt("uncertain"))?;
-    send(
-        &mut channel.connection,
-        json!({"id":rpc,"method":"turn/interrupt","params":{
-            "threadId":observation.thread,"turnId":expected,
-        }}),
-    )?;
-    let thread = observation.thread.clone();
-    let deadline = Instant::now() + Duration::from_secs(4);
-    while Instant::now() < deadline {
-        let Some(frame) = read(&mut channel.connection)? else {
-            continue;
-        };
-        if frame["id"] == rpc && frame["method"].is_null() && !frame["error"].is_null() {
-            return Err(io::Error::other("Codex interrupt outcome is unknown"));
-        }
-        let matching = frame["method"] == "turn/completed"
-            && frame["params"]["threadId"] == thread
-            && frame["params"]["turn"]["id"] == expected
-            && frame["params"]["turn"]["status"] == "interrupted";
-        observe_frame(observation, &frame, target);
-        if matching {
-            runtime::write_json(
-                &path,
-                &json!({"token":target.token,"thread":thread,"turn":expected,"state":"confirmed"}),
-            )?;
-            return Ok(json!({"state":"confirmed","turn":expected}));
-        }
-    }
-    Err(io::Error::other("Codex interrupt outcome is unknown"))
-}
-
 pub(super) fn observe(
     mut channel: Channel,
     cwd: PathBuf,
     dir: PathBuf,
     token: String,
     schedule: Option<worker::Binding>,
-    actions: Receiver<Action>,
+    actions: Receiver<SemanticAction>,
     manager: Value,
 ) {
     let resumed = channel.restored.is_some();
@@ -897,59 +791,14 @@ pub(super) fn observe(
         }
         if quiet && let Ok(action) = actions.try_recv() {
             serial += 1;
-            match action {
-                Action::Send(action) => {
-                    let result = submit(
-                        &mut channel.connection,
-                        &mut observation,
-                        serial,
-                        &action,
-                        &target,
-                    );
-                    let _ = action.answer.send(result);
-                }
-                Action::Request {
-                    session,
-                    request,
-                    native,
-                    answer,
-                } => {
-                    let result = decisions::select(&mut observation, &request, &native)
-                        .and_then(|pending| pending.issue(target.token, &session, &native));
-                    let _ = answer.send(result);
-                }
-                Action::Decide {
-                    operation,
-                    body,
-                    expires,
-                    answer,
-                } => {
-                    let result = decisions::apply(
-                        &mut channel.connection,
-                        &mut observation,
-                        &target,
-                        &operation,
-                        &body,
-                        expires,
-                    );
-                    let _ = answer.send(result);
-                }
-                Action::Interrupt {
-                    expected,
-                    expires,
-                    answer,
-                } => {
-                    let result = interrupt(
-                        &mut channel,
-                        &mut observation,
-                        &target,
-                        serial,
-                        &expected,
-                        expires,
-                    );
-                    let _ = answer.send(result);
-                }
-            }
+            let result = submit(
+                &mut channel.connection,
+                &mut observation,
+                serial,
+                &action,
+                &target,
+            );
+            let _ = action.answer.send(result);
         }
         let reading = Instant::now();
         match read(&mut channel.connection) {

@@ -98,7 +98,7 @@ pub(super) struct Session {
     pub(super) supervision_pending: std::sync::atomic::AtomicBool,
     token: String,
     manager: Value,
-    pub(super) agent: String,
+    agent: String,
     resumed_from: Option<String>,
     worker_native_installation: Option<String>,
     hermes_native: bool,
@@ -563,6 +563,59 @@ impl Session {
             })
     }
 
+    pub(super) fn prepare_codex_external(launch: &Value) -> io::Result<Prepared> {
+        use providers::codex_continuity;
+        let options = &launch["options"];
+        let thread = field(options, "resume_conversation_id");
+        if !options
+            .as_object()
+            .is_some_and(|options| options.len() == 1)
+            || launch.as_object().is_none_or(|keys| {
+                keys.keys().any(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "agent" | "name" | "cwd" | "env" | "options" | "cols" | "rows"
+                    )
+                })
+            })
+            || !codex_receipt::canonical_thread(thread)
+        {
+            return Err(io::Error::other("invalid external Codex resume request"));
+        }
+        let mut request = launch.clone();
+        request["options"] = Value::Null;
+        let mut prepared = Self::prepare(&json!({"launch":request}))?;
+        let profile =
+            codex_continuity::profile(&prepared.provider.env, &prepared.cwd, &Value::Null)?;
+        let native = Path::new(field(&profile, "native_home"));
+        if native != Path::new(field(&profile, "home")).join(".codex") {
+            return Err(io::Error::other(
+                "external Codex resume requires the default native home",
+            ));
+        }
+        let proof = codex_continuity::discover_external(native, true, thread)?
+            .into_iter()
+            .next()
+            .filter(|record| record["archived"] == false)
+            .ok_or_else(|| io::Error::other("external Codex rollout is missing or archived"))?;
+        if proof["cwd"] != json!(prepared.cwd)
+            || !providers::codex::managed(&prepared.provider.version)
+            || !codex_continuity::newer_or_same(
+                &prepared.provider.version,
+                field(&proof, "version"),
+            )
+        {
+            return Err(io::Error::other(
+                "external Codex checkout or runtime is unqualified",
+            ));
+        }
+        prepared.provider.argv = codex_resume_args(thread, &prepared.cwd, "");
+        prepared.codex_resume = json!({
+            "thread":thread,"profile":profile,"external_rollout":proof,
+        });
+        Ok(prepared)
+    }
+
     pub(super) fn prepare_codex_resume(
         &self,
         launch: &Value,
@@ -669,21 +722,7 @@ impl Session {
                 "Codex resume refuses an older or unqualified runtime",
             ));
         }
-        prepared.provider.argv = vec![
-            "resume".into(),
-            thread.clone(),
-            "-c".into(),
-            "check_for_update_on_startup=false".into(),
-            "--cd".into(),
-            cwd.to_string_lossy().into_owned(),
-        ];
-        let model = field(&old["options"], "model");
-        if !model.is_empty() {
-            prepared
-                .provider
-                .argv
-                .extend(["--model".into(), model.into()])
-        }
+        prepared.provider.argv = codex_resume_args(&thread, &cwd, field(&old["options"], "model"));
         prepared.codex_resume =
             json!({"thread":thread,"resumed_from":source,"profile":old,"rollout":rollout});
         prepared.tag = self.labels.lock().unwrap().tag.clone();
@@ -1188,134 +1227,6 @@ impl Session {
         Ok(codex_receipt::instance(&self.token))
     }
 
-    fn codex_control_authority(&self) -> io::Result<()> {
-        if self.agent != "codex" || !self.owner_interactive || self.schedule.is_some() {
-            return Err(io::Error::other(
-                "ordinary owner Codex control is unavailable",
-            ));
-        }
-        Ok(())
-    }
-
-    pub(super) fn codex_active_turn(&self) -> io::Result<Value> {
-        self.codex_control_authority()?;
-        self.dial()?;
-        let observation = runtime::read_json(&self.dir.join("observation.json"))?;
-        if observation["token"] != self.token
-            || observation["backend_available"] != true
-            || observation["requests_available"] != true
-        {
-            return Err(io::Error::other("Codex active turn is unavailable"));
-        }
-        Ok(observation["active_turn"].clone())
-    }
-
-    pub(super) fn codex_interrupt(&self, turn: &str) -> io::Result<()> {
-        self.codex_control_authority()?;
-        if turn.is_empty() || turn.len() > 128 || turn.chars().any(char::is_control) {
-            return Err(io::Error::other("an interrupt must name an observed turn"));
-        }
-        let mut stream = self.dial()?;
-        stream.set_read_timeout(Some(Duration::from_secs(8)))?;
-        runtime::write_control(
-            &mut stream,
-            &json!({
-                "type":"codex_interrupt","session_instance":codex_receipt::instance(&self.token),"expected_turn":turn,
-            }),
-        )?;
-        let response = runtime::read_control(&mut stream)?;
-        if response["type"] == "codex_interrupt"
-            && response["body"]["state"] == "confirmed"
-            && response["body"]["turn"] == turn
-        {
-            return Ok(());
-        }
-        Err(io::Error::other(field(&response, "error").to_owned()))
-    }
-
-    fn codex_decision_exchange(&self, mut request: Value) -> io::Result<Value> {
-        self.codex_control_authority()?;
-        let mut shim = self.dial()?;
-        shim.set_read_timeout(Some(Duration::from_secs(8)))?;
-        request["session_instance"] = json!(codex_receipt::instance(&self.token));
-        runtime::write_control(&mut shim, &request)?;
-        let response = runtime::read_control(&mut shim)?;
-        if response["type"] != "codex_decision_result" {
-            return Err(io::Error::other(field(&response, "error").to_owned()));
-        }
-        Ok(response["body"].clone())
-    }
-
-    pub(super) fn codex_decision_status(
-        &self,
-        session: &str,
-        operation: &str,
-    ) -> io::Result<Option<Value>> {
-        self.codex_control_authority()?;
-        Ok(
-            providers::codex_decision_receipt::read(&self.dir, &self.token, session, operation)?
-                .map(|record| record["receipt"].clone()),
-        )
-    }
-
-    pub(super) fn codex_decide(
-        &self,
-        session: &str,
-        operation: &str,
-        body: &Value,
-        state: &super::State,
-    ) -> io::Result<Value> {
-        use providers::codex_decision_receipt;
-        use sha2::{Digest, Sha256};
-        self.codex_control_authority()?;
-        let instance = codex_receipt::instance(&self.token);
-        if body["session"] != session
-            || body["session_instance"] != instance
-            || !codex_receipt::timely(operation)
-            || body.to_string().len() > 16 << 10
-            || body.as_object().is_none_or(|keys| {
-                keys.keys().any(|key| {
-                    !matches!(
-                        key.as_str(),
-                        "session"
-                            | "session_instance"
-                            | "generation"
-                            | "root_id"
-                            | "native_session_id"
-                            | "request_id"
-                            | "request_hash"
-                            | "expires_at"
-                            | "kind"
-                            | "reply"
-                            | "answers"
-                    )
-                })
-            })
-        {
-            return Err(io::Error::other("invalid or stale Codex decision"));
-        }
-        let intent = codex_decision_receipt::intent(body);
-        {
-            let digest = Sha256::digest(operation);
-            let _lock = state.operation_locks[usize::from(digest[0]) % state.operation_locks.len()]
-                .lock()
-                .unwrap();
-            codex_receipt::bind_intent(&state.root, operation, session, &instance, &intent)?;
-        }
-        if let Some(receipt) = self.codex_decision_status(session, operation)? {
-            return Ok(receipt);
-        }
-        let result = self.codex_decision_exchange(
-            json!({"type":"codex_decide","operation_id":operation,"body":body}),
-        );
-        if let Some(receipt) = self.codex_decision_status(session, operation)? {
-            return Ok(receipt);
-        }
-        result.and(Err(io::Error::other(
-            "Codex decision outcome is unknown; inspect --status",
-        )))
-    }
-
     pub(super) fn native_requests(&self, session: &str, body: &Value) -> io::Result<Value> {
         if self.agent == "hermes" {
             return Err(io::Error::other(
@@ -1327,39 +1238,9 @@ impl Session {
                 "type":"opencode_requests","session":session,"request_id":body["request_id"],"native_session_id":body["native_session_id"],
             }));
         }
-        if self.agent == "codex" && !field(body, "request_id").is_empty() {
-            let request = self.codex_decision_exchange(json!({
-                "type":"codex_request","session":session,"request_id":body["request_id"],
-                "native_session_id":body["native_session_id"],
-            }))?;
-            return Ok(json!({"session":session,"request":request}));
-        }
-        if !["request_id", "native_session_id"]
-            .into_iter()
-            .all(|key| body[key].is_null() || body[key] == "")
-        {
-            return Err(io::Error::other(
-                "only native request summary reads are supported",
-            ));
-        }
-        self.semantic_target()?;
-        // Confirm continued private shim custody at query time.
-        self.dial()?;
-        let observed = runtime::read_json(&self.dir.join("observation.json"))?;
-        if observed["token"] != self.token || observed["requests_available"] != true {
-            return Err(io::Error::other(
-                "bound Codex request stream is not available",
-            ));
-        }
-        let requests = observed["requests"]
-            .as_array()
-            .filter(|requests| requests.len() <= 128)
-            .ok_or_else(|| io::Error::other("invalid Codex request projection"))?;
-        Ok(if requests.is_empty() {
-            json!({"session":session})
-        } else {
-            json!({"session":session,"requests":requests})
-        })
+        Err(io::Error::other(
+            "native request inspection is available for OpenCode sessions",
+        ))
     }
 
     fn semantic_thread(&self) -> io::Result<String> {
@@ -2361,6 +2242,21 @@ impl Session {
         }
         view
     }
+}
+
+fn codex_resume_args(thread: &str, cwd: &Path, model: &str) -> Vec<String> {
+    let mut args = vec![
+        "resume".into(),
+        thread.into(),
+        "-c".into(),
+        "check_for_update_on_startup=false".into(),
+        "--cd".into(),
+        cwd.to_string_lossy().into_owned(),
+    ];
+    if !model.is_empty() {
+        args.extend(["--model".into(), model.into()]);
+    }
+    args
 }
 
 fn unrestricted_owner(data: &Value) -> bool {

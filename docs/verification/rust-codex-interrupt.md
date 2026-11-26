@@ -1,5 +1,0 @@
-# Rust Codex turn interrupt
-
-Use `swarm interrupt <session> --active` for the joined observer's current native turn ID, and `swarm interrupt <session> --expected-turn <id>` to stop that exact turn. A typed native `turn/completed` event with `status=interrupted` confirms the operation. The shim first writes an uncertain receipt keyed to the session, native thread and turn. A confirmed receipt can answer a retry across owner replacement. An uncertain receipt fences further dispatch for that native turn. This route requires an ordinary owner session.
-
-On 2026-11-26, installed Codex 0.172.0 on Linux x86-64 passed `scripts/verification/parity_codex.py --candidate <swarm> --provider <codex> --native --loopback-model --interrupt-check`. A disposable loopback provider opened a second user turn and held its response. A forged turn ID was refused while the named turn remained active. The real turn was interrupted and a retry returned the saved confirmation after replacing the owner. The shim identity remained the same and fixture cleanup reported zero survivors.

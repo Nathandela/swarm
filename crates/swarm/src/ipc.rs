@@ -4,6 +4,7 @@ mod actions;
 mod duration;
 mod handoff;
 mod message;
+mod reattach;
 pub(crate) mod spawn;
 pub(crate) mod wire;
 
@@ -44,8 +45,7 @@ pub fn run(args: &[String]) -> i32 {
     let caps = match verb {
         "spawn" => spawn::CAPS,
         "message" => message::CAPS,
-        "history" => &["journal"],
-        "interrupt" => &["codex-turn-interrupt-v1"],
+        "reattach" => &["external-resume"],
         "requests" | "decide" => &["native-requests-v1"],
         "ls" => &[OBSERVATION][..],
         "watch" => &["subscribe", OBSERVATION],
@@ -76,8 +76,7 @@ pub fn run(args: &[String]) -> i32 {
         "spawn" => spawn::run(&mut client, &args[1..]),
         "message" => message::run(&mut client, &args[1..]),
         "requests" => message::requests(&mut client, &args[1..]),
-        "history" => message::history(&mut client, &args[1..]),
-        "interrupt" => message::interrupt(&mut client, &args[1..]),
+        "reattach" => reattach::run(&mut client, &args[1..]),
         "decide" => message::decide(&mut client, &args[1..]),
         "send" => actions::send(&mut client, &args[1..]),
         "kill" => actions::kill(&mut client, &args[1..]),

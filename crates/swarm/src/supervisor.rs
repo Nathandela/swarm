@@ -242,6 +242,15 @@ impl State {
                 )));
             }
         }
+        if field(launch, "agent") == "codex" && options.get("resume_conversation_id").is_some() {
+            if managed.is_some() {
+                return Err(io::Error::other(
+                    "external Codex resume requires ordinary owner scope",
+                ));
+            }
+            let prepared = Session::prepare_codex_external(launch)?;
+            return self.reserve_prepared(prepared, false, None, None);
+        }
         let resume = matches!(
             field(launch, "agent"),
             "agy" | "opencode" | "hermes" | "claude" | "claude-code" | "codex"
@@ -717,7 +726,6 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         | "semantic-target"
                         | "opencode-history-v1"
                         | "native-requests-v1"
-                        | "codex-turn-interrupt-v1"
                         | crate::bootstrap::UNATTENDED
                         | crate::bootstrap::RESTART
                 )
@@ -939,23 +947,6 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     let body = session.manager_operation(&request)?;
                     reply(&writer,state,body)
                 }),
-            "active_turn" if caps.contains(&"codex-turn-interrupt-v1") => state.session(&request).and_then(|session| {
-                let active = session.codex_active_turn()?;
-                reply(&writer,state,json!({"op":"active_turn","session_id":request["session_id"],"active_turn":active}))
-            }),
-            "turn_interrupt" if caps.contains(&"codex-turn-interrupt-v1") => state.session(&request).and_then(|session| {
-                let body = &request["turn_interrupt"];
-                if request["body_version"] != 1 || body["session"] != request["session_id"] {
-                    return Err(io::Error::other("invalid turn interrupt envelope"));
-                }
-                match session.codex_interrupt(field(body,"expected_turn")) {
-                    Ok(()) => reply(&writer,state,json!({"op":"ok","session_id":request["session_id"]})),
-                    Err(err) if err.to_string() == "stale_turn" => reply(&writer,state,json!({
-                        "op":"error","error_code":"stale_turn","error":"expected turn is no longer active"
-                    })),
-                    Err(err) => Err(err),
-                }
-            }),
             "native_requests" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
                 let body = &request["native_requests"];
                 let id = field(&request,"session_id");
@@ -1002,21 +993,14 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 if request["body_version"] != 1 || !body.is_object() {
                     return Err(io::Error::other("invalid native decision envelope"));
                 }
-                let result = if session.agent == "codex" {
-                    session.codex_decide(id,operation,body,state)?
-                } else {
-                    session.opencode_action(id,operation,"decision",body,state)?
-                };
+                let result = session.opencode_action(id,operation,"decision",body,state)?;
                 reply(&writer,state,json!({"op":"native_decide","session_id":id,"operation_id":operation,"native_decision_receipt":result}))
             }),
             "native_decision_status" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
                 let id = field(&request,"session_id");
                 let operation = field(&request,"operation_id");
-                let result = if session.agent == "codex" {
-                    session.codex_decision_status(id,operation)?
-                } else {
-                    session.opencode_operation_status(id,operation,"decision",&state.root)?
-                }.ok_or_else(||io::Error::other("native decision operation is unknown"))?;
+                let result = session.opencode_operation_status(id,operation,"decision",&state.root)?
+                    .ok_or_else(||io::Error::other("native decision operation is unknown"))?;
                 reply(&writer,state,json!({"op":"native_decision_status","session_id":id,"operation_id":operation,"native_decision_receipt":result}))
             }),
             "semantic_target" if caps.contains(&"semantic-target") => state.session(&request).and_then(|session| {

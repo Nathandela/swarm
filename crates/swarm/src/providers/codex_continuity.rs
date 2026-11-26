@@ -204,6 +204,114 @@ pub(crate) fn profile(env: &[(String, String)], cwd: &Path, options: &Value) -> 
     )
 }
 
+fn rollout_id(name: &str) -> Option<&str> {
+    let name = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    let id = name.get(20..56)?;
+    if name.as_bytes().get(19) != Some(&b'-') || !codex_receipt::canonical_thread(id) {
+        return None;
+    }
+    match name.len() {
+        56 => Some(id),
+        93 if name.as_bytes()[56] == b'_'
+            && name.get(57..).is_some_and(codex_receipt::canonical_thread) =>
+        {
+            Some(id)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn discover_external(
+    home: &Path,
+    archived: bool,
+    selected: &str,
+) -> io::Result<Vec<Value>> {
+    if !selected.is_empty() && !codex_receipt::canonical_thread(selected) {
+        return Err(io::Error::other("invalid Codex conversation ID"));
+    }
+    if home
+        .symlink_metadata()
+        .is_err_and(|err| err.kind() == io::ErrorKind::NotFound)
+        && home.is_absolute()
+    {
+        return Ok(Vec::new());
+    }
+    if !home.is_absolute() || home.canonicalize()? != home || !home.symlink_metadata()?.is_dir() {
+        return Err(io::Error::other(
+            "Codex discovery requires a rooted native home",
+        ));
+    }
+    let mut items = std::collections::BTreeMap::new();
+    let mut visited = 0;
+    let mut bytes = 0;
+    for (root, is_archived) in [("sessions", false), ("archived_sessions", true)] {
+        if is_archived && !archived {
+            continue;
+        }
+        let mut pending = vec![(home.join(root), 0)];
+        while let Some((dir, depth)) = pending.pop() {
+            match dir.symlink_metadata() {
+                Err(err) if err.kind() == io::ErrorKind::NotFound && depth == 0 => continue,
+                Ok(stat) if stat.is_dir() && dir.canonicalize()? == dir => {}
+                _ => return Err(io::Error::other("unsafe Codex rollout directory")),
+            }
+            for child in fs::read_dir(&dir)? {
+                let child = child?;
+                visited += 1;
+                if visited > 16_384 || depth > 8 {
+                    return Err(io::Error::other(
+                        "Codex rollout discovery exceeds inventory bounds",
+                    ));
+                }
+                if child.file_type()?.is_dir() {
+                    pending.push((child.path(), depth + 1));
+                    continue;
+                }
+                let name = child.file_name();
+                let Some(id) = name.to_str().and_then(rollout_id) else {
+                    continue;
+                };
+                if !selected.is_empty() && id != selected {
+                    continue;
+                }
+                let path = child.path();
+                let file = owned(&path)?;
+                let meta = file.metadata()?;
+                let mut header = Vec::new();
+                BufReader::new(file.take(64 * 1024 + 1)).read_until(b'\n', &mut header)?;
+                bytes += header.len();
+                if header.len() > 64 * 1024 || header.last() != Some(&b'\n') || bytes > 16 << 20 {
+                    return Err(io::Error::other(
+                        "Codex external rollout metadata exceeds safe bounds",
+                    ));
+                }
+                let node: Value = serde_json::from_slice(&header)?;
+                let info = &node["payload"];
+                if node["type"] != "session_meta" || info["id"] != id || info["source"].is_null() {
+                    return Err(io::Error::other("invalid Codex external rollout metadata"));
+                }
+                if info["source"] != "cli" {
+                    continue;
+                }
+                let cwd = Path::new(field(info, "cwd"));
+                if !cwd.is_absolute() || !cwd.is_dir() || cwd.canonicalize()? != cwd {
+                    return Err(io::Error::other(
+                        "Codex external rollout checkout is not physically rooted",
+                    ));
+                }
+                let proof = json!({"id":id,"cwd":cwd,"archived":is_archived,
+                    "version":info["cli_version"],"path":path,"identity":[meta.dev(),meta.ino()],
+                    "mtime":[meta.mtime(),meta.mtime_nsec()],"size":meta.len(),
+                    "header":format!("{:x}",Sha256::digest(&header))});
+                if items.insert(id.to_owned(), proof).is_some() {
+                    return Err(io::Error::other("ambiguous Codex external rollout"));
+                }
+            }
+        }
+    }
+    Ok(items.into_values().collect())
+}
+
 pub(crate) fn rollout(home: &Path, cwd: &Path, thread: &str) -> io::Result<Value> {
     if !codex_receipt::canonical_thread(thread) || thread.as_bytes().get(14) != Some(&b'7') {
         return Err(io::Error::other(
@@ -229,7 +337,6 @@ pub(crate) fn rollout(home: &Path, cwd: &Path, thread: &str) -> io::Result<Value
             return Err(io::Error::other("Codex rollout directory is an alias"));
         }
     }
-    let suffix = format!("-{thread}.jsonl");
     let mut result = None;
     for (index, entry) in fs::read_dir(&rooted)?.enumerate() {
         if index >= 2048 {
@@ -238,11 +345,7 @@ pub(crate) fn rollout(home: &Path, cwd: &Path, thread: &str) -> io::Result<Value
             ));
         }
         let entry = entry?;
-        if entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(&suffix))
-        {
+        if entry.file_name().to_str().and_then(rollout_id) == Some(thread) {
             if result.is_some() {
                 return Err(io::Error::other("ambiguous Codex native rollout"));
             }

@@ -3,6 +3,11 @@
 
 import argparse
 import http.server
+import os
+import fcntl
+import pty
+import select
+import termios
 import threading
 import json
 from pathlib import Path
@@ -18,11 +23,8 @@ sys.dont_write_bytecode = True
 from parity_runtime import attach, control, fixtures, read_control, read_frame
 
 
-def model_fixture(root, decision_check, alternate_check):
+def model_fixture(root, alternate_check):
     replies = []
-    interrupt_open = threading.Event()
-    dispatched_tools = set()
-    received_answer = threading.Event()
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -42,32 +44,6 @@ def model_fixture(root, decision_check, alternate_check):
             if body.get("model") != "fixture":
                 self.send_error(400, "fixture model required")
                 return
-            if b"Hold this synthetic turn for interrupt." in json.dumps(body.get("input", [])).encode():
-                interrupt_open.wait(timeout=20)
-                try:
-                    self.send_error(503, "fixture paused the turn")
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
-                return
-            tool = None
-            joined_input = json.dumps(body.get("input", []))
-            advertised = {item.get("name") for item in body.get("tools", [])}
-            if any(item.get("type")=="function_call_output" and "Blue" in json.dumps(item.get("output"))
-                   for item in body.get("input", [])):
-                received_answer.set()
-            if decision_check and "Native approval fixture step." in joined_input and "approval" not in dispatched_tools:
-                tool = next((name for name in ("exec_command","shell_command") if name in advertised), None)
-                if tool:
-                    dispatched_tools.add("approval")
-                    arguments = {
-                        ("cmd" if tool=="exec_command" else "command"): "printf 'fixture approved\\n' > fixture-approval-marker",
-                        "sandbox_permissions":"require_escalated", "justification":"Disposable fixture marker",
-                    }
-            if decision_check and "Native question fixture step." in joined_input and "question" not in dispatched_tools and "request_user_input" in advertised:
-                dispatched_tools.add("question")
-                tool = "request_user_input"
-                arguments = {"questions":[{"id":"choice","header":"Fixture","question":"Choose a fixture color",
-                    "options":[{"label":"Red","description":"First option"},{"label":"Blue","description":"Second option"}]}]}
             index = len(replies) + 1
             replies.append(index)
             ident = f"fixture-response-{index}"
@@ -84,17 +60,6 @@ def model_fixture(root, decision_check, alternate_check):
                     usage={"input_tokens":10,"output_tokens":4,"total_tokens":14,
                            "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}})})
             ]
-            if tool:
-                call = {"type":"function_call","id":f"fixture-item-{index}","name":tool,
-                        "call_id":f"fixture-call-{index}","arguments":json.dumps(arguments),"status":"completed"}
-                events = [
-                    ("response.created", {"response":response.copy()}),
-                    ("response.output_item.added", {"output_index":0,"item":call}),
-                    ("response.output_item.done", {"output_index":0,"item":call}),
-                    ("response.completed", {"response":dict(response,status="completed",output=[call],
-                        usage={"input_tokens":10,"output_tokens":4,"total_tokens":14,
-                        "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}})})
-                ]
             self.send_response(200)
             self.send_header("Content-Type","text/event-stream")
             self.end_headers()
@@ -116,18 +81,14 @@ def model_fixture(root, decision_check, alternate_check):
         f'base_url="http://127.0.0.1:{server.server_port}/v1"\nrequires_openai_auth=false\nsupports_websockets=false\n'
         f'[projects."{root}/work"]\ntrust_level="trusted"\n'
         '[tui]\nscreen_reader_detection_done=true\n[tui.model_availability_nux]\n"gpt-6.1-sol"=100\n')
-    if decision_check:
-        path = home/"config.toml"
-        path.write_text(path.read_text().replace('approval_policy="never"','approval_policy="on-request"') +
-            '\n[features]\ndefault_mode_request_user_input=true\n')
     (home/"config.toml").chmod(0o600)
     (home/"auth.json").write_text(json.dumps({"auth_mode":"apikey","OPENAI_API_KEY":"offline-fixture-only"}))
     (home/"auth.json").chmod(0o600)
-    return server,replies,interrupt_open,received_answer
+    return server,replies
 
 
-def drive(root, native, guard, loopback, resume_check=False, interrupt_check=False, history_check=False, decision_check=False, alternate_check=False):
-    model, replies, interrupt_open, received_answer = model_fixture(root, decision_check, alternate_check) if loopback else (None, [], None, None)
+def drive(root, native, guard, loopback, resume_check=False, history_check=False, alternate_check=False, reattach_check=False):
+    model, replies = model_fixture(root, alternate_check) if loopback else (None, [])
     daemon = None
     previous = {}
     try:
@@ -182,6 +143,59 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
             (root / "work/.fixture-seeded-rollout").touch()
         with (root / "daemon.log").open("wb") as log:
             daemon = start(log)
+            if reattach_check:
+                master, slave = pty.openpty()
+                fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack("HHHH",30,100,0,0))
+                standalone=subprocess.Popen([*guard,"/usr/bin/setsid","--ctty",root/"bin/codex","--no-daemon","--no-alt-screen","External Codex acquisition fixture."],
+                    cwd=root/"work",env=env,stdin=slave,stdout=slave,stderr=slave,umask=0o077)
+                os.close(slave)
+                terminal=bytearray()
+                def standalone_reply():
+                    if select.select([master],[],[],0.05)[0]:
+                        try:
+                            terminal.extend(os.read(master,8192))
+                        except OSError as exc:
+                            raise RuntimeError(f"standalone fixture PTY closed: {terminal[-1600:]!r}") from exc
+                    return b"Native loopback reply." in terminal
+                try:
+                    fixtures.wait_for(standalone_reply,"first reply from the external native CLI",timeout=20)
+                finally:
+                    if standalone.poll() is None:
+                        standalone.terminate()
+                        standalone.wait(timeout=5)
+                    os.close(master)
+                rollout, = list((native_home/"sessions").rglob("*.jsonl"))
+                with rollout.open() as f:
+                    external=json.loads(f.readline())["payload"]
+                assert external["source"]=="cli"
+                thread=external["id"]
+                cmd=("reattach","--cli","codex","--session",thread)
+                assert b"would reattach codex" in invoke(*cmd,"--dry-run")
+                invoke(*cmd,expected=1)
+                archive=native_home/"archived_sessions"
+                archive.mkdir(mode=0o700,exist_ok=True)
+                retired=archive/rollout.name
+                rollout.rename(retired)
+                assert b"unarchive before importing" in invoke(*cmd,"--all","--dry-run")
+                invoke(*cmd,"--all","--take-over",expected=1)
+                retired.rename(rollout)
+                assert json.loads(invoke("ls","--json"))==[]
+                imported=invoke(*cmd,"--take-over")
+                identity=imported.decode().splitlines()[0].split(" as ")[1]
+                row,=json.loads(invoke("ls","--json"))
+                assert row["id"]==identity
+                fixtures.wait_for(lambda:b"Native loopback reply." in invoke("peek",identity),
+                    "Swarm viewer displays the reply from an external native rollout",timeout=15)
+                state=root/"state/rust-v1"/identity.split("/")[1]
+                assert json.loads((state/"observation.json").read_text())["conversation_id"]==thread
+                with rollout.open() as f:
+                    observed_turns=sum(x["type"]=="event_msg" and x["payload"]["type"]=="task_started" for x in map(json.loads,f))
+                assert observed_turns==1
+                invoke(*cmd,"--take-over",expected=1)
+                invoke("kill",identity)
+                invoke("watch",identity,"--until","completed","--timeout","4s")
+                print("external native CLI stopped before reattach; dry-run, archive refusal, exact old thread, and duplicate writer fence passed")
+                return
             if not native:
                 operation = invoke("spawn", "--new-operation-id").decode().strip()
                 base = ("spawn", "--cli", "codex", "--dir", str(root / "work"), "--prompt", "none")
@@ -273,13 +287,10 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
                 fixtures.wait_for(lambda: json.loads(observation.read_text()).get("requests_available"),
                                   "joined native request stream")
                 fake_http("POST", "/fixture/request?scope=other")
-                assert json.loads(invoke("requests", identity)) == {"session": identity}
+                invoke("requests", identity, expected=1)
                 fake_http("POST", "/fixture/request")
-                fixtures.wait_for(lambda: json.loads(observation.read_text()).get("requests"),
-                                  "exact native request projection")
-                pending = json.loads(invoke("requests", identity))["requests"]
-                assert pending[0]["native_session_id"] == thread and pending[0]["request_id"] == "29"
-                print("structured request summaries fence events to the exact bound thread")
+                invoke("requests", identity, expected=1)
+                print("Codex keeps native requests in its own terminal")
 
             daemon.kill()
             daemon.wait(timeout=5)
@@ -305,61 +316,31 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
                 invoke("kill", conflict)
                 invoke("watch", conflict, "--until", "completed", "--timeout", "4s")
                 print("one native turn accepted across exact retries and supervisor replacement; cross-session reuse refused")
-            if decision_check:
-                fixtures.wait_for(lambda: json.loads(observation.read_text()).get("requests_available"),
-                                  "joined native observation before decisions")
-                def pending(kind):
-                    rows = json.loads(invoke("requests", identity)).get("requests", [])
-                    return next((row for row in rows if row["kind"]==kind), None)
-                def inspect(row,expected=0, overrides=None):
-                    request = ("--request-id",row["request_id"],"--native-session-id",row["native_session_id"])
-                    result = invoke("requests",identity,*request,expected=expected,overrides=overrides)
-                    return request,json.loads(result)["request"] if expected==0 else None
-                def decide(request, card, choice, *extra, expected=0, operation=None):
-                    args=("decide",identity,*request,"--request-hash",card["request_hash"],"--reply",choice,*extra)
-                    if operation:
-                        args+=("--operation-id",operation)
-                    result=invoke(*args,expected=expected)
-                    return json.loads(result) if expected==0 else None
-                invoke("send",identity,"--text","Native approval fixture step.")
-                approval=fixtures.wait_for(lambda: pending("permission"), "real Codex permission request", timeout=10)
-                request,card=inspect(approval)
-                inspect({**approval,"request_id":"forged-native-request"},expected=1)
-                decide(request,card,"always",expected=1)
-                assert not (root/"work/fixture-approval-marker").exists()
-                auth=decide(request,card,"once")
-                assert auth["state"]=="outcome_unknown" and "native_effect" not in auth,auth
-                fixtures.wait_for(lambda:(root/"work/fixture-approval-marker").is_file(),"native approved marker")
-                status=json.loads(invoke("decide",identity,"--status","--operation-id",auth["operation_id"]))
-                assert status==auth
-                decide(request,card,"once",expected=1)
-                fixtures.wait_for(lambda: json.loads(invoke("interrupt",identity,"--active")) is None,"first native decision settled")
-                invoke("send",identity,"--text","Native question fixture step.")
-                question=fixtures.wait_for(lambda:pending("question"),"real Codex question",timeout=10)
-                request,card=inspect(question)
-                decide(request,card,"answer","--answers",'[["Forged"]]',expected=1)
-                answer=decide(request,card,"answer","--answers",'[["Blue"]]')
-                assert answer["state"]=="outcome_unknown" and "native_effect" not in answer,answer
-                assert received_answer.wait(12), "real Codex did not feed the selected value to the model"
-                daemon.kill()
-                daemon.wait(timeout=5)
-                daemon = start(log)
-                assert json.loads((state/"owner.json").read_text())==owner
-                assert json.loads(invoke("decide",identity,"--status","--operation-id",answer["operation_id"]))==answer
-                print("owner answered installed Codex approval and question, fencing forged scope and stale request")
             if history_check:
+                def history_page(limit=1, before=""):
+                    with socket.socket(socket.AF_UNIX) as conn:
+                        conn.settimeout(4)
+                        conn.connect(env["SWARM_DAEMON_SOCK"])
+                        control(conn,"hello",endpoint_id="",protocol_version=1,capabilities=["journal"])
+                        hello=read_control(conn)
+                        assert "journal" in hello["capabilities"]
+                        control(conn,"interaction_history",endpoint_id=hello["endpoint_id"],session_id=identity,
+                            history={"session":identity,"limit":limit,"before_item":before})
+                        page=read_control(conn)
+                        assert page["op"]=="interaction_history"
+                        return page
                 def latest():
-                    page = json.loads(invoke("history", identity, "--limit", "1"))
+                    page = history_page()
                     return page if page["journal"] and page["journal"][-1]["item"]["kind"]=="agent_message" else None
                 current = fixtures.wait_for(latest, "durable native history")
                 reply, = current["journal"]
                 assert not current["history_floor"] and reply["item"]["kind"]=="agent_message"
                 assert reply["item"]["text"]=="Native loopback reply."
-                older = json.loads(invoke("history", identity, "--limit", "1", "--before", reply["item"]["item_id"]))
+                older = history_page(before=reply["item"]["item_id"])
                 user, = older["journal"]
                 assert older["history_floor"] and user["item"]["text"]=="Return the fixed local fixture response."
                 assert user["cursor"] < reply["cursor"]
-                missing = json.loads(invoke("history", identity, "--before", "forged-item"))
+                missing = history_page(before="forged-item")
                 assert missing["history_floor"] and missing["journal"] == []
                 ctx = json.loads(invoke("--pilot"))["context"]
                 pilot = ("pilot", "--context", ctx)
@@ -370,24 +351,6 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
                 assert len(watched)==2 and watched[-1]["worker_data"]["item"]==reply["item"],watched
                 invoke(*pilot,"exit")
                 print("owner paginated the retained native turn; Pilot read and replayed the verified reply")
-            if interrupt_check:
-                fixtures.wait_for(lambda: json.loads(observation.read_text()).get("requests_available"),
-                                  "joined native observation before interrupt")
-                invoke("send", identity, "--text", "Hold this synthetic turn for interrupt.")
-                turn = fixtures.wait_for(
-                    lambda: json.loads(invoke("interrupt", identity, "--active")),
-                    "native active turn", timeout=15)
-                invoke("interrupt", identity, "--expected-turn", "forged-turn", expected=1)
-                assert json.loads(invoke("interrupt", identity, "--active")) == turn
-                invoke("interrupt", identity, "--expected-turn", turn)
-                assert json.loads(invoke("interrupt", identity, "--active")) is None
-                daemon.kill()
-                daemon.wait(timeout=5)
-                daemon = start(log)
-                assert json.loads((state / "owner.json").read_text()) == owner
-                invoke("interrupt", identity, "--expected-turn", turn)
-                interrupt_open.set()
-                print("owner interrupted the exact native turn, refused a forged turn and replayed the receipt")
             invoke("kill", identity)
             assert json.loads(invoke("watch", identity, "--until", "completed", "--timeout", "4s"))["group"] == "completed"
             print("managed Codex worker and exact native thread survived owner restart")
@@ -512,7 +475,6 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
             daemon.terminate()
             daemon.wait(timeout=4)
         if model:
-            interrupt_open.set()
             model.shutdown()
             model.server_close()
         cleanup = fixtures.reap(root, None, previous)
@@ -520,7 +482,7 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
         if cleanup["remaining"]:
             raise RuntimeError(f"fixture processes survived cleanup at {root}")
 
-def verify(candidate, provider, native, scratch, loopback, resume_check=False, interrupt_check=False, history_check=False, decision_check=False, alternate_check=False):
+def verify(candidate, provider, native, scratch, loopback, resume_check=False, history_check=False, alternate_check=False, reattach_check=False):
     root = Path(tempfile.mkdtemp(prefix="sc-", dir=scratch))
     success = False
     try:
@@ -542,7 +504,7 @@ def verify(candidate, provider, native, scratch, loopback, resume_check=False, i
             (home / "config.toml").write_text(f'[projects."{root}/work"]\ntrust_level = "trusted"\n')
         guard = fixtures.guard(root)
         if sys.platform == "darwin":
-            drive(root, native, guard, loopback, resume_check, interrupt_check, history_check, decision_check, alternate_check)
+            drive(root, native, guard, loopback, resume_check, history_check, alternate_check, reattach_check)
         else:
             if resume_check:
                 system = root/"system-policy"
@@ -556,14 +518,12 @@ def verify(candidate, provider, native, scratch, loopback, resume_check=False, i
                 command.append("--loopback-model")
             if resume_check:
                 command.append("--resume-check")
-            if interrupt_check:
-                command.append("--interrupt-check")
             if history_check:
                 command.append("--history-check")
-            if decision_check:
-                command.append("--decision-check")
             if alternate_check:
                 command.append("--alternate-check")
+            if reattach_check:
+                command.append("--reattach-check")
             subprocess.run(command, cwd=root/"work",env=fixtures.environment(root),timeout=150,check=True)
         success = True
     finally:
@@ -585,26 +545,23 @@ if __name__ == "__main__":
     parser.add_argument("--scratch", type=Path, default=Path("/tmp").resolve())
     parser.add_argument("--isolated-root", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--resume-check",action="store_true")
-    parser.add_argument("--interrupt-check",action="store_true")
     parser.add_argument("--history-check",action="store_true")
-    parser.add_argument("--decision-check",action="store_true")
     parser.add_argument("--alternate-check",action="store_true")
+    parser.add_argument("--reattach-check",action="store_true")
     args = parser.parse_args()
+    if args.reattach_check and (not args.loopback_model or sys.platform!="linux"):
+        parser.error("--reattach-check requires private Linux loopback inference")
     if args.alternate_check and not args.resume_check:
         parser.error("--alternate-check requires --resume-check")
     if args.resume_check and not args.loopback_model:
         parser.error("--resume-check requires --loopback-model")
-    if args.interrupt_check and (not args.loopback_model or args.resume_check):
-        parser.error("--interrupt-check requires a separate --loopback-model run")
-    if args.decision_check and not args.loopback_model:
-        parser.error("--decision-check requires --loopback-model")
     if args.history_check and not args.loopback_model:
         parser.error("--history-check requires --loopback-model")
     if args.loopback_model and (not args.native or sys.platform not in ("linux","darwin")):
         parser.error("--loopback-model requires Linux or macOS and --native")
     if args.isolated_root and not args.candidate and Path(__file__).resolve().parent == args.isolated_root/"bin":
-        drive(args.isolated_root, args.native, [], args.loopback_model,args.resume_check,args.interrupt_check,args.history_check,args.decision_check,args.alternate_check)
+        drive(args.isolated_root, args.native, [], args.loopback_model,args.resume_check,args.history_check,args.alternate_check,args.reattach_check)
     elif args.candidate and args.provider and not args.isolated_root:
-        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model,args.resume_check,args.interrupt_check,args.history_check,args.decision_check,args.alternate_check)
+        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model,args.resume_check,args.history_check,args.alternate_check,args.reattach_check)
     else:
         parser.error("--candidate and --provider are required")

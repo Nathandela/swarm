@@ -46,7 +46,7 @@ struct State {
     token: String,
     hook_token: String,
     provider: String,
-    semantic: Option<SyncSender<codex_backend::Action>>,
+    semantic: Option<SyncSender<codex_backend::SemanticAction>>,
     agy_broker: Option<agy_input::Broker>,
     claude_broker: Option<Arc<providers::claude_input::Broker>>,
     schedule: Option<worker::Binding>,
@@ -359,6 +359,16 @@ fn serve(dir: &Path) -> io::Result<()> {
             use providers::codex_continuity;
             let cwd=Path::new(working_dir);
             let restored=&config["codex_resume"];
+            let same_rollout=|profile:&Value| -> io::Result<bool> {
+                let home=Path::new(field(profile,"native_home"));
+                let thread=field(restored,"thread");
+                if restored["external_rollout"].is_object() {
+                    Ok(codex_continuity::discover_external(home,true,thread)?
+                        .first()==Some(&restored["external_rollout"]))
+                } else {
+                    Ok(codex_continuity::rollout(home,cwd,thread)?==restored["rollout"])
+                }
+            };
             let profile=codex_continuity::profile(&environment,cwd,&config["codex_options"]);
             if let Ok(profile)=&profile{
                 runtime::write_json(&dir.join("codex-profile.json"),&json!({"token":token,"profile":profile}))?;
@@ -366,7 +376,7 @@ fn serve(dir: &Path) -> io::Result<()> {
             if restored.is_object() {
                 let profile=profile?;
                 if profile!=restored["profile"] ||
-                    codex_continuity::rollout(Path::new(field(&profile,"native_home")),cwd,field(restored,"thread"))?!=restored["rollout"]
+                    !same_rollout(&profile)?
                     || !argv.as_slice().starts_with(&["resume".into(),field(restored,"thread").into()])
                 {
                     return Err(io::Error::other("Codex resume profile, rollout or argument custody changed"));
@@ -388,7 +398,7 @@ fn serve(dir: &Path) -> io::Result<()> {
             )?;
             backend = Some(owner);
             if restored.is_object(){
-                if codex_continuity::profile(&environment,cwd,&config["codex_options"])?!=restored["profile"]{
+                if codex_continuity::profile(&environment,cwd,&config["codex_options"])?!=restored["profile"] || !same_rollout(&restored["profile"])?{
                     return Err(io::Error::other("Codex resume authority changed during app-server startup"));
                 }
                 connection.bind_resume(field(restored,"thread"),cwd)?;
@@ -1034,84 +1044,6 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             };
             runtime::write_control(&mut stream, &response)
         }
-        "codex_request" | "codex_decide" => {
-            let result = (|| {
-                if state.manager
-                    || state.schedule.is_some()
-                    || request["session_instance"] != codex_receipt::instance(&state.token)
-                {
-                    return Err(io::Error::other("invalid Codex decision authority"));
-                }
-                let sender = state
-                    .semantic
-                    .as_ref()
-                    .ok_or_else(|| io::Error::other("Codex app-server is unavailable"))?;
-                let (answer, response) = mpsc::sync_channel(1);
-                let action = if request["type"] == "codex_request" {
-                    codex_backend::Action::Request {
-                        session: field(&request, "session").into(),
-                        request: field(&request, "request_id").into(),
-                        native: field(&request, "native_session_id").into(),
-                        answer,
-                    }
-                } else {
-                    codex_backend::Action::Decide {
-                        operation: field(&request, "operation_id").into(),
-                        body: request["body"].clone(),
-                        expires: Instant::now() + Duration::from_secs(2),
-                        answer,
-                    }
-                };
-                sender
-                    .try_send(action)
-                    .map_err(|_| io::Error::other("Codex decision lane is unavailable"))?;
-                response
-                    .recv_timeout(Duration::from_secs(7))
-                    .map_err(|_| io::Error::other("Codex decision outcome is unknown"))?
-            })();
-            runtime::write_control(
-                &mut stream,
-                &match result {
-                    Ok(body) => json!({"type":"codex_decision_result","body":body}),
-                    Err(err) => json!({"type":"error","error":err.to_string()}),
-                },
-            )
-        }
-        "codex_interrupt" => {
-            let result = (|| {
-                let turn = field(&request, "expected_turn");
-                if state.manager
-                    || state.schedule.is_some()
-                    || !request["session_instance"]
-                        .eq(&json!(codex_receipt::instance(&state.token)))
-                    || turn.is_empty()
-                    || turn.len() > 128
-                    || turn.chars().any(char::is_control)
-                {
-                    return Err(io::Error::other("invalid Codex interrupt authority"));
-                }
-                let sender = state
-                    .semantic
-                    .as_ref()
-                    .ok_or_else(|| io::Error::other("Codex app-server is unavailable"))?;
-                let (answer, response) = mpsc::sync_channel(1);
-                sender
-                    .try_send(codex_backend::Action::Interrupt {
-                        expected: turn.into(),
-                        expires: Instant::now() + Duration::from_secs(2),
-                        answer,
-                    })
-                    .map_err(|_| io::Error::other("Codex native control lane is unavailable"))?;
-                response
-                    .recv_timeout(Duration::from_secs(7))
-                    .map_err(|_| io::Error::other("Codex interrupt outcome is unknown"))?
-            })();
-            let response = match result {
-                Ok(body) => json!({"type":"codex_interrupt","body":body}),
-                Err(err) => json!({"type":"error","error":err.to_string()}),
-            };
-            runtime::write_control(&mut stream, &response)
-        }
         "semantic" => {
             let operation = field(&request, "operation_id");
             let text = field(&request, "text");
@@ -1144,7 +1076,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     .ok_or_else(|| io::Error::other("Codex app-server is unavailable"))?;
                 let (answer, response) = mpsc::sync_channel(1);
                 sender
-                    .try_send(codex_backend::Action::Send(codex_backend::SemanticAction {
+                    .try_send(codex_backend::SemanticAction {
                         operation: operation.into(),
                         session: session.into(),
                         text: text.into(),
@@ -1152,7 +1084,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         composer: request["composer_send"].clone(),
                         answer,
                         not_after: Instant::now() + Duration::from_secs(2),
-                    }))
+                    })
                     .map_err(|_| io::Error::other("Codex native input lane is unavailable"))?;
                 response
                     .recv_timeout(Duration::from_secs(6))
