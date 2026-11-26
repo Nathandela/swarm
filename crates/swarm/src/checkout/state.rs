@@ -15,7 +15,7 @@ use std::{
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 mod connectors;
-mod receipts;
+pub(crate) mod receipts;
 pub(super) use connectors::connectors;
 
 pub(super) fn directory(path: &Path) -> io::Result<()> {

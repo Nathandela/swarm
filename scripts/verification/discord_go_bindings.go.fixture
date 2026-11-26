@@ -1,0 +1,25 @@
+// Install in internal/discord of the disposable pinned Go repository.
+package discord
+
+import (
+	"path/filepath"
+
+	bolt "go.etcd.io/bbolt"
+)
+
+func FixtureOpenRead(dir string) (*Store, error) {
+	db, err := bolt.Open(filepath.Join(dir, "discord.db"), 0600, &bolt.Options{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	return &Store{db: db}, nil
+}
+
+func (s *Store) FixtureBind(d TeammateDiscussion) error {
+	return s.teammateBind(teammateBinding{TeammateDiscussion: d, Opened: true})
+}
+
+func (s *Store) FixtureBinding(install, id string) (TeammateDiscussion, error) {
+	row, err := s.teammateBindingByID(install, id)
+	return row.TeammateDiscussion, err
+}

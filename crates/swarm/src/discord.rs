@@ -22,10 +22,12 @@ mod doctor;
 pub(crate) mod enrolled_worker;
 mod gateway;
 mod guild;
+mod legacy_state;
 pub(crate) mod linked_board;
 mod local;
 mod mail_wake;
 mod manager;
+mod migrate_supervisor;
 pub(crate) mod provenance;
 mod receipt;
 mod received_files;
@@ -58,7 +60,7 @@ pub(crate) fn check_packaged_media() -> u8 {
     }
 }
 
-const USAGE: &str = "swarm discord connect|migrate-supervisor|run|status|doctor|stop-call|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'";
+const USAGE: &str = "swarm discord connect|migrate-state|migrate-supervisor|run|status|doctor|stop-call|resume-manual <discussion> --session ID --instance INSTANCE --external-input COUNT|disconnect|exclude <target>|include <target>|context <ref>|reply <ref> --body-file <file>|propose <ref> --candidate-ids '[\"target\"]'";
 
 pub(crate) fn manager_nonce(
     discussion: &str,
@@ -388,6 +390,10 @@ impl<'a> Request<'a> {
                     "receptionist-model",
                 ]
             }
+            "migrate-state" => {
+                flags = &["dry-run", "rollback"];
+                &[]
+            }
             "migrate-supervisor" => {
                 flags = &["dry-run"];
                 &["from-state-dir", "from-socket", "from-lock", "from-log"]
@@ -517,15 +523,20 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
     let place = Place::resolve(req.get("state-dir"))?;
     match req.command {
         "connect" => return connect(req, place),
+        "migrate-state" => {
+            return legacy_state::migrate(&place, req.on("dry-run"), req.on("rollback"));
+        }
         "disconnect" => {
             unit::disconnect(&place)?;
             println!("Discord connector disconnected.");
             return Ok(true);
         }
         "migrate-supervisor" => {
-            return Err(io::Error::other(
-                "supervisor migration is unavailable in this Rust build",
-            ));
+            return migrate_supervisor::migrate(
+                &place,
+                req.on("dry-run"),
+                ["from-state-dir", "from-socket", "from-lock", "from-log"].map(|key| req.get(key)),
+            );
         }
         _ => {}
     }

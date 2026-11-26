@@ -1,6 +1,6 @@
 //! Read-only checkout ownership report across explicit local supervisor and connector roots.
 mod git;
-mod state;
+pub(crate) mod state;
 use crate::{flags, ipc, supervisor};
 use serde::Serialize;
 use serde_json::Value;

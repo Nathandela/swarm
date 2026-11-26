@@ -1,0 +1,116 @@
+// Build inside a disposable copy of the pinned Go repository.
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"time"
+
+	"github.com/Nathandela/swarm/internal/discord"
+	"github.com/Nathandela/swarm/internal/teammatemanager"
+	bolt "go.etcd.io/bbolt"
+)
+
+func check(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+func main() {
+	action, dir := os.Args[1], os.Args[2]
+	target := discord.Target{ID: "ep-fixture/worker", Instance: "fixture-instance"}
+	if action == "create" {
+		root, mode := os.Args[3], os.Args[4]
+		enabled, err := strconv.ParseBool(os.Args[5])
+		check(err)
+		check(os.MkdirAll(dir, 0700))
+		token := filepath.Join(dir, "fixture-token")
+		check(os.WriteFile(token, []byte("synthetic-unused-credential\n"), 0600))
+		cfg := discord.Config{Version: 1, Enabled: enabled, Name: "fixture", Mode: mode,
+			InstallationID: "fixture-" + mode, ApplicationID: "100", OwnerID: "200",
+			ManagerCLI: "codex", TokenFile: token, DaemonSocket: filepath.Join(root, "daemon.sock"),
+			WorkDir: root, Supervisor: &discord.SupervisorPaths{StateDir: root, Lock: filepath.Join(root, "daemon.lock"), Log: filepath.Join(root, "daemon.log")}}
+		if mode == "teammate" {
+			cfg.GuildIDs = []string{"300"}
+		} else {
+			cfg.DMChannelID = "400"
+		}
+		check(discord.SaveConfig(dir, cfg))
+		check(discord.SelectState(root, dir))
+		store, err := discord.OpenStore(dir)
+		check(err)
+		check(store.SetOptOut(target, true))
+		check(store.Close())
+		return
+	}
+	if action == "pending" {
+		db, err := bolt.Open(filepath.Join(dir, "discord.db"), 0600, nil)
+		check(err)
+		check(db.Update(func(tx *bolt.Tx) error {
+			return tx.Bucket([]byte("teammate_pending")).Put([]byte("fixture\000pending"), []byte("fixture-ingress"))
+		}))
+		check(db.Close())
+		return
+	}
+	open := discord.OpenStore
+	if action == "route" || action == "read" || action == "traffic-read" {
+		open = discord.FixtureOpenRead
+	}
+	store, err := open(dir)
+	check(err)
+	defer store.Close()
+	switch action {
+	case "bind":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		id, channel := os.Args[3], os.Args[4]
+		var socket string
+		if len(os.Args) == 6 {
+			socket = os.Args[5]
+		}
+		route := discord.Route{GuildID: "300", ChannelID: channel, MessageID: "500"}
+		check(store.FixtureBind(discord.TeammateDiscussion{ID: id, InstallationID: cfg.InstallationID,
+			Route: route, Starter: route, SupervisorSocket: socket}))
+	case "route":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
+		check(err)
+		endpoint, socket, state, err := teammatemanager.FixtureSupervisor(cfg, row)
+		check(err)
+		fmt.Println(endpoint, socket, state)
+
+	case "traffic":
+		phase := os.Args[3]
+		now := time.Now().UTC()
+		request := discord.Request{EventID: "event-" + phase, MessageRevision: "revision", EventAt: now,
+			Author: discord.Actor{ID: "200", Name: "synthetic"}, Authority: discord.AuthorityExternal,
+			Route:  discord.Route{GuildID: "300", ChannelID: "400", MessageID: "500"},
+			Target: discord.Target{ID: "ep-fixture/another-worker", Instance: "fixture-live"},
+			Text:   "synthetic-unused-credential"}
+		row, fresh, err := store.Admit(request, now)
+		check(err)
+		if !fresh {
+			panic("fixture was already prepared")
+		}
+		_, fresh, err = store.BeginDelivery(row.Ref, now)
+		check(err)
+		if !fresh {
+			panic("fixture was already submitted")
+		}
+		check(store.FinishDelivery(row.Ref, phase, "synthetic-outcome"))
+	case "traffic-read":
+		row, err := store.ExistingEvent("event-"+os.Args[3], time.Now().UTC())
+		check(err)
+		fmt.Println(row.DeliveryState)
+	case "change":
+		check(store.SetOptOut(target, false))
+	case "read":
+		out, err := store.IsOptedOut(target)
+		check(err)
+		fmt.Println(out)
+	}
+}
