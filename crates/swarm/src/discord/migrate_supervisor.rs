@@ -1,5 +1,5 @@
 //! Keep the original Go connector ledger while moving its default routing home.
-use super::config::{Config, Place};
+use super::config::{Config, Place, open_owner_file};
 use crate::{
     checkout::state::receipts::open_bolt,
     ipc,
@@ -7,7 +7,11 @@ use crate::{
 };
 use bbolt_rs::{DbApi, TxApi};
 use serde_json::{Value, json};
-use std::os::fd::AsRawFd;
+use std::io::Read;
+use std::os::{
+    fd::AsRawFd,
+    unix::fs::{FileTypeExt, MetadataExt},
+};
 use std::{
     fs, io,
     path::{Component, Path, PathBuf},
@@ -29,15 +33,88 @@ fn real_endpoint(root: &Path) -> io::Result<String> {
     let canonical = fs::canonicalize(root)?;
     Ok(supervisor::endpoint(&canonical))
 }
-fn live(root: &Path, socket: &Path) -> io::Result<String> {
+#[cfg(target_os = "linux")]
+fn peer_executable(pid: u32) -> io::Result<PathBuf> {
+    fs::read_link(format!("/proc/{pid}/exe"))
+}
+#[cfg(target_os = "macos")]
+fn peer_executable(pid: u32) -> io::Result<PathBuf> {
+    let mut bytes = [0u8; 4096];
+    let count = unsafe {
+        libc::proc_pidpath(
+            pid as libc::c_int,
+            bytes.as_mut_ptr().cast(),
+            bytes.len() as u32,
+        )
+    };
+    if count <= 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let n = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(count as usize);
+    Ok(PathBuf::from(
+        std::str::from_utf8(&bytes[..n]).map_err(io::Error::other)?,
+    ))
+}
+fn live(root: &Path, socket: &Path, lock: &Path) -> io::Result<String> {
     let endpoint = real_endpoint(root)?;
+    let identity = fs::symlink_metadata(socket)?;
+    if !identity.file_type().is_socket()
+        || identity.uid() != unsafe { libc::geteuid() }
+        || identity.mode() & 0o077 != 0
+    {
+        return Err(io::Error::other(
+            "supervisor socket has no private owner proof",
+        ));
+    }
     let mut client = ipc::Client::dial(socket, &[])?;
     if client.endpoint() != endpoint {
         return Err(io::Error::other(
             "socket answered for a different supervisor",
         ));
     }
+    let pid = runtime::peer_pid(client.stream())?;
+    let birth = runtime::birth(pid)?;
+    match open_owner_file(&root.join("daemon.pid")) {
+        Ok(file) => {
+            let mut body = String::new();
+            file.take(128).read_to_string(&mut body)?;
+            let parts: Vec<_> = body.split_whitespace().collect();
+            if !matches!(parts.as_slice(),[p,b] if p.parse::<u32>()==Ok(pid)&&b.parse::<u64>()==Ok(birth))
+            {
+                return Err(io::Error::other(
+                    "Go daemon PID proof disagrees with the supervisor socket",
+                ));
+            }
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            let own = fs::metadata(std::env::current_exe()?)?;
+            let peer = fs::metadata(peer_executable(pid)?)?;
+            if (own.dev(), own.ino()) != (peer.dev(), peer.ino()) {
+                return Err(io::Error::other(
+                    "supervisor executable identity is unverified",
+                ));
+            }
+        }
+        Err(e) => return Err(e),
+    }
+    let lock = open_owner_file(lock)?;
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0
+        || io::Error::last_os_error().kind() != io::ErrorKind::WouldBlock
+    {
+        return Err(io::Error::other("supervisor owner lock is not held"));
+    }
     client.sessions()?;
+    let after = fs::symlink_metadata(socket)?;
+    if runtime::birth(pid)? != birth
+        || (after.dev(), after.ino()) != (identity.dev(), identity.ino())
+    {
+        return Err(io::Error::other(
+            "supervisor owner changed during verification",
+        ));
+    }
     Ok(endpoint)
 }
 
@@ -171,8 +248,8 @@ fn plan(place: &Place, explicit: [Option<&str>; 4]) -> io::Result<Plan> {
         ));
     }
     let old_socket = path(&previous, "socket")?;
-    let actual_old = live(&original, old_socket)?;
-    let actual_new = live(&home, &socket)?;
+    let actual_old = live(&original, old_socket, path(&previous, "lock")?)?;
+    let actual_new = live(&home, &socket, &lock)?;
     if previous["endpoint"] != actual_old {
         return Err(io::Error::other(
             "saved original supervisor endpoint disagrees with its owner",
@@ -248,7 +325,10 @@ pub(super) fn migrate(
     if first.cfg.0 != next.cfg.0 || first.home != next.home || first.original != next.original {
         return Err(io::Error::other("supervisor migration plan changed"));
     }
-    runtime::write_json(&place.dir.join("config.json"), &next.cfg.0)?;
+    if place.load()?.0 != next.cfg.0 {
+        runtime::write_json(&place.dir.join("config.json"), &next.cfg.0)?;
+    }
+    fs::File::open(&place.dir)?.sync_all()?;
     // Pinned Go keeps old unset-route records on the previous supervisor.
     // Configuration first preserves that fence if selector publication is interrupted.
     runtime::write_json(

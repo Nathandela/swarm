@@ -28,12 +28,13 @@ def inspect(go, rust, fixture, base):
     for mode in ("personal", "teammate"):
         connector = base / ("dormant-" + mode)
         run(fixture, env, "create", connector, original, mode, "false")
+        run(fixture, env, "traffic", connector, "sent")
         pieces = ["discord", "migrate-state", "--state-dir", connector]
         protected = {name: (connector / name).read_bytes() for name in ("discord.db", "config.json", old_exclude)}
         before = sorted(p.name for p in connector.iterdir())
         preview = json.loads(run(rust, env, *pieces, "--dry-run"))
         assert preview["eligible"] and preview["inventory"]["mode"] == mode
-        assert preview["inventory"]["exclusions"] == 1 and not preview["gateway_authority"]
+        assert preview["inventory"]["exclusions"] == 1 and preview["inventory"]["settled"] == 1 and not preview["gateway_authority"]
         assert before == sorted(p.name for p in connector.iterdir())
         adopted = json.loads(run(rust, env, *pieces))
         assert adopted["state"] == "retained"
@@ -42,6 +43,7 @@ def inspect(go, rust, fixture, base):
         assert undone["state"] == "rolled_back" and not undone["gateway_authority"]
         assert protected == {name: (connector / name).read_bytes() for name in protected}
         assert run(fixture, env, "read", connector).strip() == "true"
+        assert run(fixture, env, "traffic-read", connector, "sent").strip() == "sent"
         run(fixture, env, "change", connector)
         assert run(fixture, env, "read", connector).strip() == "false"
         changed = json.loads(run(rust, env, *pieces, "--dry-run", code=1))
@@ -49,14 +51,17 @@ def inspect(go, rust, fixture, base):
     unsafe = base / "pending"
     run(fixture, env, "create", unsafe, original, "teammate", "false")
     run(fixture, env, "pending", unsafe)
+    run(fixture, env, "traffic", unsafe, "uncertain")
     before = (unsafe / "discord.db").read_bytes()
     blocked = json.loads(run(rust, env, "discord", "migrate-state", "--state-dir", unsafe, code=1))
-    assert blocked["inventory"]["unresolved"] == 1 and not blocked["eligible"]
+    assert blocked["inventory"]["unresolved"] == 2 and not blocked["eligible"]
     assert before == (unsafe / "discord.db").read_bytes()
     assert not (unsafe / ".rust-go-discord-retained.json").exists()
 
     active = base / "transition"
     run(fixture, env, "create", active, original, "personal", "true")
+    run(fixture, env, "traffic", active, "sent")
+    run(fixture, env, "traffic", active, "uncertain")
     protected = {name: (active / name).read_bytes() for name in ("discord.db", old_exclude)}
     config = active / "config.json"
     old_selector = original / "discord-active.json"
@@ -64,11 +69,19 @@ def inspect(go, rust, fixture, base):
     original_config = disk(config)
     original_selection = old_selector.read_bytes()
     command = ["discord","migrate-supervisor","--state-dir",active]
-    # The supervisors are real Go daemons; the connector stays offline.
-    with daemon(go, old_env, base/"old.log"), daemon(go, env, base/"new.log"):
+    # The original Go and new Rust supervisors are real; the connector stays offline.
+    with daemon(go, old_env, base/"old.log"), daemon(rust, env, base/"new.log"):
         assert run(rust, env, *command, "--dry-run") == run(go, env, *command, "--dry-run")
         assert disk(config) == original_config and not new_selector.exists()
         run(rust, env, *command, "--from-state-dir", original, code=1)
+        pidfile = original / "daemon.pid"
+        actual = pidfile.read_bytes()
+        try:
+            pid, birth = actual.split()
+            pidfile.write_bytes(pid + b" " + str(int(birth) + 1).encode() + b"\n")
+            run(rust, env, *command, "--dry-run", code=1)
+        finally:
+            pidfile.write_bytes(actual)
         assert disk(config) == original_config and not new_selector.exists()
         run(rust, env, *command)
         result = disk(config)
@@ -83,6 +96,8 @@ def inspect(go, rust, fixture, base):
         assert run(go, env, *command, "--dry-run") == run(rust, env, *command, "--dry-run")
         assert protected == {name: (active / name).read_bytes() for name in protected}
     assert run(fixture, env, "read", active).strip() == "true"
+    assert run(fixture, env, "traffic-read", active, "sent").strip() == "sent"
+    assert run(fixture, env, "traffic-read", active, "uncertain").strip() == "uncertain"
     print("PASS Go-made Discord personal/team retained evidence, rollback, and verified original/default supervisor split")
 
 

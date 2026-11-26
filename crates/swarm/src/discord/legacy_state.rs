@@ -160,6 +160,10 @@ fn inspect(
     let (pin, db) = open_bolt(&path, 64 << 20)?;
     let tx = db.begin().map_err(io::Error::other)?;
     let mut count = 0;
+    let mut expected_events = BTreeMap::new();
+    let mut expected_operations = BTreeMap::new();
+    let mut actual_events = BTreeMap::new();
+    let mut actual_operations = BTreeMap::new();
     for (name, bucket) in tx.iter_buckets() {
         let name = std::str::from_utf8(name).map_err(io::Error::other)?;
         if report.buckets.len() >= 64 || Instant::now() >= end {
@@ -195,14 +199,55 @@ fn inspect(
                         report.exclusions += 1;
                     }
                 }
-                "requests" | "publications" => {
+                "requests" => {
                     let value: Value = serde_json::from_slice(value)?;
-                    let phase = if name == "requests" {
-                        field(&value["request"], "delivery_state")
+                    let request = &value["request"];
+                    let reference = field(request, "ref");
+                    let event = field(request, "event_id");
+                    let operation = field(request, "operation_id");
+                    if reference.is_empty()
+                        || reference.as_bytes() != key
+                        || event.is_empty()
+                        || operation.is_empty()
+                        || expected_events
+                            .insert(event.to_owned(), reference.to_owned())
+                            .is_some()
+                        || expected_operations
+                            .insert(operation.to_owned(), reference.to_owned())
+                            .is_some()
+                    {
+                        return Err(io::Error::other("unverified retained Go request identity"));
+                    }
+                    if matches!(field(request, "delivery_state"), "sent" | "failed") {
+                        report.settled += 1;
                     } else {
-                        field(&value, "state")
-                    };
-                    if matches!(phase, "sent" | "failed") {
+                        report.unresolved += 1;
+                    }
+                }
+                "events" | "operations" => {
+                    let reference = serde_json::from_slice::<String>(value)?;
+                    if name == "events" {
+                        actual_events.insert(serde_json::from_slice::<String>(key)?, reference);
+                    } else {
+                        actual_operations.insert(
+                            std::str::from_utf8(key)
+                                .map_err(io::Error::other)?
+                                .to_owned(),
+                            reference,
+                        );
+                    }
+                }
+                "publications" => {
+                    let value: Value = serde_json::from_slice(value)?;
+                    let identity = serde_json::from_slice::<[String; 2]>(key)?;
+                    if identity[0] != field(&value, "request_ref")
+                        || identity[1] != field(&value, "id")
+                    {
+                        return Err(io::Error::other(
+                            "unverified retained Go publication identity",
+                        ));
+                    }
+                    if matches!(field(&value, "state"), "sent" | "failed") {
                         report.settled += 1;
                     } else {
                         report.unresolved += 1;
@@ -212,6 +257,11 @@ fn inspect(
             }
         }
         report.buckets.insert(name.to_owned(), rows);
+    }
+    if actual_events != expected_events || actual_operations != expected_operations {
+        report
+            .issues
+            .push("retained request replay indexes disagree with their original receipts".into());
     }
     for known in KNOWN.iter().take(17) {
         if !report.buckets.contains_key(*known) {
