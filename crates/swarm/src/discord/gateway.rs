@@ -21,8 +21,17 @@ pub(super) fn probe(config: &Config) -> io::Result<&'static str> {
 pub(super) type Connection = WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
 
 pub(super) fn open(config: &Config) -> io::Result<(Connection, Cursor)> {
-    with_team_intents(config, |team| open_once(config, team))
+    with_team_intents(config, |team| {
+        open_once(config, intents(config, team), team)
+    })
 }
+
+pub(super) fn open_observer(config: &Config) -> io::Result<(Connection, Cursor)> {
+    open_once(config, OBSERVER_INTENTS, false)
+}
+
+// GUILDS and GUILD_MESSAGES without direct messages or privileged content.
+pub(super) const OBSERVER_INTENTS: u64 = 1 | 1 << 9;
 
 fn team_calls(config: &Config) -> bool {
     config.text("mode") == "teammate" && config.0["calls"]["mode"] == "team"
@@ -41,7 +50,7 @@ fn with_team_intents<T>(
     }
 }
 
-fn open_once(config: &Config, team: bool) -> io::Result<(Connection, Cursor)> {
+fn open_once(config: &Config, intents: u64, team: bool) -> io::Result<(Connection, Cursor)> {
     let token = load_token(Path::new(config.text("token_file")))?;
     let timeout = Instant::now() + TIMEOUT;
     let mut stream = None;
@@ -63,7 +72,7 @@ fn open_once(config: &Config, team: bool) -> io::Result<(Connection, Cursor)> {
         .max_frame_size(Some(MAX_FRAME));
     let (mut socket, _) = client_tls_with_config(URL, stream, Some(limits), None)
         .map_err(|_| io::Error::other("Discord Gateway TLS or WebSocket handshake failed"))?;
-    let cursor = ready_with(&mut socket, config, &token, team)?;
+    let cursor = ready_with(&mut socket, config, &token, intents, team)?;
     if config.0["calls"].is_object() {
         use tungstenite::stream::MaybeTlsStream;
         match socket.get_mut() {
@@ -146,13 +155,28 @@ pub(super) fn ready(
     config: &Config,
     token: &str,
 ) -> io::Result<Cursor> {
-    ready_with(socket, config, token, team_calls(config))
+    let team = team_calls(config);
+    ready_with(socket, config, token, intents(config, team), team)
 }
 
-fn ready_with(
+fn intents(config: &Config, team: bool) -> u64 {
+    if config.text("mode") == "personal" {
+        1 << 12
+            | if config.0["calls"].is_object() {
+                1 | 1 << 7
+            } else {
+                0
+            }
+    } else {
+        OBSERVER_INTENTS | (1 << 12) | (1 << 15) | if team { (1 << 7) | (1 << 1) } else { 0 }
+    }
+}
+
+pub(super) fn ready_with(
     socket: &mut WebSocket<impl Read + Write>,
     config: &Config,
     token: &str,
+    intents: u64,
     team: bool,
 ) -> io::Result<Cursor> {
     let timeout = Instant::now() + TIMEOUT;
@@ -164,14 +188,6 @@ fn ready_with(
     if hello["op"] != 10 {
         return Err(invalid("Discord Gateway did not send Hello"));
     }
-    // Personal DMs need only DIRECT_MESSAGES. Guild installations require
-    // GUILDS, GUILD_MESSAGES, DIRECT_MESSAGES and MESSAGE_CONTENT.
-    let calls = config.0["calls"].is_object() && config.text("mode") == "personal";
-    let intents = if config.text("mode") == "personal" {
-        1 << 12 | if calls { 1 | 1 << 7 } else { 0 }
-    } else {
-        1 | (1 << 9) | (1 << 12) | (1 << 15) | if team { (1 << 7) | (1 << 1) } else { 0 }
-    };
     send(
         socket,
         json!({"op": 2, "d": {

@@ -26,6 +26,7 @@ mod guild;
 mod legacy_discussions;
 mod legacy_ingress;
 mod legacy_state;
+mod legacy_team;
 pub(crate) mod linked_board;
 mod local;
 mod mail_wake;
@@ -422,7 +423,11 @@ impl<'a> Request<'a> {
                 &["from-state-dir", "from-socket", "from-lock", "from-log"]
             }
             "run" => {
-                flags = &["unattended", "retained-personal"];
+                flags = &[
+                    "unattended",
+                    "retained-personal",
+                    "observe-retained-teammate",
+                ];
                 &[]
             }
             "status" | "stop-call" | "disconnect" | "include" | "exclude" => &[],
@@ -685,6 +690,14 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
         return Ok(true);
     }
     match req.command {
+        "run" if req.on("observe-retained-teammate") => {
+            if req.on("unattended") || req.on("retained-personal") {
+                return Err(invalid(
+                    "select only the foreground retained teammate observer",
+                ));
+            }
+            legacy_team::run(&place, &cfg)?;
+        }
         "run" if legacy_ingress::activation::selected(&place)? => {
             return legacy_ingress::service::run(&place);
         }

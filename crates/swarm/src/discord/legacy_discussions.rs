@@ -18,25 +18,25 @@ struct Binding {
 }
 
 #[derive(Deserialize)]
-struct Route {
-    guild_id: String,
-    channel_id: String,
-    message_id: String,
+pub(super) struct Route {
+    pub(super) guild_id: String,
+    pub(super) channel_id: String,
+    pub(super) message_id: String,
     #[serde(default)]
-    parent_id: String,
+    pub(super) parent_id: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
-struct Guard {
-    route: Route,
+pub(super) struct Guard {
+    pub(super) route: Route,
     #[serde(rename = "ActorID")]
-    actor_id: String,
+    pub(super) actor_id: String,
     #[serde(rename = "DiscussionID")]
     discussion_id: String,
     #[serde(rename = "OperationID")]
     operation_id: String,
-    revision: String,
+    pub(super) revision: String,
     disposition: String,
     last_change: String,
 }
@@ -84,6 +84,44 @@ pub(super) fn operation(installation: &str, message: &str) -> io::Result<String>
         Sha256::digest(serde_json::to_vec(&[installation, message])?)
     );
     Ok(format!("da_{}", &digest[..32]))
+}
+
+pub(super) fn observer_scope<'tx>(tx: &impl TxApi<'tx>) -> io::Result<(Route, Guard)> {
+    let invalid = || io::Error::other("observer requires one original thread with settled ingress");
+    let discussions = tx.bucket(b"teammate_discussions").ok_or_else(invalid)?;
+    let mut rows = discussions.iter_entries();
+    let (_, raw) = rows.next().ok_or_else(invalid)?;
+    let binding: Binding = serde_json::from_slice(raw)?;
+    if rows.next().is_some()
+        || !snowflake(&binding.route.parent_id)
+        || binding.route.parent_id == binding.route.channel_id
+        || !binding.route.message_id.is_empty()
+    {
+        return Err(invalid());
+    }
+    let guards = tx.bucket(b"teammate_ingress_guard").ok_or_else(invalid)?;
+    let mut boundary: Option<(u64, Guard)> = None;
+    for (_, raw) in guards.iter_entries() {
+        let guard: Guard = serde_json::from_slice(raw)?;
+        if guard.discussion_id != binding.id {
+            continue;
+        }
+        if !guard.route.parent_id.is_empty() && guard.route.parent_id != binding.route.parent_id {
+            return Err(invalid());
+        }
+        let id = guard
+            .route
+            .message_id
+            .parse::<u64>()
+            .map_err(|_| invalid())?;
+        if boundary.as_ref().is_none_or(|(saved, _)| *saved < id) {
+            boundary = Some((id, guard));
+        }
+    }
+    let (_, boundary) = boundary
+        .filter(|(_, guard)| guard.disposition == "sent" && guard.last_change.is_empty())
+        .ok_or_else(invalid)?;
+    Ok((binding.route, boundary))
 }
 
 pub(super) fn verify<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, old_socket: &str) -> io::Result<()> {

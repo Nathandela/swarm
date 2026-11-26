@@ -37,14 +37,14 @@ const KNOWN: &[&str] = &[
 ];
 
 #[derive(Serialize)]
-struct Inventory {
+pub(super) struct Inventory {
     installation: String,
     mode: String,
     buckets: BTreeMap<String, usize>,
     settled: usize,
-    unresolved: usize,
+    pub(super) unresolved: usize,
     exclusions: usize,
-    issues: Vec<String>,
+    pub(super) issues: Vec<String>,
 }
 
 fn file_digest(mut file: &fs::File, limit: u64, end: Instant) -> io::Result<String> {
@@ -79,7 +79,7 @@ fn existing(path: &Path) -> io::Result<bool> {
     }
 }
 
-fn unchanged(file: &fs::File, path: &Path) -> io::Result<bool> {
+pub(super) fn unchanged(file: &fs::File, path: &Path) -> io::Result<bool> {
     let a = file.metadata()?;
     let b = fs::symlink_metadata(path)?;
     Ok(a.dev() == b.dev()
@@ -93,7 +93,7 @@ fn hash_field(digest: &mut Sha256, field: &[u8]) {
     digest.update(field);
 }
 
-fn inventory(cfg: &Config) -> Inventory {
+pub(super) fn inventory(cfg: &Config) -> Inventory {
     Inventory {
         installation: cfg.text("installation_id").into(),
         mode: cfg.text("mode").into(),
@@ -105,7 +105,7 @@ fn inventory(cfg: &Config) -> Inventory {
     }
 }
 
-fn scan<'tx>(
+pub(super) fn scan<'tx>(
     tx: &impl TxApi<'tx>,
     report: &mut Inventory,
     end: Instant,

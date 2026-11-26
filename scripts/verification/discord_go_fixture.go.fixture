@@ -197,17 +197,21 @@ func main() {
 		check(err)
 		check(store.SetOptOut(discord.Target{ID: os.Args[3], Instance: "offline-verification"}, excluded))
 
-	case "bind":
+	case "bind", "bind-thread":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)
 		id, channel := os.Args[3], os.Args[4]
 		var socket string
-		if len(os.Args) == 6 {
+		if action == "bind" && len(os.Args) == 6 {
 			socket = os.Args[5]
 		}
 		route := discord.Route{ChannelID: channel}
 		if cfg.Mode == "teammate" {
 			route.GuildID = "300"
+		}
+		if action == "bind-thread" {
+			route.ParentID = os.Args[5]
+			socket = cfg.DaemonSocket
 		}
 		starter := route
 		starter.MessageID = "500"

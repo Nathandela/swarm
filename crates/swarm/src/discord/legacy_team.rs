@@ -1,0 +1,385 @@
+//! Read-only Gateway custody of one settled thread from the original Go connector.
+use super::{
+    config::{Config, LockDescription, Place, invalid, open_owner_file},
+    gateway, guild,
+    legacy_discussions::{self, Guard, Route},
+    legacy_ingress::service::StatusSocket,
+    legacy_state,
+    rest::Discord,
+};
+use crate::{checkout::state::receipts::open_bolt, supervisor::runtime};
+use bbolt_rs::DbApi;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::{
+    io,
+    time::{Duration, Instant},
+};
+
+pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
+    let api = Discord::connect(cfg)?;
+    observe(place, cfg, &api, |cfg| {
+        let (mut socket, mut cursor) = gateway::open_observer(cfg)?;
+        Ok(move || cursor.event(&mut socket))
+    })
+}
+
+fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
+    place: &Place,
+    cfg: &Config,
+    api: &Discord,
+    open: impl FnOnce(&Config) -> io::Result<ReadEvent>,
+) -> io::Result<()> {
+    let _configuration = place.lock()?;
+    legacy_state::verify_controls_place(place, cfg)?;
+    if cfg.0 != place.load()?.0
+        || cfg.text("mode") != "teammate"
+        || cfg.text("project_access") == "vm"
+        || !cfg.0["previous_supervisor"].is_null()
+        || !cfg.0["calls"].is_null()
+        || super::team_thread::linked_values(cfg).next().is_some()
+    {
+        return Err(invalid(
+            "observer requires an original selected teammate enrollment",
+        ));
+    }
+    let _bridge = LockDescription(runtime::lock(&place.dir.join("bridge.lock"))?);
+    let _app = LockDescription(runtime::lock(
+        &place
+            .supervisor_root()
+            .join(format!(".discord-app-{}.lock", cfg.text("application_id"))),
+    )?);
+    let config_file = place.dir.join("config.json");
+    let config_pin = open_owner_file(&config_file)?;
+    if cfg.0 != place.load()?.0 || !legacy_state::unchanged(&config_pin, &config_file)? {
+        return Err(invalid("original connector configuration changed"));
+    }
+    let source = place.dir.join("discord.db");
+    let (pin, db) = open_bolt(&source, 64 << 20)?;
+    let (route, guard) = {
+        let tx = db.begin().map_err(io::Error::other)?;
+        let mut inventory = legacy_state::inventory(cfg);
+        legacy_state::scan(
+            &tx,
+            &mut inventory,
+            Instant::now() + Duration::from_secs(10),
+            true,
+        )?;
+        if inventory.unresolved != 0 || !inventory.issues.is_empty() {
+            return Err(invalid(
+                "observer requires a settled original connector ledger",
+            ));
+        }
+        legacy_discussions::verify(&tx, cfg, cfg.text("daemon_socket"))?;
+        legacy_discussions::observer_scope(&tx)?
+    };
+    let status = StatusSocket::start(place, cfg, Some("retained_teammate_read_only"))?;
+    api.verify_app(cfg)?;
+    let mut event = open(cfg)?;
+    verify_boundary(api, cfg, &route, &guard)?;
+    let verify_pins = || {
+        if !legacy_state::unchanged(&pin, &source)?
+            || !legacy_state::unchanged(&config_pin, &config_file)?
+        {
+            return Err(invalid(
+                "original connector evidence changed during observation",
+            ));
+        }
+        Ok(())
+    };
+    verify_pins()?;
+    status.online(true);
+    while !status.stopping() {
+        verify_pins()?;
+        if let Some(frame) = event()? {
+            verify_event(&route, &guard, &frame)?;
+        }
+    }
+    Ok(())
+}
+
+fn verify_boundary(api: &Discord, cfg: &Config, route: &Route, guard: &Guard) -> io::Result<()> {
+    let unavailable = || invalid("original thread or settled read boundary changed");
+    let thread = api.request(&format!("/channels/{}", route.channel_id), None)?;
+    let parent = api.request(&format!("/channels/{}", route.parent_id), None)?;
+    if thread["id"] != route.channel_id
+        || thread["guild_id"] != route.guild_id
+        || thread["parent_id"] != route.parent_id
+        || !matches!(thread["type"].as_u64(), Some(10 | 11))
+        || thread["thread_metadata"]["archived"] != false
+        || thread["thread_metadata"]["locked"] != false
+        || parent["id"] != route.parent_id
+        || parent["guild_id"] != route.guild_id
+        || !matches!(parent["type"].as_u64(), Some(0 | 5 | 15 | 16))
+    {
+        return Err(unavailable());
+    }
+    let rights = guild::member_permissions(
+        |path| guild::lookup(api, path),
+        &route.parent_id,
+        cfg.text("application_id"),
+    )?;
+    const READ: u64 = (1 << 10) | (1 << 16);
+    if rights & (1 << 3) == 0 && rights & READ != READ {
+        return Err(unavailable());
+    }
+    let messages = api.request(
+        &format!("/channels/{}/messages?limit=20", route.channel_id),
+        None,
+    )?;
+    let rows = messages
+        .as_array()
+        .filter(|rows| rows.len() <= 20)
+        .ok_or_else(unavailable)?;
+    let message = rows
+        .iter()
+        .find(|message| {
+            message["author"]["id"] != cfg.text("application_id")
+                || message["author"]["bot"] != true
+                || message["channel_id"] != route.channel_id
+                || !message["guild_id"].is_null() && message["guild_id"] != route.guild_id
+                || !message["webhook_id"].is_null()
+        })
+        .ok_or_else(unavailable)?;
+    // shortcut: plain latest human message only, add revision formats with pinned Go witnesses.
+    let content = message["content"]
+        .as_str()
+        .filter(|text| !text.is_empty())
+        .ok_or_else(unavailable)?;
+    if message["id"] != guard.route.message_id
+        || message["channel_id"] != route.channel_id
+        || (!message["guild_id"].is_null() && message["guild_id"] != route.guild_id)
+        || message["author"]["id"] != guard.actor_id
+        || message["author"]["bot"] == true
+        || message["author"]["system"] == true
+        || message["type"] != 0
+        || !message["edited_timestamp"].is_null()
+        || !message["message_reference"].is_null()
+        || !message["webhook_id"].is_null()
+        || !message["attachments"].as_array().is_some_and(Vec::is_empty)
+    {
+        return Err(unavailable());
+    }
+    let evidence = json!([
+        guard.actor_id,
+        content,
+        route.channel_id,
+        route.guild_id,
+        guard.route.message_id,
+        null,
+        "",
+        null
+    ]);
+    let canonical = crate::ipc::escape_json(serde_json::to_string(&evidence)?);
+    if format!("{:x}", Sha256::digest(canonical)) != guard.revision {
+        return Err(unavailable());
+    }
+    Ok(())
+}
+
+fn verify_event(route: &Route, guard: &Guard, frame: &Value) -> io::Result<()> {
+    let data = &frame["d"];
+    let changed = match frame["t"].as_str() {
+        Some("GUILD_DELETE") => data["id"] == route.guild_id,
+        Some("GUILD_ROLE_CREATE" | "GUILD_ROLE_UPDATE" | "GUILD_ROLE_DELETE") => {
+            data["guild_id"] == route.guild_id
+        }
+        Some("THREAD_UPDATE" | "THREAD_DELETE" | "CHANNEL_UPDATE" | "CHANNEL_DELETE") => {
+            data["id"] == route.channel_id || data["id"] == route.parent_id
+        }
+        Some("MESSAGE_CREATE" | "MESSAGE_UPDATE" | "MESSAGE_DELETE" | "MESSAGE_DELETE_BULK")
+            if data["channel_id"] == route.channel_id =>
+        {
+            frame["t"] != "MESSAGE_CREATE"
+                || data["guild_id"] != route.guild_id
+                || data["id"] != guard.route.message_id
+                || data["author"]["id"] != guard.actor_id
+        }
+        _ => false,
+    };
+    if changed {
+        return Err(invalid(
+            "retained teammate observation stopped at a changed route or source",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        io::{BufRead, BufReader, Write},
+        net::{TcpListener, TcpStream},
+        process::Command,
+        thread,
+    };
+    use tungstenite::{Message, accept};
+
+    #[test]
+    fn pinned_go_retained_thread_observation_preserves_replay() {
+        let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
+            return;
+        };
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("rt-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&root).unwrap();
+        let dir = root.join("p");
+        let p = dir.to_str().unwrap();
+        let go = |args: &[&str]| {
+            let output = Command::new(&fixture).args(args).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap()
+        };
+        go(&["create", p, root.to_str().unwrap(), "teammate", "true"]);
+        go(&["bind-thread", p, "existing", "401", "399"]);
+        go(&["traffic", p, "sent"]);
+        assert_eq!(go(&["ingress", p, "existing", "501", "settle"]).trim(), "1");
+        let place = Place::for_supervisor(&root).unwrap();
+        let cfg = place.load().unwrap();
+        let read_original = || {
+            ["discord.db", "config.json", "fixture-token"]
+                .map(|name| fs::read(dir.join(name)).unwrap())
+        };
+        let protected = read_original();
+        let rest = TcpListener::bind("127.0.0.1:0").unwrap();
+        let api = Discord::loopback_fixture(&cfg, rest.local_addr().unwrap().port()).unwrap();
+        fn unopened(_: &Config) -> io::Result<fn() -> io::Result<Option<Value>>> {
+            panic!("blocked observer opened a Gateway");
+        }
+        let held = LockDescription(runtime::lock(&dir.join("bridge.lock")).unwrap());
+        assert!(observe(&place, &cfg, &api, unopened).is_err());
+        drop(held);
+        let writer = LockDescription(runtime::lock(&dir.join("discord.db")).unwrap());
+        assert!(observe(&place, &cfg, &api, unopened).is_err());
+        drop(writer);
+        let rest_worker = thread::spawn(move || {
+            let responses = [
+                (
+                    "/users/@me",
+                    json!({"bot":true,"id":"100","username":"fixture"}),
+                ),
+                (
+                    "/channels/401",
+                    json!({"id":"401","guild_id":"300","parent_id":"399","type":11,
+                    "thread_metadata":{"archived":false,"locked":false}}),
+                ),
+                (
+                    "/channels/399",
+                    json!({"id":"399","guild_id":"300","type":0}),
+                ),
+                (
+                    "/channels/399/permissions/member/100",
+                    json!({"permissions":"66560"}),
+                ),
+                (
+                    "/channels/401/messages?limit=20",
+                    json!([{"id":"502","channel_id":"401","author":{"id":"100","bot":true}}, {"id":"501","channel_id":"401","author":{"id":"200"},
+                    "content":"offline replay witness","type":0,"attachments":[]}]),
+                ),
+            ];
+            for (path, response) in responses {
+                let (mut stream, _) = rest.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut input = BufReader::new(&mut stream);
+                let mut line = String::new();
+                input.read_line(&mut line).unwrap();
+                assert_eq!(line, format!("GET /api/v10{path} HTTP/1.1\r\n"));
+                let mut authenticated = false;
+                loop {
+                    line.clear();
+                    assert!(input.read_line(&mut line).unwrap() > 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    authenticated |= line
+                        .trim_end()
+                        .eq_ignore_ascii_case("authorization: Bot synthetic-unused-credential");
+                }
+                assert!(authenticated);
+                let body = response.to_string();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let gateway = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = gateway.local_addr().unwrap();
+        let gateway_worker = thread::spawn(move || {
+            let mut socket = accept(gateway.accept().unwrap().0).unwrap();
+            gateway::send(
+                &mut socket,
+                json!({"op":10,"d":{"heartbeat_interval":30000}}),
+            )
+            .unwrap();
+            let Message::Text(identify) = socket.read().unwrap() else {
+                panic!("expected identify")
+            };
+            let identify: Value = serde_json::from_str(&identify).unwrap();
+            assert_eq!(identify["d"]["intents"], gateway::OBSERVER_INTENTS);
+            gateway::send(
+                &mut socket,
+                json!({"op":0,"t":"READY","s":1,
+                "d":{"application":{"id":"100"},"user":{"id":"100","bot":true}}}),
+            )
+            .unwrap();
+            for (seq, guild, channel, id) in [
+                (2, "300", "401", "501"),
+                (3, "301", "402", "502"),
+                (4, "300", "401", "503"),
+            ] {
+                gateway::send(
+                    &mut socket,
+                    json!({"op":0,"t":"MESSAGE_CREATE","s":seq,"d":
+                    {"id":id,"guild_id":guild,"channel_id":channel,"author":{"id":"200"}}}),
+                )
+                .unwrap();
+            }
+        });
+        let err = observe(&place, &cfg, &api, |cfg| {
+            let stream = TcpStream::connect(address)?;
+            stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+            let (mut socket, _) =
+                tungstenite::client(format!("ws://{address}"), stream).map_err(io::Error::other)?;
+            let mut cursor = gateway::ready_with(
+                &mut socket,
+                cfg,
+                "synthetic-unused-credential",
+                gateway::OBSERVER_INTENTS,
+                false,
+            )?;
+            let mut checked = false;
+            let status_dir = dir.clone();
+            Ok(move || {
+                if !checked {
+                    let status = super::super::local::call(&status_dir, "status", "", None)?;
+                    assert_eq!(status["connected"], true);
+                    assert_eq!(status["connector"]["state"], "retained_teammate_read_only");
+                    checked = true;
+                }
+                cursor.event(&mut socket)
+            })
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("changed route or source"), "{err}");
+        rest_worker.join().unwrap();
+        gateway_worker.join().unwrap();
+        assert_eq!(read_original(), protected);
+        assert!(!dir.join("bridge.sock").exists());
+        assert!(!dir.join("rust-text-v1.json").exists());
+        assert_eq!(go(&["traffic-read", p, "sent"]).trim(), "sent");
+        assert_eq!(go(&["ingress", p, "existing", "501", "replay"]).trim(), "0");
+        assert_eq!(go(&["ingress", p, "existing", "503", "hold"]).trim(), "1");
+        let pending = read_original();
+        assert!(observe(&place, &cfg, &api, unopened).is_err());
+        assert_eq!(read_original(), pending);
+        fs::remove_dir_all(root).unwrap();
+    }
+}

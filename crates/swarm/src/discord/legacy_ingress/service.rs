@@ -135,7 +135,7 @@ impl Drop for Bridge {
     }
 }
 
-struct StatusSocket {
+pub(in crate::discord) struct StatusSocket {
     socket: PathBuf,
     inode: (u64, u64),
     connected: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -145,7 +145,11 @@ struct StatusSocket {
 }
 
 impl StatusSocket {
-    fn start(place: &Place, cfg: &Config) -> io::Result<Self> {
+    pub(in crate::discord) fn start(
+        place: &Place,
+        cfg: &Config,
+        connector: Option<&str>,
+    ) -> io::Result<Self> {
         let socket = place.dir.join("bridge.sock");
         match fs::symlink_metadata(&socket) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -182,6 +186,9 @@ impl StatusSocket {
         let identity = Sha256::digest(cfg.text("installation_id").as_bytes());
         let stop_path = format!("/installation-v1/{identity:x}/shutdown");
         let mut initial = cfg.status();
+        if let Some(state) = connector {
+            initial["connector"] = json!({"state":state});
+        }
         let worker = std::thread::spawn(move || {
             loop {
                 use std::sync::mpsc::RecvTimeoutError;
@@ -237,11 +244,11 @@ impl StatusSocket {
         })
     }
 
-    fn stopping(&self) -> bool {
+    pub(in crate::discord) fn stopping(&self) -> bool {
         self.requested.load(std::sync::atomic::Ordering::Acquire)
     }
 
-    fn online(&self, value: bool) {
+    pub(in crate::discord) fn online(&self, value: bool) {
         self.connected.store(
             value && !self.stopping(),
             std::sync::atomic::Ordering::Release,
@@ -529,7 +536,7 @@ where
         }
         Ok(false)
     };
-    let status = StatusSocket::start(place, &cfg)?;
+    let status = StatusSocket::start(place, &cfg, None)?;
     room.verify(&cfg)?;
     let mut event = open(&cfg)?;
     let mut pending = history_backlog(room, &cfg, boundary)?;
