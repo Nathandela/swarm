@@ -1,5 +1,6 @@
 mod board;
 mod bootstrap;
+mod checkout;
 mod clean;
 mod discord;
 mod doctor;
@@ -65,6 +66,7 @@ fn main() -> ExitCode {
         Some("hook") => hook::run(&args[1..]),
         Some("native-input") => providers::agy_input::cli(&args[1..]),
         Some("shim") => shim::run(&args[1..]),
+        Some("checkout") => checkout::run(&args[1..]),
         Some("clean") => clean::run(&args[1..]),
         Some("doctor") => doctor::run(&args[1..]),
         Some("release-info") if args.len() == 1 => {

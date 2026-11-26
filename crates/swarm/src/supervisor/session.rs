@@ -2219,7 +2219,7 @@ fn claude_conversation(dir: &Path, token: &str) -> io::Result<String> {
     Ok(id.into())
 }
 
-pub(super) fn exit_report(dir: &Path, token: &str) -> io::Result<Value> {
+pub(crate) fn exit_report(dir: &Path, token: &str) -> io::Result<Value> {
     let exit = runtime::read_json(&dir.join("exit.json"))?;
     let prelaunch = exit["error"].as_str().is_some_and(|s| !s.is_empty())
         && exit["code"].is_null()
@@ -2235,7 +2235,7 @@ pub(super) fn exit_report(dir: &Path, token: &str) -> io::Result<Value> {
     Ok(exit)
 }
 
-pub(super) fn owner_gone(dir: &Path, token: &str) -> io::Result<bool> {
+pub(crate) fn owner_gone(dir: &Path, token: &str) -> io::Result<bool> {
     let owner = match runtime::read_json(&dir.join("owner.json")) {
         Ok(v) => v,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {

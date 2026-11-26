@@ -536,3 +536,10 @@ fn doctor(place: &Place, cfg: &Config, channel: Option<&str>) -> io::Result<bool
     println!("{}", serde_json::to_string_pretty(&Value::Array(findings))?);
     Ok(ok)
 }
+
+pub(crate) fn checkout_status(
+    dir: &std::path::Path,
+    end: std::time::Instant,
+) -> std::io::Result<serde_json::Value> {
+    local::call_until(dir, "checkout-status", "", None, end)
+}
