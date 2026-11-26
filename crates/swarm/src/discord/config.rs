@@ -676,6 +676,7 @@ impl Config {
                     | "previous_supervisor"
                     | "calls"
                     | "team_discussion" => value.is_object() || value.is_null(),
+                    "team_discussions" => value.is_array() || value.is_null(),
                     _ => false,
                 }
             };
@@ -766,6 +767,7 @@ impl Config {
             return Err(invalid("invalid enrolled supervisor paths"));
         }
         super::team_thread::Route::configured(self)?;
+        super::team_thread::Route::additional(self)?;
         let previous = &self.0["previous_supervisor"];
         if !previous.is_null()
             && (!self.managed()
