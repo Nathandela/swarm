@@ -20,7 +20,12 @@ pub(crate) fn read(
 ) -> io::Result<Value> {
     let (path, identity) = match transcript(home, cwd, id) {
         Ok(source) => source,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::WouldBlock
+            ) =>
+        {
             return Ok(json!({"state":"pending"}));
         }
         Err(error) => return Err(error),
@@ -139,6 +144,43 @@ fn scan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_header_can_precede_the_first_conversation_record() {
+        use std::fs;
+        use std::io::Write;
+        let home = crate::test_temp::root()
+            .canonicalize()
+            .unwrap()
+            .join(crate::supervisor::runtime::random_id().unwrap());
+        let cwd = Path::new("/fixture");
+        let id = "a1b2c3d4-0000-4000-8000-000000000001";
+        let project = home.join(".claude/projects/-fixture");
+        fs::create_dir_all(&project).unwrap();
+        let path = project.join(format!("{id}.jsonl"));
+        let mut output = fs::File::create(&path).unwrap();
+        writeln!(output, "{{\"type\":\"permission-mode\"}}").unwrap();
+        let result = || {
+            read(
+                &home,
+                cwd,
+                id,
+                &json!(text_hash("Exact delegated task")),
+                64,
+            )
+        };
+        assert_eq!(result().unwrap()["state"], "pending");
+        writeln!(
+            output,
+            "{}",
+            json!({"type":"user","sessionId":id,"cwd":"/wrong"})
+        )
+        .unwrap();
+        assert!(result().is_err());
+        fs::write(&path, " ".repeat(MAX_SCAN as usize)).unwrap();
+        assert!(result().is_err());
+        fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn incomplete_or_unrelated_transcript_never_releases_result() {

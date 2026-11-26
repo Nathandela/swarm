@@ -832,7 +832,7 @@ fn transcript_record(
                 || if literal {
                     location != cwd_text
                 } else {
-                    recorded != cwd && recorded.canonicalize()? != cwd
+                    recorded != cwd && recorded.canonicalize().ok().as_deref() != Some(cwd)
                 }
             {
                 return Err(io::Error::other(
@@ -842,7 +842,12 @@ fn transcript_record(
             return Ok((path, json!([stat.dev(), stat.ino()])));
         }
     }
-    Err(io::Error::other(
+    Err(io::Error::new(
+        if input.get_ref().limit() > 0 {
+            io::ErrorKind::WouldBlock
+        } else {
+            io::ErrorKind::InvalidData
+        },
         "Claude transcript has no complete matching root record",
     ))
 }
