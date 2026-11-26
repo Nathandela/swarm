@@ -407,6 +407,7 @@ impl<'a> Request<'a> {
                 ];
                 &[
                     "settle-personal-ingress",
+                    "reconcile-personal-vm-reply",
                     "dispatch-personal-ingress",
                     "capture-personal-ingress",
                     "prepare-personal-ingress",
@@ -556,7 +557,11 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
         "connect" => return connect(req, place),
         "migrate-state" => {
             type Migration = fn(&Place, &str, bool) -> io::Result<bool>;
-            let ingress: [(&str, Migration); 7] = [
+            let ingress: [(&str, Migration); 8] = [
+                (
+                    "reconcile-personal-vm-reply",
+                    legacy_ingress::reply_notice::run,
+                ),
                 ("capture-personal-ingress", legacy_ingress::capture),
                 (
                     "deliver-personal-publication",

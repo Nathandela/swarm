@@ -619,3 +619,130 @@ func FixtureDamageGuildNative(dir, message, change string) error {
 		return ErrNotFound
 	})
 }
+
+// FixtureReplyNoise keeps the clock and network synthetic while using the original
+// v0.29.25 ledger, reconciliation, and export paths.
+func FixtureReplyNoise(dir, scenario, action string, clock time.Time) (State, error) {
+	const conversation = "discord-teammate-fixture-room"
+	const worker = "ep-fixture/fixture-worker"
+	const instance = "fixture-worker-instance"
+	const attempt = "vm-child-fixture"
+	store, err := OpenStore(dir)
+	if err != nil {
+		return State{}, err
+	}
+	defer store.Close()
+	if action == "create" {
+		binding, err := store.BindManager(ManagerBinding{ConversationID: conversation,
+			Provider: "codex", SessionID: "ep-fixture/fixture-manager", SessionInstance: "fixture-manager-instance",
+			NativeSessionID: "fixture-native-session", NativeGeneration: "native-1",
+			ObservationGeneration: "observed-1", LoginEpoch: "same-login", NativeCLI: true})
+		if err != nil {
+			return State{}, err
+		}
+		if err = store.observeController(binding, 0, false); err != nil {
+			return State{}, err
+		}
+		ids := []string{"701"}
+		if scenario == "window" {
+			ids = append(ids, "702", "703")
+		}
+		scope := &DiscussionScope{InstallationID: "fixture-personal", DiscussionID: "original-room", DMOwnerID: "200", ThreadID: "400", VMProjectAccess: true}
+		c := Controller{store: store, binding: binding, discussion: scope}
+		for i, id := range ids {
+			origin := schema.MessageOrigin{Kind: "owner_direct", InstallationID: scope.InstallationID, DiscussionID: scope.DiscussionID, ChannelID: scope.ThreadID, ActorID: scope.DMOwnerID, RequesterID: scope.DMOwnerID, MessageID: id,
+				RequestID: "fixture-reply-" + id, Revision: strings.Repeat("1", 64)}
+			a, err := c.admitDiscussionInput(DiscussionInput{Origin: origin, Text: "Inspect " + id, ExpectReply: true}, "", false)
+			if err != nil {
+				return State{}, err
+			}
+			nonce := hashValue(id)
+			op, err := protocol.NewSemanticOperationID()
+			if err != nil {
+				return State{}, err
+			}
+			request := protocol.ComposerSendReq{Session: binding.SessionID, SessionInstance: binding.SessionInstance,
+				Origin: &origin, Text: "Inspect " + id, ManagerAdmission: &schema.ManagerAdmission{Binding: runtimeBinding(binding), Nonce: nonce}}
+			prepared, err := store.prepareControllerInput(binding, a.Sequence, nonce, op, request, 0)
+			if err != nil {
+				return State{}, err
+			}
+			if err = store.beginControllerInput(binding, prepared); err != nil {
+				return State{}, err
+			}
+			turn := "fixture-native-" + id
+			if err = store.controllerInputPhase(binding, a.Sequence, "completed", turn, ""); err != nil {
+				return State{}, err
+			}
+			if err = store.EndNativeTurn(binding, turn); err != nil {
+				return State{}, err
+			}
+			if err = store.update(func(st *State) error {
+				index := admissionKey(conversation, a.Sequence)
+				a := st.Admissions[index]
+				a.SettledAt = clock.Add(time.Duration(i) * time.Second)
+				delay := time.Duration(30+i*5) * time.Second
+				if i == 2 {
+					delay = 30 * time.Minute
+				}
+				a.ReplyCheckAfter = clock.Add(delay).Unix()
+				putRecord(st, "admissions", &st.Admissions, index, a)
+				if scenario == "window" {
+					return nil
+				}
+				n, err := nextDiscussionOutput(st, conversation)
+				if err != nil {
+					return err
+				}
+				p := Publication{ID: "fixture-progress", Admission: a.Sequence, OutputSequence: n,
+					Text: "On it", TextHash: hashBytes([]byte("On it")), NativeTurnID: turn, Exported: true,
+					ConversationID: conversation, DiscussionSource: DiscussionOutputSource{AdmissionID: origin.RequestID}}
+				putRecord(st, "publications", &st.Publications, key(conversation, p.ID), p)
+				if scenario == "worker" {
+					w := WorkerAssociation{ConversationID: conversation, Admission: a.Sequence, JobID: "vm-child-" + hashValue([]string{conversation, worker}),
+						AttemptID: attempt, Session: worker, SessionInstance: instance, Parent: "fixture-manager", ParentInputHash: hashBytes([]byte(nonce)),
+						Ended: true, VMChild: true, Mailbox: true}
+					putRecord(st, "workers", &st.Workers, key(conversation, key(worker, instance)), w)
+				}
+				return nil
+			}); err != nil {
+				return State{}, err
+			}
+		}
+	}
+	snapshot, err := store.Snapshot()
+	if err != nil || action == "create" || action == "read" {
+		return snapshot, err
+	}
+	d := DiscussionController{store: store, cfg: Config{ConversationID: conversation},
+		scope: DiscussionScope{VMProjectAccess: true}, now: func() time.Time { return clock }}
+	if action == "acknowledge" {
+		id := ""
+		if err = d.export(snapshot, func(output DiscussionOutput) error {
+			if output.Text != discussionUnverifiedNotice || id != "" {
+				return ErrInvalid
+			}
+			id = output.ID
+			return nil
+		}); err != nil {
+			return State{}, err
+		}
+		d.scope.ConfirmedDelivery = func(ctx context.Context, output DiscussionOutput) ([]string, error) {
+			if output.ID != id {
+				return nil, ErrInvalid
+			}
+			if err := d.ValidatePublication(ctx, output, hashValue(output.Text)); err != nil {
+				return nil, err
+			}
+			return []string{"910"}, nil
+		}
+		snapshot, err = store.Snapshot()
+		if err != nil {
+			return State{}, err
+		}
+	}
+	if err = d.checkDiscussionReply(context.Background(), snapshot); err != nil {
+		return State{}, err
+	}
+	return store.Snapshot()
+}

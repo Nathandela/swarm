@@ -6,6 +6,7 @@ pub(super) mod manager_publication;
 pub(super) mod prepare;
 pub(super) mod publication;
 mod queue;
+pub(super) mod reply_notice;
 pub(super) mod service;
 pub(super) mod source_attachment;
 mod wake;

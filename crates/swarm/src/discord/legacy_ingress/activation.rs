@@ -63,12 +63,11 @@ pub(super) fn ready_to_run(place: &Place, cfg: &Config, db: &impl DbApi) -> io::
     probe(place, cfg, db, retained_vm(cfg))
 }
 
-fn probe(place: &Place, cfg: &Config, db: &impl DbApi, inspect_queued: bool) -> io::Result<Ready> {
-    let tx = db.begin().map_err(io::Error::other)?;
+pub(super) fn qualified_binding<'tx>(tx: &impl TxApi<'tx>, cfg: &Config) -> io::Result<Value> {
     let install = cfg.text("installation_id");
     let channel = cfg.text("dm_channel_id");
     let key = format!("{install}\0{channel}");
-    let binding = value(&tx, "teammate_discussions", key.as_bytes())?.ok_or_else(invalid)?;
+    let binding = value(tx, "teammate_discussions", key.as_bytes())?.ok_or_else(invalid)?;
     let id = field(&binding, "ID");
     let active = tx
         .bucket(b"teammate_active_discussions")
@@ -89,11 +88,11 @@ fn probe(place: &Place, cfg: &Config, db: &impl DbApi, inspect_queued: bool) -> 
     {
         return Err(invalid());
     }
-    require_repaired(&tx, cfg, &binding)?;
-    original_boundary(&tx, cfg, &binding).map_err(|error| {
+    require_repaired(tx, cfg, &binding)?;
+    original_boundary(tx, cfg, &binding).map_err(|error| {
         io::Error::other(format!("original personal consent boundary: {error}"))
     })?;
-    prepare::no_pending_output(&tx, cfg)?;
+    prepare::no_pending_output(tx, cfg)?;
     let meta = tx.bucket(b"teammate_meta").ok_or_else(invalid)?;
     if meta.get(b"active_ingress_count") != Some([0; 8].as_slice()) {
         return Err(io::Error::other(
@@ -108,6 +107,12 @@ fn probe(place: &Place, cfg: &Config, db: &impl DbApi, inspect_queued: bool) -> 
             ));
         }
     }
+    Ok(binding)
+}
+
+fn probe(place: &Place, cfg: &Config, db: &impl DbApi, inspect_queued: bool) -> io::Result<Ready> {
+    let tx = db.begin().map_err(io::Error::other)?;
+    let binding = qualified_binding(&tx, cfg)?;
     let (directory, ledger, endpoint) = voice_location(place, cfg, &binding)?;
     if inspect_queued
         && retained_vm(cfg)
@@ -155,6 +160,16 @@ pub(in crate::discord) fn verify_idle_manager(
     ledger: &str,
     stored: &Value,
 ) -> io::Result<()> {
+    idle_manager_roster(place, cfg, directory, ledger, stored).map(|_| ())
+}
+
+pub(super) fn idle_manager_roster(
+    place: &Place,
+    cfg: &Config,
+    directory: &Path,
+    ledger: &str,
+    stored: &Value,
+) -> io::Result<Vec<Value>> {
     let caps = ["semantic-send", "manager-provenance", "message-origin"];
     let (mut owner, rows) = super::super::migrate_supervisor::verified_owner(
         place.supervisor_root(),
@@ -210,7 +225,7 @@ pub(in crate::discord) fn verify_idle_manager(
         return Err(invalid());
     }
     open_owner_file(&directory.join("bridge.auth"))?;
-    Ok(())
+    Ok(rows)
 }
 
 pub(super) fn pending_vm_mail(place: &Place, discussion: &str) -> io::Result<bool> {

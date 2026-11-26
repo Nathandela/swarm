@@ -473,3 +473,32 @@ func (s *Store) FixtureGuildAdvance(ctx context.Context, cfg Config, manager Tea
 		return ErrInvalid
 	}
 }
+
+func (s *Store) FixtureObserveReplyProgress(d TeammateDiscussion, compact bool) error {
+	p := TeammatePublication{ID: "fixture-progress", Body: "On it", AdmissionID: "fixture-reply-701", Sequence: 1}
+	now := time.Now()
+	if err := s.teammateQueueOutput(d, p, now); err != nil {
+		return err
+	}
+	outputs, err := s.teammateOutputs(d.InstallationID, d.ID)
+	if err != nil {
+		return err
+	}
+	if len(outputs) != 1 || len(outputs[0].Chunks) != 1 {
+		return ErrConflict
+	}
+	out := outputs[0]
+	if err = s.teammateChangeOutput(d.InstallationID, out, func(_ *bolt.Tx, _ []byte, saved *teammateOutput) error {
+		saved.Chunks[0].State = StateSending
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err = s.teammateObserve(d.InstallationID, d.Route, "909", out.Chunks[0].ID, p.Body, now); err != nil {
+		return err
+	}
+	if err = s.teammateAckOutputs(d, []string{p.ID}); err != nil || !compact {
+		return err
+	}
+	return s.teammateCompactOutbox(d, now.Add(GuardTTL), nil)
+}
