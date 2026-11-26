@@ -68,3 +68,34 @@ def alive(pid, started):
         return birth(pid) == started
     except ProcessLookupError:
         return False
+
+
+def thread_wait_snapshot(pid, started):
+    """Sample Linux thread states and cumulative scheduler counters for a verified process."""
+    if sys.platform != 'linux':
+        return None
+    tasks = Path(f'/proc/{pid}/task')
+    try:
+        if not alive(pid, started):
+            return None
+        task_ids = sorted(int(task.name) for task in tasks.iterdir())
+    except OSError:
+        return None
+    threads = []
+    for tid in task_ids[:32]:
+        task = tasks / str(tid)
+        try:
+            stat = (task / 'stat').read_text().rsplit(') ', 1)[1].split()
+            channel = (task / 'wchan').read_text().strip()
+            wait = (task / 'schedstat').read_text().split()
+            threads.append({'tid': tid, 'state': stat[0], 'major_faults': int(stat[9]),
+                            'wait_channel': channel, 'run_ns': int(wait[0]),
+                            'run_queue_ns': int(wait[1])})
+        except (OSError, IndexError, ValueError):
+            continue
+    try:
+        if alive(pid, started):
+            return {'total_threads': len(task_ids), 'threads': threads}
+    except OSError:
+        return None
+    return None
