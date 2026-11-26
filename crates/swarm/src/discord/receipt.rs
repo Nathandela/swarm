@@ -22,6 +22,67 @@ pub(super) struct Inbox {
     data: Value,
 }
 
+fn certify_attachment_source(saved: &Value, fresh: &Value) -> io::Result<()> {
+    use super::received_files::{LEGACY_PROMPT_HEADER, PROMPT_HEADER, prompt_files, visible};
+
+    let route = &saved["route"];
+    let guild = route["guild_id"].as_str().unwrap_or_default();
+    let channel = route["channel_id"].as_str().unwrap_or_default();
+    let edited = &fresh["edited_timestamp"];
+    let changed = || invalid("Discord attachment source revision changed");
+    let text = fresh["content"].as_str().ok_or_else(changed)?;
+    if fresh["id"] != route["message_id"]
+        || fresh["channel_id"] != channel
+        || (if guild.is_empty() {
+            !fresh["guild_id"].is_null()
+        } else {
+            fresh["guild_id"] != guild
+        })
+        || fresh["author"]["id"] != saved["author"]["id"]
+        || !fresh["webhook_id"].is_null()
+        || fresh["author"]
+            .get("bot")
+            .is_some_and(|value| value != false)
+        || fresh["author"]
+            .get("system")
+            .is_some_and(|value| value != false)
+        || fresh["type"] != 0
+        || !fresh["attachments"].is_array()
+        || *edited != saved["edited_at"]
+    {
+        return Err(changed());
+    }
+    let visible = visible(fresh)?;
+    let files = &saved["received_files"];
+    let source_channel = fresh["source_channel_id"]
+        .as_str()
+        .filter(|_| !guild.is_empty())
+        .unwrap_or(channel);
+    if !visible.has_files() || !visible.matches(files) || !visible.same_cdn_scope(source_channel) {
+        return Err(changed());
+    }
+    let body = format!("{text}{}", visible.context());
+    let prompt = format!("{body}{PROMPT_HEADER}{}", prompt_files(files));
+    let legacy = format!("{body}{LEGACY_PROMPT_HEADER}{files}");
+    let admitted = saved["text"].as_str().ok_or_else(changed)?;
+    if (admitted != prompt && admitted != legacy)
+        || saved["revision"]
+            != hash(&json!([
+                fresh["author"]["id"],
+                admitted,
+                channel,
+                guild,
+                fresh["id"],
+                edited,
+                visible.revision()?,
+                files
+            ]))?
+    {
+        return Err(changed());
+    }
+    Ok(())
+}
+
 impl Inbox {
     pub(super) fn open(dir: &Path, cfg: &Config) -> io::Result<Self> {
         let file = dir.join("rust-text-v1.json");
@@ -208,7 +269,6 @@ impl Inbox {
                 source["guild_id"] != guild
             }
             || !source["webhook_id"].is_null()
-            || !source["message_reference"].is_null()
             || source["author"]
                 .get("bot")
                 .is_some_and(|value| value != false)
@@ -216,9 +276,6 @@ impl Inbox {
                 .get("system")
                 .is_some_and(|value| value != false)
             || !source["attachments"].is_array()
-            || source["message_snapshots"]
-                .as_array()
-                .is_some_and(|snapshots| !snapshots.is_empty())
             || source["type"] != 0
         {
             return Ok(None);
@@ -233,7 +290,25 @@ impl Inbox {
         {
             return Ok(None);
         }
-        let empty = source["attachments"].as_array().unwrap().is_empty();
+        let visible = match super::received_files::visible(source) {
+            Ok(visible) => visible,
+            Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        let forwarding = visible.revision()?;
+        if visible.is_forwarded()
+            && (address.is_some()
+                || super::worker::target_text(body).is_some()
+                || !guild.is_empty() && !team)
+        {
+            return Ok(None);
+        }
+        let context = visible.context();
+        let body = format!("{body}{context}");
+        if visible.is_forwarded() && body.len() > 4096 {
+            return Ok(None);
+        }
+        let empty = !visible.has_files();
         let (body, files) = if empty {
             if body.trim().is_empty() {
                 return Ok(None);
@@ -241,7 +316,7 @@ impl Inbox {
             (body.to_owned(), Value::Null)
         } else {
             if address.is_some()
-                || super::worker::target_text(body).is_some()
+                || super::worker::target_text(&body).is_some()
                 || !guild.is_empty() && !team
             {
                 return Ok(None);
@@ -254,30 +329,53 @@ impl Inbox {
                 .as_str()
                 .filter(|_| team)
                 .unwrap_or(channel);
-            let header = super::received_files::PROMPT_HEADER;
+            let old = &self.data["messages"][id];
+            let saved = &old["received_files"];
+            let legacy_header = super::received_files::LEGACY_PROMPT_HEADER;
+            let legacy = saved.is_array() && old["text"] == format!("{body}{legacy_header}{saved}");
+            let header = if legacy {
+                legacy_header
+            } else {
+                super::received_files::PROMPT_HEADER
+            };
             let Some(budget) = 4096_usize.checked_sub(body.len() + header.len()) else {
                 return Ok(None);
             };
-            let old = &self.data["messages"][id];
+            let display = |files: &Value| {
+                if legacy {
+                    files.clone()
+                } else {
+                    super::received_files::prompt_files(files)
+                }
+            };
             let existing_revision = matches!(old["state"].as_str(), Some("accepted" | "sending"))
                 || !old.is_null() && old["edited_at"] == *edited;
-            if existing_revision
-                && (!old["received_files"].is_array()
-                    || old["text"] != format!("{body}{header}{}", old["received_files"])
-                    || !same_received_metadata(&old["received_files"], &source["attachments"]))
-            {
-                return Ok(None);
-            }
-            let captured =
+            let captured = if existing_revision {
+                if !saved.is_array()
+                    || old["text"] != format!("{body}{header}{}", display(saved))
+                    || !visible.matches(saved)
+                    || !visible.same_cdn_scope(source_channel)
+                {
+                    return Ok(None);
+                }
+                super::received_files::verify_receipt(&place.canonicalize()?, saved)?;
+                saved.clone()
+            } else {
                 match super::received_files::capture(place, source, source_channel, budget) {
-                    Ok(files) => files,
+                    Ok(files) => json!(files),
                     Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Ok(None),
                     Err(err) => return Err(err),
-                };
-            let body = format!("{body}{header}{}", json!(captured));
-            (body, json!(captured))
+                }
+            };
+            let body = format!("{body}{header}{}", display(&captured));
+            if body.len() > 4096 {
+                return Ok(None);
+            }
+            (body, captured)
         };
-        let revision = hash(&json!([actor, body, channel, guild, id, edited, "", files]))?;
+        let revision = hash(&json!([
+            actor, body, channel, guild, id, edited, forwarding, files
+        ]))?;
         let operation = format!("da_{}", &hash(&json!([installation, id]))?[..32]);
         let mut receipt = json!({
             "operation_id": operation, "revision": revision, "text": body,
@@ -424,6 +522,44 @@ impl Inbox {
         self.save(next)
     }
 
+    pub(super) fn read_active_attachment(
+        &self,
+        input: &Value,
+        id: &str,
+        digest: &str,
+        offset: u64,
+        current: impl FnOnce(&str) -> io::Result<Option<Value>>,
+    ) -> io::Result<Value> {
+        let source_id = input["source_id"]
+            .as_str()
+            .filter(|id| snowflake(id))
+            .ok_or_else(|| invalid("no original Discord attachment source"))?;
+        let source = &self.data["messages"][source_id];
+        let composer = &input["composer"];
+        if input != &self.data["manager"]["input"]
+            || !input["worker_wake"].is_null()
+            || source["state"] != "accepted"
+            || !input["turn_id"].is_string()
+            || source["native_turn_id"] != input["turn_id"]
+            || source["native_input_id"] != composer["manager_admission"]["nonce"]
+            || source["revision"] != composer["origin"]["revision"]
+        {
+            return Err(invalid(
+                "attachment grant does not match the active admitted turn",
+            ));
+        }
+        let fresh = current(source_id)
+            .map_err(|_| invalid("Discord attachment source could not be verified"))?
+            .ok_or_else(|| invalid("Discord attachment source is no longer visible"))?;
+        certify_attachment_source(source, &fresh)?;
+        let place = self
+            .file
+            .parent()
+            .ok_or_else(|| invalid("missing attachment custody directory"))?
+            .canonicalize()?;
+        super::received_files::read_granted(&place, &source["received_files"], id, digest, offset)
+    }
+
     pub(super) fn accepted_voice(&self, id: &str, origin: &Value) -> bool {
         let row = &self.data["messages"][id];
         super::call_origin::key(id) && row["state"] == "accepted" && row["voice_origin"] == *origin
@@ -543,7 +679,7 @@ impl Inbox {
     }
 
     pub(super) fn reserve_thread(&mut self, plan: Value) -> io::Result<()> {
-        if self.thread_creation().is_some() || !self.data["team_discussion"].is_null() {
+        if self.thread_creation().is_some() {
             return Err(invalid(
                 "connector already has its thread creation boundary",
             ));
@@ -551,6 +687,35 @@ impl Inbox {
         let mut next = self.data.clone();
         next["thread_creation"] = plan;
         next["thread_create_attempts"] = json!(1);
+        self.save(next)
+    }
+
+    pub(super) fn thread_creation_linked(&self, cfg: &Config) -> bool {
+        self.thread_creation().is_some_and(|plan| {
+            super::team_thread::linked_values(cfg).any(|route| {
+                route["guild_id"] == plan["guild_id"]
+                    && route["thread_id"] == plan["message_id"]
+                    && route["starter_channel_id"] == plan["parent_id"]
+                    && route["starter_revision"] == plan["revision"]
+            })
+        })
+    }
+
+    pub(super) fn finish_thread_creation(&mut self, cfg: &Config) -> io::Result<()> {
+        if !self.thread_creation_linked(cfg) {
+            return Err(invalid(
+                "thread create remains unresolved for its original opener",
+            ));
+        }
+        let mut next = self.data.clone();
+        for key in [
+            "thread_creation",
+            "thread_create_attempts",
+            "thread_create_retry_at",
+            "thread_create_retry_allowed",
+        ] {
+            next[key] = Value::Null;
+        }
         self.save(next)
     }
 
@@ -672,18 +837,6 @@ impl Inbox {
             .filter(|row| matches!(row["state"].as_str(), Some("prepared" | "sending")))
             .count()
     }
-}
-
-fn same_received_metadata(saved: &Value, source: &Value) -> bool {
-    let (Some(saved), Some(source)) = (saved.as_array(), source.as_array()) else {
-        return false;
-    };
-    saved.len() == source.len()
-        && saved.iter().zip(source).all(|(a, b)| {
-            ["id", "filename", "size"]
-                .into_iter()
-                .all(|field| a[field] == b[field])
-        })
 }
 
 pub(super) fn valid_boundary(value: &Value) -> bool {

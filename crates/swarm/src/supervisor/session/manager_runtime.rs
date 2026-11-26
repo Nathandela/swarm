@@ -17,6 +17,7 @@ impl Session {
             "channel_id",
             "guild_id",
             "supervisor_socket",
+            "call_place",
         ] {
             if current[key] != self.manager[key] {
                 return Err(refuse("manager enrollment is no longer current"));

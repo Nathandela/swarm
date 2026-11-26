@@ -77,12 +77,17 @@ fn serve(socket: &Path, auth: &Path, conversation: &str, session: &str) -> io::R
             },{
                 "name":"swarm_reply","description":"Answer a needs-input worker note bound to the active turn.",
                 "inputSchema":{"type":"object","additionalProperties":false,"properties":{"id":{"type":"string"},"session":{"type":"string"},"session_instance":{"type":"string"},"text":{"type":"string"}},"required":["text"]}
+            },{
+                "name":"swarm_read_attachment","description":"Read a pinned received file from the active Discord turn by attachment ID and SHA256. Data is base64 and each read returns the next byte offset.",
+                "inputSchema":{"type":"object","additionalProperties":false,
+                    "properties":{"id":{"type":"string"},"sha256":{"type":"string"},"offset":{"type":"integer","minimum":0}},
+                    "required":["id","sha256","offset"]}
             }]}}),
             Some("tools/call") => {
                 let params = &request["params"];
                 let reply = if matches!(
                     params["name"].as_str(),
-                    Some("publish" | "swarm_read_note" | "swarm_reply")
+                    Some("publish" | "swarm_read_note" | "swarm_reply" | "swarm_read_attachment")
                 ) && params["arguments"].is_object()
                     && params["_meta"].is_object()
                 {

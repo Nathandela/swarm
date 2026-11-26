@@ -7,7 +7,16 @@ use super::{
 };
 use crate::supervisor::mail_files::Captured;
 use serde_json::{Value, json};
-use std::io;
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
+
+pub(super) fn linked_values(cfg: &Config) -> impl Iterator<Item = &Value> {
+    std::iter::once(&cfg.0["team_discussion"])
+        .filter(|value| !value.is_null())
+        .chain(cfg.0["team_discussions"].as_array().into_iter().flatten())
+}
 
 #[derive(Clone)]
 pub(super) struct Route {
@@ -60,6 +69,47 @@ impl Route {
             thread: thread.into(),
             starter,
         }))
+    }
+
+    pub(super) fn additional(cfg: &Config) -> io::Result<Vec<(Self, Config)>> {
+        let configured = &cfg.0["team_discussions"];
+        if configured.is_null() {
+            return Ok(Vec::new());
+        }
+        let entries = configured
+            .as_array()
+            .filter(|entries| entries.len() <= 16)
+            .ok_or_else(|| invalid("too many or malformed additional team discussions"))?;
+        let mut seen = std::collections::BTreeSet::new();
+        if let Some(primary) = Self::configured(cfg)? {
+            seen.insert((primary.guild, primary.thread));
+        }
+        entries
+            .iter()
+            .map(|entry| {
+                let mut selected = cfg.clone();
+                selected.0["team_discussion"] = entry.clone();
+                selected.0["team_discussions"] = Value::Null;
+                let route = Self::configured(&selected)?
+                    .ok_or_else(|| invalid("missing additional team discussion"))?;
+                if !seen.insert((route.guild.clone(), route.thread.clone())) {
+                    return Err(invalid("duplicate linked team discussion"));
+                }
+                Ok((route, selected))
+            })
+            .collect()
+    }
+
+    pub(super) fn directory(&self, place: &Path) -> io::Result<PathBuf> {
+        let digest = super::receipt::hash(&json!([self.guild, self.thread]))?;
+        Ok(place.join(format!("d-{}", &digest[..16])))
+    }
+
+    pub(super) fn accepts_voice(&self, cfg: &Config) -> bool {
+        let calls = &cfg.0["calls"];
+        calls["mode"] == "team"
+            && calls["guild_id"] == self.guild
+            && calls["discussion_id"] == self.thread
     }
 
     pub(super) fn identity(&self) -> Value {
@@ -260,9 +310,8 @@ pub(super) fn explicit(cfg: &Config, source: &Value) -> bool {
                 .any(|prefix| {
                     text.trim_start().strip_prefix(prefix).is_some_and(|tail| {
                         (!tail.trim().is_empty()
-                            || source["attachments"]
-                                .as_array()
-                                .is_some_and(|files| !files.is_empty()))
+                            || super::received_files::visible(source)
+                                .is_ok_and(|visible| visible.has_files() || visible.is_forwarded()))
                             && !matches!(
                                 tail.trim(),
                                 "voice join" | "voice consent" | "voice leave"
@@ -348,6 +397,70 @@ pub(super) fn ingest(
 mod tests {
     use super::*;
     use crate::supervisor::runtime;
+
+    #[test]
+    fn separately_linked_discussions_resolve_and_verify_their_own_native_custody() {
+        use super::super::config::Place;
+        let place =
+            std::env::temp_dir().join(format!("swarm-linked-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&place).unwrap();
+        let place = place.canonicalize().unwrap();
+        let cfg = Config(
+            json!({"enabled":true,"mode":"teammate","manager_cli":"codex","installation_id":"fixture",
+            "application_id":"3","owner_id":"4","guild_ids":["1"],"daemon_socket":"/tmp/supervisor-scope",
+            "team_discussion":{"guild_id":"1","thread_id":"2"},
+            "team_discussions":[{"guild_id":"1","thread_id":"8"},{"guild_id":"1","thread_id":"9"}]}),
+        );
+        let mut inputs = Vec::new();
+        let places = || vec![(Place::fixture(place.clone()), cfg.clone())];
+        for (route, selected) in Route::additional(&cfg).unwrap() {
+            let directory = route.directory(&place).unwrap();
+            runtime::private_dir(&directory).unwrap();
+            let scope = super::super::manager_scope_for_directory(places(), &directory).unwrap();
+            assert_eq!(scope["channel_id"], route.thread);
+            assert_eq!(scope["call_place"], json!(place));
+            let mut inbox = Inbox::open(&directory, &selected).unwrap();
+            inbox.checkpoint("").unwrap();
+            let id = format!("10{}", route.thread);
+            let source = json!({"id":id,"type":0,"channel_id":route.thread,"guild_id":"1",
+                "author":{"id":"5"},"attachments":[],"content":"qualified ordinary request"});
+            let admitted = inbox.admit_team(&route, &source).unwrap().unwrap();
+            let binding = json!({"provider":"codex","session":"native-scope"});
+            let composer = json!({"session":"native-scope","text":admitted["text"],
+                "origin":{"kind":"team_participant","actor_id":"5","guild_id":"1","message_id":id,
+                    "revision":admitted["revision"],"request_id":admitted["operation_id"]},
+                "manager_admission":{"nonce":"a".repeat(64),"binding":binding}});
+            let state = json!({"generation":1,"launch":scope["launch"],"session":"native-scope","binding":binding,
+                "input":{"operation":"same-test-operation","composer":composer,"source_id":id}});
+            inbox
+                .cutover(&id, admitted["revision"].as_str().unwrap(), state)
+                .unwrap();
+            crate::discord::verify_connector_input(&scope, "same-test-operation", &composer, None)
+                .unwrap();
+            inputs.push((scope, composer));
+        }
+        assert_ne!(
+            inputs[0].0["launch"]["manager"]["conversation_id"],
+            inputs[1].0["launch"]["manager"]["conversation_id"]
+        );
+        assert!(
+            crate::discord::verify_connector_input(
+                &inputs[1].0,
+                "same-test-operation",
+                &inputs[0].1,
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            super::super::manager_scope_for_directory(places(), &place.join("d-unenrolled"))
+                .is_err()
+        );
+        let mut duplicate = cfg;
+        duplicate.0["team_discussions"][1] = duplicate.0["team_discussions"][0].clone();
+        assert!(Route::additional(&duplicate).is_err());
+        std::fs::remove_dir_all(place).unwrap();
+    }
 
     #[test]
     fn private_membership_is_required_even_for_moderators_and_the_bot() {

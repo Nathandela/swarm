@@ -80,11 +80,31 @@ pub(crate) fn native_manager_enrollment(launch: &Value) -> io::Result<Value> {
         .and_then(Path::parent)
         .ok_or_else(|| invalid("missing enrolled manager directory"))?;
     let supervisor = ipc::state_path()?;
-    let (place, cfg) = Place::enrolled(&supervisor)?
-        .into_iter()
-        .find(|(place, _)| std::fs::canonicalize(&place.dir).ok().as_deref() == Some(directory))
-        .ok_or_else(|| invalid("manager launch is outside enrolled Discord directories"))?;
-    manager_scope(&place, &cfg)
+    manager_scope_for_directory(Place::enrolled(&supervisor)?, directory)
+}
+
+fn manager_scope_for_directory(
+    places: Vec<(Place, Config)>,
+    directory: &Path,
+) -> io::Result<Value> {
+    for (place, cfg) in places {
+        let root = std::fs::canonicalize(&place.dir)?;
+        if root == directory {
+            return manager_scope(&root, &cfg);
+        }
+        if directory.parent() == Some(root.as_path()) {
+            for (route, selected) in team_thread::Route::additional(&cfg)? {
+                if route.directory(&root)? == directory {
+                    let mut scope = manager_scope(directory, &selected)?;
+                    scope["call_place"] = json!(root);
+                    return Ok(scope);
+                }
+            }
+        }
+    }
+    Err(invalid(
+        "manager launch is outside enrolled Discord directories",
+    ))
 }
 
 pub(crate) fn native_manager_available(socket: &str) -> bool {
@@ -92,12 +112,20 @@ pub(crate) fn native_manager_available(socket: &str) -> bool {
         .and_then(|root| Place::enrolled(&root))
         .is_ok_and(|places| {
             places.into_iter().any(|(place, cfg)| {
-                cfg.text("daemon_socket") == socket && manager_scope(&place, &cfg).is_ok()
+                if cfg.text("daemon_socket") != socket {
+                    return false;
+                }
+                manager_scope(&place.dir, &cfg).is_ok()
+                    || team_thread::Route::additional(&cfg).is_ok_and(|routes| {
+                        routes
+                            .into_iter()
+                            .any(|(_, child)| manager_scope(&place.dir, &child).is_ok())
+                    })
             })
         })
 }
 
-fn manager_scope(place: &Place, cfg: &Config) -> io::Result<Value> {
+fn manager_scope(directory: &Path, cfg: &Config) -> io::Result<Value> {
     if !cfg.enabled()
         || cfg.text("mode") != "personal" && team_thread::Route::configured(cfg)?.is_none()
         || cfg.text("project_access") == "vm"
@@ -108,7 +136,7 @@ fn manager_scope(place: &Place, cfg: &Config) -> io::Result<Value> {
         ));
     }
     let owner = manager::Manager::new(cfg)?;
-    let bridge = std::fs::canonicalize(&place.dir)?.join("manager-v1");
+    let bridge = std::fs::canonicalize(directory)?.join("manager-v1");
     let mut scope = json!({"launch":owner.launch_request(&bridge.join("bridge.sock"), &bridge.join("bridge.auth")),
         "installation_id":cfg.text("installation_id"),"application_id":cfg.text("application_id"),
         "owner_id":cfg.text("owner_id"),"channel_id":owner.channel(),"supervisor_socket":cfg.text("daemon_socket")});
@@ -238,7 +266,9 @@ pub(crate) fn verify_connector_input(
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| invalid("invalid connector custody directory"))?;
-        call_runtime::verify_live(place, origin).map_err(|_| invalid(call_runtime::WITHDRAWN))?;
+        let call_place = scope["call_place"].as_str().map(Path::new).unwrap_or(place);
+        call_runtime::verify_live(call_place, origin)
+            .map_err(|_| invalid(call_runtime::WITHDRAWN))?;
     }
     Ok(())
 }

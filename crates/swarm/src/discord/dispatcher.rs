@@ -111,7 +111,7 @@ impl Dispatcher {
         api: &impl Audience,
         calls: Option<(&Path, &super::call_runtime::Driver)>,
     ) -> io::Result<()> {
-        self.serve_tool(inbox)?;
+        self.serve_tool(cfg, inbox, api)?;
         let mut state = inbox.manager().clone();
         if state.is_null() {
             if inbox.next_prepared().is_none() {
@@ -680,14 +680,14 @@ impl Dispatcher {
         Ok(())
     }
 
-    fn serve_tool(&self, inbox: &mut Inbox) -> io::Result<()> {
+    fn serve_tool(&self, cfg: &Config, inbox: &mut Inbox, api: &impl Audience) -> io::Result<()> {
         let (mut stream, _) = match self.listener.accept() {
             Ok(pair) => pair,
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(()),
             Err(err) => return Err(err),
         };
-        let result =
-            read_tool(&stream, &self.credential).and_then(|request| self.tool(inbox, &request));
+        let result = read_tool(&stream, &self.credential)
+            .and_then(|request| self.tool(cfg, inbox, api, &request));
         let reply = match result {
             Ok(data) => json!({"data":data}),
             Err(err)
@@ -714,7 +714,13 @@ impl Dispatcher {
         Ok(())
     }
 
-    fn tool(&self, inbox: &mut Inbox, request: &Value) -> io::Result<Value> {
+    fn tool(
+        &self,
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        request: &Value,
+    ) -> io::Result<Value> {
         let mut state = inbox.manager().clone();
         if request.as_object().is_none_or(|object| object.len() != 4)
             || request["call"]
@@ -726,7 +732,7 @@ impl Dispatcher {
             || state["input"].is_null()
             || !matches!(
                 field(&request["call"], "name"),
-                "publish" | "swarm_read_note" | "swarm_reply"
+                "publish" | "swarm_read_note" | "swarm_reply" | "swarm_read_attachment"
             )
         {
             return Err(invalid("unbound manager publication"));
@@ -741,6 +747,34 @@ impl Dispatcher {
         let call = &request["call"];
         let mut args = call["arguments"].clone();
         let tool = field(call, "name");
+        if tool == "swarm_read_attachment" {
+            if args.as_object().is_none_or(|fields| fields.len() != 3)
+                || !args["id"].as_str().is_some_and(super::config::snowflake)
+                || !args["sha256"].as_str().is_some_and(|hash| {
+                    hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                })
+                || !args["offset"].is_u64()
+            {
+                return Err(invalid("malformed exact received attachment request"));
+            }
+            args.sort_all_objects();
+            let proof = self.owner.prove_publication(
+                &input["composer"],
+                tool,
+                &hash(&args)?,
+                &call["meta"],
+            )?;
+            if proof["native_turn_id"] != input["turn_id"] {
+                return Err(invalid("attachment read belongs to another native turn"));
+            }
+            return inbox.read_active_attachment(
+                input,
+                field(&args, "id"),
+                field(&args, "sha256"),
+                args["offset"].as_u64().unwrap(),
+                |id| api.current(cfg, id),
+            );
+        }
         if tool != "publish" {
             if args.as_object().is_none_or(|fields| {
                 fields.keys().any(|key| {
@@ -1280,17 +1314,21 @@ mod tests {
                 "x-codex-turn-metadata":{"turn_id":"authorized-turn","thread_id":"provider-thread","session_id":"provider-thread"}}}});
         let mut alien = publish.clone();
         alien["call"]["meta"]["threadId"] = json!("unbound-thread");
-        assert!(dispatcher.tool(&mut inbox, &alien).is_err());
+        assert!(dispatcher.tool(&cfg, &mut inbox, &api, &alien).is_err());
         let mut wrong_recipient = publish.clone();
         wrong_recipient["call"]["arguments"]["recipient_id"] = json!("401");
-        assert!(dispatcher.tool(&mut inbox, &wrong_recipient).is_err());
+        assert!(
+            dispatcher
+                .tool(&cfg, &mut inbox, &api, &wrong_recipient)
+                .is_err()
+        );
         assert!(inbox.pending_publications().is_empty());
         state.lock().unwrap().wrong_turn = true;
-        assert!(dispatcher.tool(&mut inbox, &publish).is_err());
+        assert!(dispatcher.tool(&cfg, &mut inbox, &api, &publish).is_err());
         assert!(inbox.pending_publications().is_empty());
         state.lock().unwrap().wrong_turn = false;
-        dispatcher.tool(&mut inbox, &publish).unwrap();
-        dispatcher.tool(&mut inbox, &publish).unwrap();
+        dispatcher.tool(&cfg, &mut inbox, &api, &publish).unwrap();
+        dispatcher.tool(&cfg, &mut inbox, &api, &publish).unwrap();
         let nonce = field(&inbox.manager()["input"], "final_nonce").to_owned();
         assert_eq!(inbox.pending_publications(), std::slice::from_ref(&nonce));
         let outbox = dir.join("rust-text-v1.json");

@@ -168,7 +168,10 @@ impl Ledger {
                         if item["server"] == "swarm_voice"
                             && matches!(
                                 field(item, "tool"),
-                                "publish" | "swarm_read_note" | "swarm_reply"
+                                "publish"
+                                    | "swarm_read_note"
+                                    | "swarm_reply"
+                                    | "swarm_read_attachment"
                             )
                             && valid(id) =>
                     {

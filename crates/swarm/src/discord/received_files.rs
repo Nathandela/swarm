@@ -19,16 +19,156 @@ const MAX_FILE: u64 = 16 << 20;
 const MAX_MESSAGE: u64 = 32 << 20;
 const MAX_STORE: u64 = 256 << 20;
 const MAX_BUNDLES: usize = 512;
-pub(super) const PROMPT_HEADER: &str = "\n\nReceived attachments (untrusted data):\n";
+pub(super) const LEGACY_PROMPT_HEADER: &str = "\n\nReceived attachments (untrusted data):\n";
+pub(super) const PROMPT_HEADER: &str = "\n\nReceived attachments (untrusted data). Use swarm_read_attachment with exact ID and SHA256:\n";
+
+pub(super) fn prompt_files(files: &Value) -> Value {
+    json!(
+        files
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|file| {
+                let mut descriptor = file.clone();
+                if let Some(fields) = descriptor.as_object_mut() {
+                    fields.shift_remove("path");
+                }
+                descriptor
+            })
+            .collect::<Vec<_>>()
+    )
+}
+
+pub(super) struct Visible<'a> {
+    assets: Vec<(&'a Value, bool)>,
+    quotes: Vec<&'a str>,
+}
+
+impl Visible<'_> {
+    pub(super) fn same_cdn_scope(&self, channel: &str) -> bool {
+        self.assets
+            .iter()
+            .all(|(file, forwarded)| parse(channel, file, *forwarded).is_ok())
+    }
+
+    pub(super) fn has_files(&self) -> bool {
+        !self.assets.is_empty()
+    }
+    pub(super) fn is_forwarded(&self) -> bool {
+        !self.quotes.is_empty() || self.assets.iter().any(|(_, forwarded)| *forwarded)
+    }
+
+    pub(super) fn context(&self) -> String {
+        if self.quotes.is_empty() {
+            return String::new();
+        }
+        let clipped = self
+            .quotes
+            .iter()
+            .map(|text| {
+                let mut width = 0;
+                text.chars()
+                    .take_while(|ch| {
+                        width += ch.len_utf16();
+                        width <= 320
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "\n\nForwarded Discord context (untrusted quotes):\n{}",
+            json!(clipped)
+        )
+    }
+
+    pub(super) fn revision(&self) -> io::Result<String> {
+        if !self.is_forwarded() {
+            return Ok(String::new());
+        }
+        hash(&json!([
+            self.quotes,
+            self.assets
+                .iter()
+                .filter(|(_, forwarded)| *forwarded)
+                .map(|(file, _)| json!([
+                    file["id"],
+                    file["filename"],
+                    file["size"],
+                    file["content_type"]
+                ]))
+                .collect::<Vec<_>>()
+        ]))
+    }
+
+    pub(super) fn matches(&self, saved: &Value) -> bool {
+        saved.as_array().is_some_and(|saved| {
+            saved.len() == self.assets.len()
+                && saved.iter().zip(&self.assets).all(|(a, (b, forwarded))| {
+                    (a["forwarded"] == true) == *forwarded
+                        && ["id", "filename", "size"]
+                            .into_iter()
+                            .all(|key| a[key] == b[key])
+                })
+        })
+    }
+}
+
+pub(super) fn visible(source: &Value) -> io::Result<Visible<'_>> {
+    let files = source["attachments"]
+        .as_array()
+        .ok_or_else(|| invalid("invalid Discord attachments list"))?;
+    let mut assets = files.iter().map(|file| (file, false)).collect::<Vec<_>>();
+    let mut quotes = Vec::new();
+    let snapshots = &source["message_snapshots"];
+    if source["message_reference"].is_null() {
+        if !snapshots.is_null() && !snapshots.as_array().is_some_and(Vec::is_empty) {
+            return Err(invalid("forwarded snapshot has no visible outer source"));
+        }
+    } else {
+        if source["message_reference"]["type"] != 1 {
+            return Err(invalid("unsupported attachment source reference"));
+        }
+        let snapshots = snapshots
+            .as_array()
+            .filter(|snapshots| (1..=10).contains(&snapshots.len()))
+            .ok_or_else(|| invalid("invalid forwarded snapshot list"))?;
+        for snapshot in snapshots {
+            let message = &snapshot["message"];
+            if !message.is_object()
+                || !message["message_snapshots"].is_null()
+                || !message["message_reference"].is_null()
+            {
+                return Err(invalid("invalid visible forwarded snapshot"));
+            }
+            if let Some(content) = message["content"]
+                .as_str()
+                .filter(|content| !content.is_empty())
+            {
+                if content.len() > 16384 {
+                    return Err(invalid("forwarded context exceeds its bound"));
+                }
+                quotes.push(content);
+            }
+            if let Some(files) = message["attachments"].as_array() {
+                assets.extend(files.iter().map(|file| (file, true)));
+            }
+        }
+    }
+    if assets.len() > 10 {
+        return Err(invalid("Discord attachment count exceeds its bound"));
+    }
+    Ok(Visible { assets, quotes })
+}
 
 struct Attachment {
     id: String,
     filename: String,
     size: u64,
     url: String,
+    forwarded: bool,
 }
 
-fn parse(channel: &str, value: &Value) -> io::Result<Attachment> {
+fn parse(channel: &str, value: &Value, forwarded: bool) -> io::Result<Attachment> {
     let id = value["id"]
         .as_str()
         .filter(|id| snowflake(id))
@@ -71,6 +211,7 @@ fn parse(channel: &str, value: &Value) -> io::Result<Attachment> {
         filename: filename.into(),
         size,
         url: url.into(),
+        forwarded,
     })
 }
 
@@ -142,9 +283,7 @@ fn capture_with(
     manifest_budget: usize,
     mut fetch: impl FnMut(&Attachment) -> io::Result<Vec<u8>>,
 ) -> io::Result<Vec<Value>> {
-    let files = source["attachments"]
-        .as_array()
-        .ok_or_else(|| invalid("invalid Discord attachments list"))?;
+    let files = visible(source)?.assets;
     if files.is_empty() {
         return Ok(Vec::new());
     }
@@ -152,12 +291,12 @@ fn capture_with(
         .as_str()
         .filter(|id| snowflake(id))
         .ok_or_else(|| invalid("invalid attachment message identity"))?;
-    if files.len() > 10 || !snowflake(channel) {
+    if !snowflake(channel) {
         return Err(invalid("Discord attachment set outside supported scope"));
     }
     let attachments = files
         .iter()
-        .map(|file| parse(channel, file))
+        .map(|(file, forwarded)| parse(channel, file, *forwarded))
         .collect::<io::Result<Vec<_>>>()?;
     let total = attachments.iter().map(|file| file.size).sum::<u64>();
     if total > MAX_MESSAGE
@@ -178,7 +317,11 @@ fn capture_with(
         source["author"]["id"],
         attachments
             .iter()
-            .map(|file| json!([file.id, file.filename, file.size]))
+            .map(|file| if file.forwarded {
+                json!([file.id, file.filename, file.size, true])
+            } else {
+                json!([file.id, file.filename, file.size])
+            })
             .collect::<Vec<_>>()
     ]))?;
     let root = fs::canonicalize(place)?.join("received-files-v1");
@@ -187,7 +330,7 @@ fn capture_with(
         .iter()
         .map(|file| entry(file, &target, &"0".repeat(64)))
         .collect::<Vec<_>>();
-    if serde_json::to_vec(&preview)?.len() > manifest_budget {
+    if serde_json::to_vec(&prompt_files(&json!(preview)))?.len() > manifest_budget {
         return Err(invalid("received attachments cannot fit the native prompt"));
     }
     runtime::private_dir(&root)?;
@@ -238,8 +381,12 @@ fn capture_with(
 }
 
 fn entry(file: &Attachment, bundle: &Path, digest: &str) -> Value {
-    json!({"id":file.id,"filename":file.filename,"size":file.size,"sha256":digest,
-        "path":bundle.join(format!("{}.bin",file.id))})
+    let mut entry = json!({"id":file.id,"filename":file.filename,"size":file.size,"sha256":digest,
+        "path":bundle.join(format!("{}.bin",file.id))});
+    if file.forwarded {
+        entry["forwarded"] = json!(true);
+    }
+    entry
 }
 
 fn scan_store(root: &Path) -> io::Result<(usize, u64)> {
@@ -296,10 +443,11 @@ fn verify(target: &Path, attachments: &[Attachment]) -> io::Result<Vec<Value>> {
             || saved["size"] != file.size
             || saved["filename"] != file.filename
             || saved["path"] != json!(path)
+            || (saved["forwarded"] == true) != file.forwarded
         {
             return Err(invalid("received attachment manifest changed"));
         }
-        verify_file(&path, file.size, &saved["sha256"])?;
+        verified_bytes(&path, file.size, &saved["sha256"])?;
     }
     Ok(manifest.clone())
 }
@@ -312,43 +460,76 @@ pub(super) fn verify_receipt(place: &Path, files: &Value) -> io::Result<()> {
         .as_array()
         .filter(|items| (1..=10).contains(&items.len()))
         .ok_or_else(|| invalid("invalid received-file receipt"))?;
-    let root = place.join("received-files-v1");
     let mut total = 0_u64;
     for file in rows {
-        let id = file["id"]
-            .as_str()
-            .filter(|id| snowflake(id))
-            .ok_or_else(|| invalid("invalid received attachment ID"))?;
-        let size = file["size"]
-            .as_u64()
-            .filter(|size| *size <= MAX_FILE)
-            .ok_or_else(|| invalid("invalid received attachment size"))?;
+        let (path, size) = receipt_path(place, file)?;
         total += size;
-        let path = Path::new(
-            file["path"]
-                .as_str()
-                .ok_or_else(|| invalid("invalid received attachment path"))?,
-        );
-        let bundle = path
-            .parent()
-            .ok_or_else(|| invalid("missing received attachment bundle"))?;
-        if total > MAX_MESSAGE
-            || bundle.parent() != Some(root.as_path())
-            || !bundle
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name.len() == 64 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
-                })
-            || path.file_name().and_then(|name| name.to_str()) != Some(format!("{id}.bin").as_str())
-        {
-            return Err(invalid("received attachment path is outside the place"));
+        if total > MAX_MESSAGE {
+            return Err(invalid("received-file manifest exceeds its bound"));
         }
-        existing_private(&root)?;
-        existing_private(bundle)?;
-        verify_file(path, size, &file["sha256"])?;
+        verified_bytes(path, size, &file["sha256"])?;
     }
     Ok(())
+}
+
+pub(super) fn read_granted(
+    place: &Path,
+    files: &Value,
+    id: &str,
+    digest: &str,
+    offset: u64,
+) -> io::Result<Value> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let file = files
+        .as_array()
+        .and_then(|files| {
+            files
+                .iter()
+                .find(|file| file["id"] == id && file["sha256"] == digest)
+        })
+        .ok_or_else(|| invalid("attachment is outside the active received-file grant"))?;
+    let (path, size) = receipt_path(place, file)?;
+    if offset > size {
+        return Err(invalid("attachment offset exceeds the pinned file"));
+    }
+    let bytes = verified_bytes(path, size, &file["sha256"])?;
+    let end = offset.saturating_add(8192).min(size);
+    Ok(
+        json!({"id":id,"sha256":digest,"filename":file["filename"],"offset":offset,
+        "next_offset":end,"complete":end==size,"encoding":"base64","data":STANDARD.encode(&bytes[offset as usize..end as usize])}),
+    )
+}
+
+fn receipt_path<'a>(place: &Path, file: &'a Value) -> io::Result<(&'a Path, u64)> {
+    let root = place.join("received-files-v1");
+    let id = file["id"]
+        .as_str()
+        .filter(|id| snowflake(id))
+        .ok_or_else(|| invalid("invalid received attachment ID"))?;
+    let size = file["size"]
+        .as_u64()
+        .filter(|size| *size <= MAX_FILE)
+        .ok_or_else(|| invalid("invalid received attachment size"))?;
+    let path = Path::new(
+        file["path"]
+            .as_str()
+            .ok_or_else(|| invalid("invalid received attachment path"))?,
+    );
+    let bundle = path
+        .parent()
+        .ok_or_else(|| invalid("missing received attachment bundle"))?;
+    if bundle.parent() != Some(root.as_path())
+        || !bundle
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.len() == 64 && name.bytes().all(|b| b.is_ascii_hexdigit()))
+        || path.file_name().and_then(|name| name.to_str()) != Some(format!("{id}.bin").as_str())
+    {
+        return Err(invalid("received attachment path is outside the place"));
+    }
+    existing_private(&root)?;
+    existing_private(bundle)?;
+    Ok((path, size))
 }
 
 fn existing_private(path: &Path) -> io::Result<()> {
@@ -359,7 +540,7 @@ fn existing_private(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn verify_file(path: &Path, size: u64, digest: &Value) -> io::Result<()> {
+fn verified_bytes(path: &Path, size: u64, digest: &Value) -> io::Result<Vec<u8>> {
     let fd = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -378,12 +559,55 @@ fn verify_file(path: &Path, size: u64, digest: &Value) -> io::Result<()> {
     if bytes.len() as u64 != size || *digest != format!("{:x}", Sha256::digest(&bytes)) {
         return Err(invalid("received attachment content changed"));
     }
-    Ok(())
+    Ok(bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn forwarded_files_and_quotes_inherit_only_the_verified_visible_copy() {
+        use super::super::{config::Config, receipt::Inbox};
+        let place =
+            std::env::temp_dir().join(format!("swarm-forwarded-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&place).unwrap();
+        let cfg = Config(
+            json!({"mode":"personal","installation_id":"fixture","application_id":"44",
+            "owner_id":"15","dm_channel_id":"33","daemon_socket":"/tmp/forwarded"}),
+        );
+        let source = json!({"id":"11","author":{"id":"15"},"channel_id":"33","type":0,"content":"",
+            "message_reference":{"type":1,"channel_id":"99","message_id":"91"},
+            "attachments":[],"message_snapshots":[{"message":{"content":"visible quote",
+                "attachments":[{"id":"22","filename":"data.csv","size":4,
+                    "url":"https://cdn.discordapp.com/attachments/33/22/data.csv?sig=fixture"}]}}]});
+        let files = capture_with(&place, &source, "33", usize::MAX, |file| {
+            assert!(file.forwarded);
+            Ok(b"a,b\n".to_vec())
+        })
+        .unwrap();
+        assert_eq!(files[0]["forwarded"], true);
+        let mut inbox = Inbox::open(&place, &cfg).unwrap();
+        inbox.checkpoint("10").unwrap();
+        let receipt = inbox.admit(&source).unwrap().unwrap();
+        assert_eq!(receipt["received_files"], json!(files));
+        assert_eq!(receipt["author"]["id"], "15");
+        assert_eq!(receipt["route"]["channel_id"], "33");
+        assert!(receipt["text"].as_str().unwrap().contains("visible quote"));
+        let mut foreign = source.clone();
+        foreign["message_snapshots"][0]["message"]["attachments"][0]["url"] =
+            json!("https://cdn.discordapp.com/attachments/99/22/data.csv?sig=original-channel");
+        assert!(
+            capture_with(&place, &foreign, "33", usize::MAX, |_| panic!(
+                "scope attempted download"
+            ))
+            .is_err()
+        );
+        let mut fabricated = source.clone();
+        fabricated["message_reference"] = Value::Null;
+        assert!(inbox.admit(&fabricated).unwrap().is_none());
+        std::fs::remove_dir_all(place).unwrap();
+    }
+
     #[test]
     fn oversized_prompt_creates_no_bundle_and_abandoned_stage_reclaims_safely() {
         let place = std::env::temp_dir().join(format!(
@@ -452,7 +676,7 @@ mod tests {
         let state = json!({"generation":1,"launch":scope["launch"],"session":"s","binding":binding,
             "input":{"operation":"fixture","source_id":"11","composer":composer}});
         inbox
-            .cutover("11", receipt["revision"].as_str().unwrap(), state)
+            .cutover("11", receipt["revision"].as_str().unwrap(), state.clone())
             .unwrap();
         crate::discord::verify_connector_input(&scope, "fixture", &composer, None).unwrap();
         let path = receipt["received_files"][0]["path"].as_str().unwrap();
@@ -460,7 +684,132 @@ mod tests {
         assert!(
             crate::discord::verify_connector_input(&scope, "fixture", &composer, None).is_err()
         );
+        fs::set_permissions(path, fs::Permissions::from_mode(0o400)).unwrap();
+        assert!(!receipt["text"].as_str().unwrap().contains(path));
+        let fresh = |id: &str| {
+            assert_eq!(id, "11");
+            Ok(Some(source.clone()))
+        };
+        let digest = receipt["received_files"][0]["sha256"].as_str().unwrap();
+        assert!(
+            inbox
+                .read_active_attachment(&state["input"], "22", digest, 0, fresh)
+                .is_err()
+        );
+        let mut accepted = state;
+        accepted["input"]["turn_id"] = json!("native-turn");
+        inbox.settled_input("11", accepted.clone()).unwrap();
+        let chunk = inbox
+            .read_active_attachment(&accepted["input"], "22", digest, 2, fresh)
+            .unwrap();
+        assert_eq!(chunk["data"], "Ygo=");
+        let mut edited = source.clone();
+        edited["edited_timestamp"] = json!("2026-01-01T00:00:00Z");
+        let mut removed = source.clone();
+        removed["attachments"] = json!([]);
+        for replay in [None, Some(edited), Some(removed)] {
+            assert!(
+                inbox
+                    .read_active_attachment(&accepted["input"], "22", digest, 0, |_| Ok(replay))
+                    .is_err()
+            );
+        }
+
+        assert!(
+            inbox
+                .read_active_attachment(&accepted["input"], "23", digest, 0, fresh)
+                .is_err()
+        );
+        assert!(
+            inbox
+                .read_active_attachment(&accepted["input"], "22", &"0".repeat(64), 0, fresh)
+                .is_err()
+        );
+        let mut stale = accepted["input"].clone();
+        stale["turn_id"] = json!("another-turn");
+        assert!(
+            inbox
+                .read_active_attachment(&stale, "22", digest, 0, fresh)
+                .is_err()
+        );
+        inbox.set_manager(Value::Null).unwrap();
+        assert!(
+            inbox
+                .read_active_attachment(&accepted["input"], "22", digest, 0, fresh)
+                .is_err()
+        );
         fs::remove_dir_all(place).unwrap();
+    }
+
+    #[test]
+    fn accepted_team_reads_recertify_direct_and_forwarded_sources_during_gap() {
+        use super::super::{config::Config, receipt::Inbox, team_thread::Route};
+        for forwarded in [false, true] {
+            let place = std::env::temp_dir().join(format!(
+                "swarm-attach-team-{}",
+                runtime::random_id().unwrap()
+            ));
+            runtime::private_dir(&place).unwrap();
+            let cfg = Config(json!({
+                "mode":"teammate","installation_id":"fixture","application_id":"44",
+                "owner_id":"15","dm_channel_id":"30","daemon_socket":"/tmp/native-attach",
+                "guild_ids":["55"],"team_discussion":{"guild_id":"55","thread_id":"33"}
+            }));
+            let file = json!({"id":"22","filename":"data.csv","size":4,
+                "url":"https://cdn.discordapp.com/attachments/33/22/data.csv?sig=fixture"});
+            let mut source = json!({"id":"11","author":{"id":"16"},"guild_id":"55",
+                "channel_id":"33","type":0,"content":"source","attachments":[]});
+            if forwarded {
+                source["message_reference"] = json!({"type":1,"channel_id":"99","message_id":"56"});
+                source["message_snapshots"] = json!([{"message":{"content":"x".repeat(500),
+                    "attachments":[file]}}]);
+            } else {
+                source["attachments"] = json!([file]);
+            }
+            capture_with(&place, &source, "33", usize::MAX, |_| Ok(b"a,b\n".to_vec())).unwrap();
+            let mut inbox = Inbox::open(&place, &cfg).unwrap();
+            inbox.checkpoint("10").unwrap();
+            inbox.checkpoint_team("10").unwrap();
+            let route = Route::configured(&cfg).unwrap().unwrap();
+            let receipt = inbox.admit_team(&route, &source).unwrap().unwrap();
+            let mut state = json!({"input":{"source_id":"11","composer":{
+                "origin":{"revision":receipt["revision"]},"manager_admission":{"nonce":"a".repeat(64)}
+            }}});
+            inbox
+                .cutover("11", receipt["revision"].as_str().unwrap(), state.clone())
+                .unwrap();
+            state["input"]["turn_id"] = json!("native-turn");
+            inbox.settled_input("11", state.clone()).unwrap();
+            inbox.mark_team_gap().unwrap();
+
+            let digest = receipt["received_files"][0]["sha256"].as_str().unwrap();
+            let read = |fresh| {
+                inbox.read_active_attachment(&state["input"], "22", digest, 0, |id| {
+                    assert_eq!(id, "11");
+                    fresh
+                })
+            };
+            assert_eq!(read(Ok(Some(source.clone()))).unwrap()["data"], "YSxiCg==");
+            assert!(read(Ok(None)).is_err());
+            assert!(read(Err(io::Error::other("REST unavailable"))).is_err());
+            let mut altered = source.clone();
+            if forwarded {
+                // A revision beyond the admitted quote excerpt still invalidates the grant.
+                altered["message_snapshots"][0]["message"]["content"] =
+                    json!(format!("{}y", "x".repeat(499)));
+            } else {
+                altered["content"] = json!("changed");
+            }
+            assert!(read(Ok(Some(altered))).is_err());
+            let mut removed = source;
+            if forwarded {
+                removed["message_snapshots"][0]["message"]["attachments"] = json!([]);
+            } else {
+                removed["attachments"] = json!([]);
+            }
+            assert!(read(Ok(Some(removed))).is_err());
+            fs::remove_dir_all(place).unwrap();
+        }
     }
 
     #[test]
