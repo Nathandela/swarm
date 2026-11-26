@@ -50,13 +50,20 @@ pub(super) fn binding<'tx>(
     Ok(saved)
 }
 
+#[derive(PartialEq)]
+pub(super) struct Candidate {
+    route: Value,
+    author: Value,
+    revision: String,
+}
+
 pub(super) fn read_source(
     api: &Discord,
     cfg: &Config,
     route: &Route,
     guard: &Guard,
     hint: &Value,
-) -> io::Result<(Value, Value)> {
+) -> io::Result<Candidate> {
     let id = field(hint, "id");
     let actor = field(&hint["author"], "id");
     if !super::super::config::snowflake(actor)
@@ -107,10 +114,11 @@ pub(super) fn read_source(
         return Err(denied());
     }
     verify_read_authority(api, cfg, route)?;
-    Ok((
-        json!({"guild_id":route.guild_id,"channel_id":route.channel_id,"message_id":id}),
-        json!({"id":actor,"name":name}),
-    ))
+    Ok(Candidate {
+        route: json!({"guild_id":route.guild_id,"channel_id":route.channel_id,"message_id":id}),
+        author: json!({"id":actor,"name":name}),
+        revision: plain_revision(route, id, actor, text)?,
+    })
 }
 
 pub(super) fn commit(
@@ -119,10 +127,9 @@ pub(super) fn commit(
     cfg: &Config,
     route: &Route,
     guard: &Guard,
-    captured: (Value, Value),
-    verify_config: impl FnOnce() -> io::Result<bool>,
+    captured: Candidate,
+    recheck: impl FnOnce(&Candidate) -> io::Result<bool>,
 ) -> io::Result<()> {
-    let (candidate, author) = captured;
     let open = legacy_state::writable_pin(source)?;
     let current = open.metadata()?;
     if (expected.dev(), expected.ino()) != (current.dev(), current.ino()) {
@@ -138,20 +145,24 @@ pub(super) fn commit(
     let id = format!(
         "{}\0{}",
         cfg.text("installation_id"),
-        field(&candidate, "message_id")
+        field(&captured.route, "message_id")
     );
     if tx
         .bucket(b"teammate_ingress_guard")
         .ok_or_else(denied)?
         .get(id.as_bytes())
         .is_some()
+        || !recheck(&captured)?
         || !legacy_state::unchanged(&pin, source)?
-        || !verify_config()?
     {
         return Err(denied());
     }
     super::super::legacy_ingress::write_pending_ingress(
-        &mut tx, cfg, &mut saved, candidate, author,
+        &mut tx,
+        cfg,
+        &mut saved,
+        captured.route,
+        captured.author,
     )?;
     tx.commit().map_err(io::Error::other)
 }

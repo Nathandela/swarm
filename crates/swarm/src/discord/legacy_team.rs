@@ -124,7 +124,13 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
                     &route,
                     &guard,
                     captured,
-                    || Ok(!status.stopping() && verify_config()?),
+                    |captured| {
+                        if status.stopping() || !verify_config()? {
+                            return Ok(false);
+                        }
+                        let fresh = capture::read_source(api, cfg, &route, &guard, data)?;
+                        Ok(fresh == *captured && !status.stopping() && verify_config()?)
+                    },
                 )?;
                 println!("Captured one thread message in the original Go ingress queue.");
                 return Ok(());
@@ -240,21 +246,25 @@ fn verify_revision(route: &Route, guard: &Guard, message: &Value) -> io::Result<
     {
         return Err(unavailable());
     }
+    if plain_revision(route, &guard.route.message_id, &guard.actor_id, content)? != guard.revision {
+        return Err(unavailable());
+    }
+    Ok(())
+}
+
+fn plain_revision(route: &Route, id: &str, actor: &str, content: &str) -> io::Result<String> {
     let evidence = json!([
-        guard.actor_id,
+        actor,
         content,
         route.channel_id,
         route.guild_id,
-        guard.route.message_id,
+        id,
         null,
         "",
         null
     ]);
     let canonical = crate::ipc::escape_json(serde_json::to_string(&evidence)?);
-    if format!("{:x}", Sha256::digest(canonical)) != guard.revision {
-        return Err(unavailable());
-    }
-    Ok(())
+    Ok(format!("{:x}", Sha256::digest(canonical)))
 }
 
 fn verify_event(cfg: &Config, route: &Route, guard: &Guard, frame: &Value) -> io::Result<()> {
@@ -320,7 +330,7 @@ mod tests {
     fn rest_fixture(
         rest: TcpListener,
         revoked: Option<std::path::PathBuf>,
-        capture_fault: Option<&'static str>,
+        capture_case: Option<(&'static str, std::path::PathBuf)>,
     ) -> thread::JoinHandle<()> {
         thread::spawn(move || {
             let mut responses = vec![
@@ -354,7 +364,8 @@ mod tests {
                     json!({"permissions":"0"}),
                 ));
             }
-            if let Some(fault) = capture_fault {
+            if let Some((fault, _)) = &capture_case {
+                let fault = *fault;
                 responses.extend([
                     responses[1].clone(),
                     responses[2].clone(),
@@ -371,6 +382,7 @@ mod tests {
                     latest[0]["author"]["id"] = json!("201");
                 }
                 responses.push(("/channels/401/messages?limit=20", json!(latest)));
+
                 if fault != "wrong source" {
                     responses.extend([
                         responses[1].clone(),
@@ -382,6 +394,33 @@ mod tests {
                     }
                 }
             }
+            if let Some((fault, _)) = &capture_case
+                && !matches!(*fault, "wrong source" | "withdrawn")
+            {
+                responses.extend([
+                    responses[1].clone(),
+                    responses[2].clone(),
+                    responses[3].clone(),
+                ]);
+                if *fault == "late withdrawal" {
+                    responses.last_mut().unwrap().1["permissions"] = json!("0");
+                } else {
+                    let mut latest = responses[8].1.as_array().unwrap().clone();
+                    if *fault == "late deletion" {
+                        latest.remove(0);
+                    } else if *fault == "late edit" {
+                        latest[0]["content"] = json!("changed after the first read");
+                    }
+                    responses.push(("/channels/401/messages?limit=20", json!(latest)));
+                    if *fault != "late deletion" {
+                        responses.extend([
+                            responses[1].clone(),
+                            responses[2].clone(),
+                            responses[3].clone(),
+                        ]);
+                    }
+                }
+            }
             for (index, (path, response)) in responses.into_iter().enumerate() {
                 if index == 7
                     && let Some(dir) = &revoked
@@ -389,6 +428,16 @@ mod tests {
                     let status = super::super::local::call(dir, "status", "", None).unwrap();
                     assert_eq!(status["connected"], false);
                 }
+                let late = capture_case
+                    .as_ref()
+                    .filter(|(fault, _)| fault.starts_with("late "));
+                let delay = if index == 11
+                    && let Some((_, path)) = late
+                {
+                    Some(open_bolt(path, 64 << 20).unwrap())
+                } else {
+                    None
+                };
                 let (mut stream, _) = rest.accept().unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(3)))
@@ -397,6 +446,14 @@ mod tests {
                 let mut line = String::new();
                 input.read_line(&mut line).unwrap();
                 assert_eq!(line, format!("GET /api/v10{path} HTTP/1.1\r\n"));
+                if index == 12
+                    && let Some((_, path)) = &capture_case
+                {
+                    assert!(
+                        open_bolt(path, 64 << 20).is_err(),
+                        "recheck must run under the Go writer"
+                    );
+                }
                 let mut authenticated = false;
                 loop {
                     line.clear();
@@ -411,6 +468,10 @@ mod tests {
                 assert!(authenticated);
                 let body = response.to_string();
                 write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                if let Some(reader) = delay {
+                    thread::sleep(Duration::from_millis(150));
+                    drop(reader);
+                }
             }
         })
     }
@@ -590,10 +651,17 @@ mod tests {
         }
         assert_eq!(go(&["traffic-read", p, "sent"]).trim(), "sent");
         let original: Value = serde_json::from_str(&go(&["ingress-state", p, "existing"])).unwrap();
-        for fault in ["wrong source", "withdrawn", "valid"] {
+        for fault in [
+            "wrong source",
+            "withdrawn",
+            "late edit",
+            "late deletion",
+            "late withdrawal",
+            "valid",
+        ] {
             let rest = TcpListener::bind("127.0.0.1:0").unwrap();
             let api = Discord::loopback_fixture(&cfg, rest.local_addr().unwrap().port()).unwrap();
-            let server = rest_fixture(rest, None, Some(fault));
+            let server = rest_fixture(rest, None, Some((fault, dir.join("discord.db"))));
             let result = observe(&place, &cfg, &api, true, RECHECK_INTERVAL, |_| {
                 assert!(runtime::lock(&dir.join("bridge.lock")).is_err());
                 Ok(|| {
