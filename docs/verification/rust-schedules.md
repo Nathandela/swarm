@@ -75,6 +75,8 @@ The dashboard opens personal templates with `t`. Keyboard and pointer controls o
 
 Creating a template records its original request fingerprint in the same transaction. Both native hosts discarded the Rust save response, reopened and deleted the exact template in signed Go v0.29.25, then restarted Rust and retried without recreating the row or changing the database. The original Go template survived. Both interop logs have SHA-256 `b48890a33d6833caaf032e5699049f0720327c16dd4e5988ca53ce25ae093f06`. Both native raw dashboard workflows passed create, multiline paste, edit, draft apply, save and guarded delete. Their log SHA-256 is `20d6a5c34d1bec729b1c38d171edc7661a0fb57dd3140a0db94464c4bbcf3bad` on macOS and `b9afb82a2ac0d4a8ab916eff874376f8e35e3fb3ef19437f413c1f9245b57225` on Linux.
 
+Five template screen states matched signed Go v0.29.25 in the independent macOS fixture. It edited a real Go-format template with an 11,287-byte multiline paste, created and deleted templates through the dashboard, and verified that the saved automation kept its copied prompt after template edits and deletion. The saved job specs matched after substituting the per-run working directory. The Rust setup seeded that job through the CLI because the general draft layout and default values remain open. Go and Rust receipt SHA-256 are `bf10b144c91883a53bd1f880fd4752b72af071a45bcfb1998a55d33d071c28ec` and `ef16216218d042709162015b2d231189e109cd43778421d298c622bd8d1d3408`.
+
 ```sh
 python3 -Bu scripts/verification/parity/automation_enable.py GO_V0_29_24 --reference-go
 python3 -Bu scripts/verification/parity/automation_enable.py target/debug/swarm
