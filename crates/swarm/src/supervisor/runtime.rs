@@ -257,6 +257,90 @@ pub(crate) fn birth(pid: u32) -> io::Result<u64> {
         .ok_or_else(|| io::Error::other("could not read process birth ticks"))
 }
 
+pub(crate) fn terminal_peer(socket: &UnixStream, route: &str) -> io::Result<Value> {
+    let pid = peer_pid(socket)?;
+    let born = birth(pid)?;
+    let (parent, group, tty, foreground) = job_control(pid)?;
+    let session = unsafe { libc::getsid(pid as i32) };
+    if session <= 0
+        || parent <= 1
+        || birth(pid)? != born
+        || !matches!(route, "pipe" | "tty")
+        || route == "tty" && (group != pid || foreground != pid || tty == 0 || tty == u32::MAX)
+    {
+        return Err(io::Error::other("permission operator context is unproved"));
+    }
+    Ok(
+        serde_json::json!({"scope":[parent,birth(parent)?,session,route,if route == "tty" {tty} else {0}],"born":born,"pid":pid}),
+    )
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn birth_clock() -> io::Result<u64> {
+    u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_micros(),
+    )
+    .map_err(io::Error::other)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn birth_clock() -> io::Result<u64> {
+    let mut since_boot = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if ticks <= 0 || unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut since_boot) } != 0 {
+        return Err(io::Error::other("could not read process birth clock"));
+    }
+    Ok(since_boot.tv_sec as u64 * ticks as u64
+        + since_boot.tv_nsec as u64 * ticks as u64 / 1_000_000_000)
+}
+
+#[cfg(target_os = "macos")]
+fn job_control(pid: u32) -> io::Result<(u32, u32, u32, u32)> {
+    let size = size_of::<libc::proc_bsdinfo>();
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
+    let received = unsafe {
+        libc::proc_pidinfo(
+            pid as i32,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size as i32,
+        )
+    };
+    if received != size as i32 {
+        return Err(io::Error::last_os_error());
+    }
+    let info = unsafe { info.assume_init() };
+    Ok((info.pbi_ppid, info.pbi_pgid, info.e_tdev, info.e_tpgid))
+}
+
+#[cfg(target_os = "linux")]
+fn job_control(pid: u32) -> io::Result<(u32, u32, u32, u32)> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    let fields: Vec<_> = stat
+        .rsplit_once(") ")
+        .map(|(_, fields)| fields.split_whitespace().collect())
+        .unwrap_or_default();
+    let field = |index: usize| -> io::Result<i64> {
+        fields
+            .get(index)
+            .and_then(|field| field.parse().ok())
+            .ok_or_else(|| io::Error::other("could not read process terminal context"))
+    };
+    Ok((
+        field(1)? as u32,
+        field(2)? as u32,
+        field(4)? as u32,
+        field(5)? as u32,
+    ))
+}
+
 pub(crate) fn child_exited(child: &std::process::Child) -> io::Result<bool> {
     // waitid with WNOWAIT observes without reaping, so group ownership cannot
     // transfer via PID recycling before the final group signal.

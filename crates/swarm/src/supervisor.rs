@@ -946,6 +946,8 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 || matches!(
                     *cap,
                     "attach"
+                        | "agy-permission-v1"
+                        | "agy-permission-cli-v1"
                         | "subscribe"
                         | "owner-launch"
                         | "hands-off-handoff"
@@ -977,6 +979,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
     reply(&writer, state, welcome)?;
     stream.set_read_timeout(None)?;
     let mut subscribed = None;
+    let mut peek_offer = None;
     loop {
         let (tag, payload) = wire::read_frame(&mut stream)?;
         if tag != wire::CONTROL {
@@ -1001,6 +1004,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     | "set_tag"
                     | "launch"
                     | "attach"
+                    | "agy-permission-v1"
                     | "resize"
                     | "terminal_subscribe"
                     | "send_input"
@@ -1317,20 +1321,44 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 reply(&writer,state,response)
             }),
             "terminal_subscribe" => (|| {
+                peek_offer = None;
                 let terminal = if let Some(owner) = state.live_go(&request) {
                     owner.snapshot()?
                 } else {
                     let session = state.session(&request)?;
-                    let mut terminal = session.status_exchange(&json!({"type": "snapshot_req"}))?;
+                    let route = field(&request,"permission_route");
+                    let context = (session.is_scheduled_agy() && caps.contains(&"agy-permission-cli-v1")).then(|| runtime::terminal_peer(&stream,route).ok()).flatten();
+                    let mut terminal = session.status_exchange(&json!({
+                        "type":"snapshot_req","permission_snapshot":context.is_some(),
+                    }))?;
                     terminal["session"] = json!(session.id);
+                    if let Some(context) = context
+                        && let Some(offer) = terminal["agy_permission"]["request"].as_str() {
+                        peek_offer = Some((field(&request,"session_id").to_owned(),offer.to_owned(),context,route.to_owned()));
+                    }
                     terminal
                 };
                 reply(&writer, state, json!({"op": "ok"}))?;
-                reply(
-                    &writer,
-                    state,
-                    json!({"op": "terminal_snapshot", "terminal": terminal}),
-                )
+                reply(&writer,state,json!({"op":"terminal_snapshot","terminal":terminal}))
+            })(),
+            "agy_permission_peeked" if caps.contains(&"agy-permission-cli-v1") => (|| {
+                let (session, offered, context, route) = peek_offer.take().ok_or_else(|| io::Error::other("no pending Antigravity peek proof"))?;
+                if request["session_id"] != session || request["request"] != offered
+                    || runtime::terminal_peer(&stream,&route)? != context
+                {
+                    return Err(io::Error::other("Antigravity peek proof does not match this foreground client"));
+                }
+                let result = state.session(&request)?.status_exchange(&json!({
+                    "type":"agy_permission_peeked","request":offered,"context":context,
+                }))?;
+                if result["type"] != "ok" { return Err(io::Error::other("Antigravity permission display changed")); }
+                // A subsequent foreground or pipe child must have a strictly newer birth stamp.
+                let cutoff = runtime::birth_clock()?;
+                let deadline = Instant::now() + Duration::from_millis(50);
+                while runtime::birth_clock()? <= cutoff && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                reply(&writer,state,json!({"op":"ok"}))
             })(),
             "send_input" => state.session(&request).and_then(|session| {
                 let data = &request["send_input"];
@@ -1361,9 +1389,11 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 } else {
                     return Err(io::Error::other("need exactly one of text or key"));
                 };
-                let result = session.status_exchange(&json!({
-                    "type": "input", "data": bytes, "submit": submit, "paste": paste
-                }))?;
+                let mut command = json!({"type":"input","data":bytes,"submit":submit,"paste":paste});
+                if submit && session.is_scheduled_agy() && caps.contains(&"agy-permission-cli-v1") {
+                    command["permission_contexts"] = json!(["tty","pipe"].iter().filter_map(|route| runtime::terminal_peer(&stream,route).ok()).collect::<Vec<_>>());
+                }
+                let result = session.status_exchange(&command)?;
                 if field(&result, "type") != "ok" {
                     return Err(io::Error::other(field(&result, "error").to_owned()));
                 }
@@ -1380,7 +1410,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 } else {
                     state.session(&request)?.dial()?
                 };
-                attachment(&mut stream, &writer, state, &request, shim, owner.as_deref())
+                attachment(&mut stream, &writer, state, &request, shim, owner.as_deref(), owner.is_none() && caps.contains(&"agy-permission-v1"))
             })(),
             "resize" => Ok(()),
             _ => Err(io::Error::other(format!("unknown op {op:?}"))),
@@ -1447,13 +1477,18 @@ fn attachment(
     request: &Value,
     mut shim: UnixStream,
     owner: Option<&stopped_go::live::Owner>,
+    agy_permission: bool,
 ) -> io::Result<()> {
     let generation = state.generation.fetch_add(1, Ordering::Relaxed);
     let lease = owner
         .map(|owner| owner.begin(generation, &shim, client))
         .transpose()?;
     let snapshot = with_live_lease(lease.as_ref(), || {
-        runtime::write_control(&mut shim, &json!({"type": "attach"}))?;
+        let mut request = json!({"type":"attach"});
+        if agy_permission {
+            request["agy_permission"] = json!(true);
+        }
+        runtime::write_control(&mut shim, &request)?;
         read_attach_snapshot(&mut shim)
     })?;
     let id = field(request, "session_id");
@@ -1475,9 +1510,25 @@ fn attachment(
     let pump_writer = writer.clone();
     let closing = Arc::new(AtomicBool::new(false));
     let pump_closing = closing.clone();
+    let endpoint = state.endpoint.clone();
+    let session = id.to_owned();
     let pump = thread::spawn(move || {
-        while let Ok((DATA_OUT, bytes)) = wire::read_frame(&mut source) {
-            if wire::write_frame(&mut *pump_writer.lock().unwrap(), DATA_OUT, &bytes).is_err() {
+        while let Ok((tag, bytes)) = wire::read_frame(&mut source) {
+            let result = if tag == DATA_OUT {
+                wire::write_frame(&mut *pump_writer.lock().unwrap(), DATA_OUT, &bytes)
+            } else if agy_permission
+                && tag == wire::CONTROL
+                && let Ok(mut message) = serde_json::from_slice::<Value>(&bytes)
+                && message["op"] == "agy_permission"
+            {
+                message["endpoint_id"] = json!(endpoint);
+                message["session_id"] = json!(session);
+                message["generation"] = json!(generation);
+                runtime::write_control(&mut *pump_writer.lock().unwrap(), &message)
+            } else {
+                break;
+            };
+            if result.is_err() {
                 break;
             }
         }
@@ -1509,6 +1560,17 @@ fn attachment(
                             }),
                         )
                     })?,
+                    op @ ("agy_permission_displayed" | "agy_permission_reply")
+                        if agy_permission =>
+                    {
+                        runtime::write_control(
+                            &mut shim,
+                            &json!({
+                                "type":op,"request":control["request"],
+                                "display":control["display"],"choice":control["choice"],
+                            }),
+                        )?;
+                    }
                     "detach" => break,
                     _ => {}
                 }

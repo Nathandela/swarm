@@ -1,3 +1,4 @@
+mod agy_permission;
 mod codex_backend;
 mod opencode_backend;
 mod pty;
@@ -138,11 +139,16 @@ struct ScreenState {
     parser: vt100::Parser,
     mouse: crate::terminal_mouse::Tracker,
     subscriber: Option<Subscriber>,
+    agy_pending: Option<agy_permission::Pending>,
 }
 
 struct Subscriber {
     generation: u64,
-    output: SyncSender<Vec<u8>>,
+    output: SyncSender<(u8, Vec<u8>)>,
+    agy_permission: bool,
+    agy_offer: Option<String>,
+    agy_armed: bool,
+    agy_display: String,
     conn: UnixStream,
     replies: Arc<Mutex<terminal_reply::Debt>>,
 }
@@ -677,6 +683,7 @@ fn serve(dir: &Path) -> io::Result<()> {
             parser: vt100::Parser::new(rows.try_into().unwrap(), cols.try_into().unwrap(), 0),
             mouse: crate::terminal_mouse::Tracker::new(crate::terminal_mouse::Modes::at_reset()),
             subscriber: None,
+            agy_pending: None,
         }),
         control: Mutex::new(0),
         generation: AtomicU64::new(1),
@@ -980,10 +987,16 @@ fn drain(state: Arc<State>, pending: Option<Arc<PendingStatus>>, replies: SyncSe
             Ok(())
         });
         if let Some(sub) = &screen.subscriber
-            && sub.output.try_send(bytes[..n].to_vec()).is_err()
+            && sub
+                .output
+                .try_send((DATA_OUT, bytes[..n].to_vec()))
+                .is_err()
         {
             let _ = sub.conn.shutdown(Shutdown::Both);
             screen.subscriber = None;
+        }
+        if screen.agy_pending.is_some() {
+            agy_permission::offer(&mut screen);
         }
         let mut identity_changed = false;
         let status = pending.as_ref().and_then(|_| {
@@ -1082,12 +1095,23 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
     let request = runtime::read_control(&mut stream)?;
     match field(&request, "type") {
         "snapshot_req" => {
-            let terminal = screen::terminal(state.screen.lock().unwrap().parser.screen());
+            let terminal = {
+                let owner = state.control.lock().unwrap();
+                let screen = state.screen.lock().unwrap();
+                let mut terminal = screen::terminal(screen.parser.screen());
+                if request["permission_snapshot"] == true
+                    && *owner == 0
+                    && let Some(offer) = agy_permission::snapshot_offer(&screen)
+                {
+                    terminal["agy_permission"] = offer;
+                }
+                terminal
+            };
             runtime::write_control(&mut stream, &terminal)
         }
         "attach" => {
             opencode_terminal_ready(state)?;
-            attach(stream, state)
+            attach(stream, state, request["agy_permission"] == true)
         }
         "manager_park" if state.manager => {
             let result = (|| {
@@ -1139,6 +1163,16 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 },
             )
         }
+        "agy_permission_peeked" => {
+            let owner = state.control.lock().unwrap();
+            let accepted = *owner == 0
+                && agy_permission::acknowledge_peek(&mut state.screen.lock().unwrap(), &request);
+            runtime::write_control(
+                &mut stream,
+                &json!({"type":if accepted {"ok"} else {"error"}}),
+            )
+        }
+        "agy_permission_begin" => agy_permission::begin(state, &mut stream, &request),
         "maintenance_probe" => {
             let result = maintenance_probe(state, &request);
             let reply = match result {
@@ -1370,6 +1404,22 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 return Err(io::Error::other("invalid shim input payload"));
             }
             let _guard = state.control.lock().unwrap();
+            if state.provider == "agy" && state.schedule.is_some() {
+                let mut screen = state.screen.lock().unwrap();
+                let cancelled = text.trim() == "0"
+                    && request["submit"] == true
+                    && agy_permission::respond(&mut screen, None);
+                let accepted = cancelled
+                    || *_guard == 0 && agy_permission::cli_selection(&mut screen, &request);
+                return runtime::write_control(
+                    &mut stream,
+                    &if accepted {
+                        json!({"type":"ok"})
+                    } else {
+                        json!({"type":"error","error":"scheduled Antigravity input requires a current permission menu in the attached board or foreground peek"})
+                    },
+                );
+            }
             state.terminal_input.store(true, Ordering::Release);
             if let Err(e) = write_input(
                 state,
@@ -1971,12 +2021,13 @@ fn write_agy_observation(state: &State, observed: &ProviderObservation) -> io::R
     )
 }
 
-fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
+fn attach(mut stream: UnixStream, state: &State, agy_permission: bool) -> io::Result<()> {
     let generation = state.generation.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = mpsc::sync_channel(32);
     let worker = stream.try_clone()?;
     let eviction = stream.try_clone()?;
     let snap;
+    let agy = state.provider == "agy" && state.schedule.is_some();
     let replies = Arc::new(Mutex::new(terminal_reply::Debt::default()));
     let mut filter = terminal_reply::Filter::default();
     {
@@ -1986,12 +2037,20 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
         if let Some(previous) = screen.subscriber.replace(Subscriber {
             generation,
             output: tx,
+            agy_permission: agy && agy_permission,
+            agy_offer: None,
+            agy_armed: false,
+            agy_display: String::new(),
             conn: eviction,
             replies: replies.clone(),
         }) {
             let _ = previous.conn.shutdown(Shutdown::Both);
         }
+        if agy {
+            agy_permission::revoke_peek(&mut screen);
+        }
         *owner = generation;
+        agy_permission::offer(&mut screen);
     }
 
     stream.set_read_timeout(None)?;
@@ -2005,8 +2064,8 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
             for chunk in snap.chunks(64 * 1024) {
                 wire::write_frame(&mut writer, SNAPSHOT, chunk)?;
             }
-            for output in rx {
-                wire::write_frame(&mut writer, DATA_OUT, &output)?;
+            for (tag, output) in rx {
+                wire::write_frame(&mut writer, tag, &output)?;
             }
             Ok::<(), io::Error>(())
         })();
@@ -2036,6 +2095,7 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 break;
             }
             match tag {
+                DATA_IN if agy => {}
                 DATA_IN => {
                     if state.manager {
                         return Err(io::Error::other(
@@ -2050,6 +2110,15 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 }
                 wire::CONTROL => {
                     let request: Value = serde_json::from_slice(&bytes)?;
+                    if agy
+                        && matches!(
+                            field(&request, "type"),
+                            "agy_permission_displayed" | "agy_permission_reply"
+                        )
+                    {
+                        agy_permission::control(&mut state.screen.lock().unwrap(), &request);
+                        continue;
+                    }
                     if request["type"] != "resize" {
                         break;
                     }
@@ -2058,6 +2127,9 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     pty::resize(&state.master, cols, rows)?;
                     view.parser
                         .set_size(rows.try_into().unwrap(), cols.try_into().unwrap());
+                    if agy {
+                        agy_permission::offer(&mut view);
+                    }
                 }
                 _ => break,
             }

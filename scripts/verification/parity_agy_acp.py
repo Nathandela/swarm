@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """Compare scheduled Antigravity ACP admission, permission and completion on Go and Rust."""
+from contextlib import contextmanager
 import json
-import re
+import fcntl
+import os
+import pty
+import select
+import shlex
+import signal
+import termios
 import socket
 import struct
 import time
@@ -104,7 +111,7 @@ result(prompt, {"stopReason":"end_turn"})
 '''
 
 
-def verify(binary, *, allow=True, version="1.5.12", authority="agent-default", challenge=False):
+def verify(binary, *, allow=True, version="1.5.12", authority="agent-default", approval="", protected=True):
     with tempfile.TemporaryDirectory(prefix="aca-", dir=Path("/tmp").resolve()) as tmp:
         root = Path(tmp)
         home, tools, work, state = (root / key for key in ("home", "bin", "work", "s"))
@@ -133,30 +140,76 @@ def verify(binary, *, allow=True, version="1.5.12", authority="agent-default", c
         def rows():
             return json.loads(cli("ls", "--json").stdout) or []
 
-        def attached_response(text):
-            with socket.socket(socket.AF_UNIX) as owner:
-                owner.settimeout(4)
-                owner.connect(str(sock))
-                with owner.makefile("rwb") as stream:
+        def plain_peek():
+            with (root / "peek-only").open("w") as display:
+                subprocess.run([binary,"peek",sid],cwd=work,env=env,stdout=display,
+                               stderr=subprocess.DEVNULL,timeout=5)
+            return (root / "peek-only").read_text()
+
+        @contextmanager
+        def protocol_attach():
+            with socket.socket(socket.AF_UNIX) as conn:
+                conn.settimeout(5)
+                conn.connect(str(sock))
+                with conn.makefile("rwb") as stream:
                     def frame(tag, body):
                         stream.write(struct.pack(">I", len(body) + 1) + bytes([tag]) + body)
                         stream.flush()
-                    def read_frame():
-                        size = struct.unpack(">I", stream.read(4))[0]
-                        return stream.read(size)
-                    frame(1, json.dumps({"op":"hello","protocol_version":1,"capabilities":["attach"]}).encode())
-                    hello = json.loads(read_frame()[1:])
-                    frame(1, json.dumps({"op":"attach","endpoint_id":hello["endpoint_id"],"session_id":sid}).encode())
-                    lease = json.loads(read_frame()[1:])
-                    assert lease["op"] == "lease" and lease["session_id"] == sid
+                    def receive():
+                        length = struct.unpack(">I", stream.read(4))[0]
+                        data = stream.read(length)
+                        return data[0], data[1:]
+                    def control(body):
+                        frame(1,json.dumps(body).encode())
+                    control({"op":"hello","protocol_version":1,"capabilities":["attach","agy-permission-v1"]})
+                    _, welcome = receive()
+                    hello = json.loads(welcome)
+                    assert "agy-permission-v1" in hello["capabilities"]
+                    control({"op":"attach","endpoint_id":hello["endpoint_id"],"session_id":sid})
+                    _, leased = receive()
+                    lease = json.loads(leased)
+                    assert lease["op"] == "lease"
                     remaining = lease["snapshot_len"]
                     while remaining:
-                        part = read_frame()
-                        assert part[0] == 4
-                        remaining -= len(part) - 1
-                    frame(3, (text + "\r").encode())
-                    wait_for(lambda: (work / "first-permission-approved").exists() or not challenge,
-                             "attached response consumed", timeout=3)
+                        tag, chunk = receive()
+                        assert tag == 4
+                        remaining -= len(chunk)
+                    def offer():
+                        while True:
+                            tag, data = receive()
+                            if tag == 1:
+                                event = json.loads(data)
+                                if event["op"] == "agy_permission" and event["request"]:
+                                    return event
+                    def decision(op, menu, choice=None):
+                        control({"op":op,"request":menu["request"],"display":menu["display"],
+                                 "generation":menu["generation"],"endpoint_id":hello["endpoint_id"],
+                                 "session_id":sid,"choice":choice})
+                    yield offer, decision, frame
+
+        class Board:
+            def __enter__(self):
+                self.master, slave = pty.openpty()
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 32, 124, 0, 0))
+                self.child = subprocess.Popen([binary],cwd=work,env=env,stdin=slave,stdout=slave,stderr=slave)
+                os.close(slave)
+                self.buffer = bytearray()
+                return self
+
+            def read(self, text):
+                def found():
+                    if select.select([self.master],[],[],.05)[0]:
+                        self.buffer.extend(os.read(self.master,8192))
+                    return text in self.buffer
+                return wait_for(found,f"real board display {text!r}")
+
+            def send(self, text):
+                os.write(self.master,text)
+
+            def __exit__(self,*_):
+                self.child.terminate()
+                self.child.wait(timeout=5)
+                os.close(self.master)
 
         with (root / "daemon-log").open("wb") as log:
             daemon = subprocess.Popen([binary, "daemon"], cwd=work, env=env, stderr=log)
@@ -173,7 +226,7 @@ def verify(binary, *, allow=True, version="1.5.12", authority="agent-default", c
                 assert not rows() and not (work / "prompts").exists()
                 return
             job = json.loads(created.stdout)
-            if challenge:
+            if approval:
                 (work / "challenge-fixture").touch()
             schedule("run", job["id"])
             def history():
@@ -198,33 +251,136 @@ def verify(binary, *, allow=True, version="1.5.12", authority="agent-default", c
             sid = wait_for(get_sid, "ACP session")
             def has_permission():
                 state = tick()
-                peek = cli("peek", sid, ok=False)
+                screen = plain_peek()
                 pending = rows()[0]["status"]["Interaction"] == "permission" or state["state"] == "needs-input"
-                return pending and peek.returncode == 0 and "fixture permission" in peek.stdout
+                return pending and "fixture permission" in screen
 
-            if challenge:
+            expected_menu = "Enter an option number, or 0 to cancel."
+            def open_prompt():
                 def prompted():
                     tick()
                     return (work / "prompts").exists()
-                wait_for(prompted, "ACP prompt before first permission")
-                cli("send", sid, "--text", "1")
+                wait_for(prompted,"ACP prompt before first permission")
+
+            if approval == "board":
+                open_prompt()
+                with Board() as board:
+                    board.read(b"ACP fixture")
+                    board.send(b"\r")
+                    time.sleep(.2)
+                    board.send(b"1\r")  # Before the first ACP request is displayed.
+                    (work / "show-permission").touch()
+                    wait_for(has_permission, "pending human permission")
+                    board.read(expected_menu.encode())
+                    time.sleep(.15)
+                    board.send(b"\r")   # A late Enter cannot approve the next empty draft.
+                    board.send(b"\x1b[200~unrelated\r1\r\x1b[201~")
+                    time.sleep(.15)
+                    assert not (work / "first-permission-approved").exists()
+                    assert cli("send",sid,"--text","1",ok=False).returncode
+                    board.send(b"1\r")
+                    wait_for(lambda:(work/"first-permission-approved").exists(),"fresh numbered board approval")
+                wait_for(has_permission,"consecutive permission")
+                assert cli("send",sid,"--text","1",ok=False).returncode
+                cli("send",sid,"--text","0")
+            elif approval == "wire":
+                open_prompt()
                 (work / "show-permission").touch()
-            wait_for(has_permission, "pending human permission")
-            if challenge:
-                def current_code():
-                    screen = cli("peek", sid, ok=False).stdout
-                    matches = re.findall(r"followed by ([0-9a-f]{12})", screen)
-                    return matches[-1] if matches else None
-                first_code = wait_for(current_code, "first visible permission code")
-                time.sleep(.15)
-                assert not (work / "first-permission-approved").exists()
-                attached_response(f"1 {first_code}")
-                wait_for(lambda: (code if (code := current_code()) and code != first_code else None),
-                         "distinct second permission code")
-                # The previous displayed code can never approve this active request.
-                attached_response(f"1 {first_code}")
+                wait_for(has_permission, "pending wire permission")
+                with protocol_attach() as (offer, decision, frame):
+                    old = offer()
+                    decision("agy_permission_reply", old, 1)  # No displayed ACK.
+                    frame(3,b"1\r")
+                    time.sleep(.1)
+                    assert not (work/"first-permission-approved").exists()
+                    with protocol_attach() as (new_offer, new_decision, _):
+                        first = new_offer()
+                        assert first["request"] == old["request"] and first["generation"] != old["generation"]
+                        new_decision("agy_permission_displayed", old)
+                        new_decision("agy_permission_reply", old, 1)
+                        stale_display = old | {"generation":first["generation"]}
+                        new_decision("agy_permission_displayed", stale_display)
+                        new_decision("agy_permission_reply", stale_display, 1)
+                        time.sleep(.1)
+                        assert not (work/"first-permission-approved").exists()
+                        new_decision("agy_permission_displayed", first)
+                        new_decision("agy_permission_reply", first, 1)
+                        wait_for(lambda:(work/"first-permission-approved").exists(),"current acknowledged request")
+                        second = new_offer()
+                        assert second["request"] != first["request"]
+                        new_decision("agy_permission_displayed", first)
+                        new_decision("agy_permission_reply", first, 1)
+                        time.sleep(.1)
+                        assert not (work/"mcp-receipt-confirmed").exists()
+                        new_decision("agy_permission_displayed", second)
+                        new_decision("agy_permission_reply", second, 0)
+            elif approval == "tty":
+                open_prompt()
+                (work / "show-permission").touch()
+                wait_for(has_permission, "pending foreground permission")
+                pid, fd = pty.fork()
+                if pid == 0:
+                    os.chdir(work)
+                    os.execve("/bin/sh",["/bin/sh","-i"],env | {"PS1":"ACP-SHELL> "})
+                def shell_line(command, expected):
+                    os.write(fd,(command+"\n").encode())
+                    output = bytearray()
+                    def visible():
+                        if select.select([fd],[],[],.05)[0]:
+                            output.extend(os.read(fd,8192))
+                        return expected in output
+                    wait_for(visible,f"foreground shell output {expected!r}")
+                try:
+                    shell_line(shlex.join([str(binary),"peek",sid]),expected_menu.encode())
+                    shell_line(shlex.join([str(binary),"send",sid,"--text","1"])+" && printf 'APPROVED\\n'","APPROVED\r\n".encode())
+                    wait_for(lambda:(work/"first-permission-approved").exists(),"fresh foreground CLI approval")
+                finally:
+                    os.close(fd)
+                    try:
+                        os.kill(pid,signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    os.waitpid(pid,0)
+                wait_for(has_permission,"consecutive permission")
+                assert cli("send",sid,"--text","1",ok=False).returncode
+                cli("send",sid,"--text","0")
+            elif approval == "pipe":
+                open_prompt()
+                (work / "show-permission").touch()
+                wait_for(has_permission, "pending human permission")
+                if protected:
+                    assert cli("send",sid,"--text","1",ok=False).returncode
+                    cli("peek",sid,"--lines","1")
+                    assert cli("send",sid,"--text","1",ok=False).returncode
+                    # A prestarted process retains its original birth even after exec.
+                    release = work / "release-cli"
+                    prestarted = subprocess.Popen(
+                        ["/bin/sh","-c",'while [ ! -e "$1" ]; do sleep .02; done; shift; exec "$@"',
+                         "prestarted", release, binary, "send",sid,"--text","1"],
+                        cwd=work,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+                snapshot = cli("peek", sid).stdout
+                assert expected_menu in snapshot and "followed by" not in snapshot
+                if protected:
+                    release.touch()
+                    prestarted.communicate(timeout=8)
+                    assert prestarted.returncode, "prestarted job used a later peek acknowledgment"
+                    assert not (work/"first-permission-approved").exists()
+                    different = subprocess.run(
+                        [sys.executable,"-c","import subprocess,sys; sys.exit(subprocess.call(sys.argv[1:]))",
+                         binary,"send",sid,"--text","1"],cwd=work,env=env,capture_output=True,timeout=8)
+                    assert different.returncode, "unrelated parent used the observer's grant"
+                    assert cli("send",sid,"--text","1","--no-submit",ok=False).returncode
+                    assert cli("send",sid,"--key","enter",ok=False).returncode
+                cli("send", sid, "--text", "1")
+                wait_for(lambda:(work/"first-permission-approved").exists(),"fresh pipe approval")
+                wait_for(has_permission,"consecutive permission")
+                if protected:
+                    assert cli("send",sid,"--text","1",ok=False).returncode
+                cli("send",sid,"--text","0")
             else:
-                cli("send", sid, "--text", "0")
+                wait_for(has_permission, "pending human permission")
+                assert expected_menu in plain_peek()
+                cli("send",sid,"--text","0")
             wait_for(lambda: (work / "mcp-receipt-confirmed").exists(), "real scoped MCP bridge receipt")
             assert tick()["state"] != "ready", "transport receipt projected before final assistant proof"
             (work / "permit-final").write_text("valid" if allow else "invalid")
@@ -251,8 +407,12 @@ if __name__ == "__main__":
     for binary in (Path(path).resolve(strict=True) for path in sys.argv[1:]):
         print(binary, flush=True)
         verify(binary)
-        if subprocess.check_output([binary, "version"], text=True).strip().endswith("(Rust)"):
-            verify(binary, challenge=True)
+        rust = subprocess.check_output([binary, "version"], text=True).strip().endswith("(Rust)")
+        verify(binary, approval="pipe", protected=rust)
+        if rust:
+            verify(binary, approval="board")
+            verify(binary, approval="wire")
+            verify(binary, approval="tty")
         verify(binary, allow=False)
         verify(binary, version="1.5.11")
         verify(binary, authority="observe")
