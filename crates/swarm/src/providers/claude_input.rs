@@ -92,8 +92,7 @@ impl Broker {
         let supervisor = dir.parent().and_then(Path::parent).ok_or_else(refused)?;
         if provider["name"] != "claude"
             || !qualified(field(provider, "version"))
-            || crate::discord::worker_input_installation(supervisor, owner_socket).as_deref()
-                != Some(installation)
+            || !crate::discord::worker_installation_enrolled(supervisor, owner_socket, installation)
         {
             return Err(refused());
         }

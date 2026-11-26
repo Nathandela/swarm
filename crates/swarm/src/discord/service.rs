@@ -24,7 +24,7 @@ pub(super) fn run(place: &Place, cfg: &Config) -> io::Result<()> {
             "the Rust foreground connector requires an owner DM or enrolled guild with a configured owner",
         ));
     }
-    let (_lease, listener) = place.claim(cfg)?;
+    let (_lease, _app_lease, listener) = place.claim(cfg)?;
     let bridge = Bridge::new(place.dir.join("bridge.sock"), listener)?;
     let inbox = Inbox::open(&place.dir, cfg)?;
     let api = Discord::connect(cfg)?;

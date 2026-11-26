@@ -94,6 +94,7 @@ pub(super) struct Place {
 const CONFIG: &str = "config.json";
 const SELECTION: &str = "discord-active.json";
 const OWNER: &str = ".rust-offline-owner.json";
+const ENROLLMENTS: &str = "discord-enrollments-v1.json";
 
 impl Place {
     pub(super) fn supervisor_root(&self) -> &Path {
@@ -130,6 +131,118 @@ impl Place {
             supervisor,
             explicit: false,
         })
+    }
+
+    fn registry(supervisor: &Path) -> io::Result<Value> {
+        match runtime::read_json(&supervisor.join(ENROLLMENTS)) {
+            Ok(data) if data.as_object().is_some_and(|entries| entries.len() <= 64) => Ok(data),
+            Ok(_) => Err(invalid("malformed Discord enrollment registry")),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(json!({})),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn enrolled_row(&self, cfg: &Config) -> io::Result<Value> {
+        Ok(json!({"directory":fs::canonicalize(&self.dir)?,
+            "application_id":cfg.text("application_id"),"owner_id":cfg.text("owner_id"),
+            "supervisor_socket":cfg.text("daemon_socket")}))
+    }
+
+    fn register(&self, cfg: &Config) -> io::Result<()> {
+        let mut registry = Self::registry(&self.supervisor)?;
+        let expected = self.enrolled_row(cfg)?;
+        let installation = cfg.text("installation_id");
+        if !registry[installation].is_null() && registry[installation] != expected {
+            return Err(invalid("Discord place changed its enrolled custody"));
+        }
+        for (id, row) in registry.as_object().unwrap() {
+            if id == installation || row["application_id"] != cfg.text("application_id") {
+                continue;
+            }
+            let old = Self::registered_entry(&self.supervisor, id, row).ok();
+            if old.is_some_and(|(_, cfg)| cfg.enabled()) {
+                return Err(invalid("Discord app already has another enabled connector"));
+            }
+        }
+        if let Ok(selected) = Self::for_supervisor(&self.supervisor)
+            && let Ok(old) = selected.load()
+            && old.enabled()
+            && old.text("installation_id") != installation
+            && old.text("application_id") == cfg.text("application_id")
+        {
+            return Err(invalid("Discord app already has a selected connector"));
+        }
+        if registry[installation].is_null() {
+            if registry.as_object().unwrap().len() >= 64 {
+                return Err(invalid("Discord enrollment registry is full"));
+            }
+            registry[installation] = expected;
+            runtime::write_json(&self.supervisor.join(ENROLLMENTS), &registry)?;
+        }
+        Ok(())
+    }
+
+    fn registered_entry(
+        supervisor: &Path,
+        installation: &str,
+        row: &Value,
+    ) -> io::Result<(Self, Config)> {
+        let directory = row["directory"]
+            .as_str()
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| invalid("Discord installation has no enrolled directory"))?;
+        if !Path::new(directory).is_absolute() {
+            return Err(invalid("invalid registered Discord directory"));
+        }
+        let place = Self {
+            dir: directory.into(),
+            supervisor: supervisor.into(),
+            explicit: true,
+        };
+        let cfg = place.load()?;
+        place.ensure_owned(&cfg)?;
+        if cfg.text("installation_id") != installation || place.enrolled_row(&cfg)? != *row {
+            return Err(invalid(
+                "Discord registered enrollment failed custody verification",
+            ));
+        }
+        Ok((place, cfg))
+    }
+
+    pub(super) fn for_installation(
+        supervisor: &Path,
+        installation: &str,
+    ) -> io::Result<(Self, Config)> {
+        let registry = Self::registry(supervisor)?;
+        let row = &registry[installation];
+        if !row.is_null() {
+            return Self::registered_entry(supervisor, installation, row);
+        }
+        let selected = Self::for_supervisor(supervisor)?;
+        let cfg = selected.load()?;
+        selected.ensure_owned(&cfg)?;
+        if cfg.text("installation_id") != installation {
+            return Err(invalid("unknown enrolled Discord installation"));
+        }
+        Ok((selected, cfg))
+    }
+
+    pub(super) fn enrolled(supervisor: &Path) -> io::Result<Vec<(Self, Config)>> {
+        let registry = Self::registry(supervisor)?;
+        let mut places = registry
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter_map(|(id, row)| Self::registered_entry(supervisor, id, row).ok())
+            .collect::<Vec<_>>();
+        if let Ok(selected) = Self::for_supervisor(supervisor)
+            && let Ok(cfg) = selected.load()
+            && selected.ensure_owned(&cfg).is_ok()
+            && registry[cfg.text("installation_id")].is_null()
+        {
+            places.push((selected, cfg));
+        }
+        Ok(places)
     }
 
     pub(super) fn verify_selection(&self) -> io::Result<()> {
@@ -217,7 +330,7 @@ impl Place {
     pub(super) fn claim(
         &self,
         cfg: &Config,
-    ) -> io::Result<(File, std::os::unix::net::UnixListener)> {
+    ) -> io::Result<(File, File, std::os::unix::net::UnixListener)> {
         let _locks = self.lock()?;
         self.verify_selection()?;
         let current = self.load()?;
@@ -229,9 +342,16 @@ impl Place {
         self.ensure_owned(cfg)?;
         let lease = runtime::lock(&self.dir.join("bridge.lock"))?;
         self.ensure_owned(cfg)?;
+        self.register(cfg)?;
+        let app_lease = runtime::lock(
+            &self
+                .supervisor
+                .join(format!(".discord-app-{}.lock", cfg.text("application_id"))),
+        )
+        .map_err(|_| invalid("Discord application already has an active Gateway lease"))?;
         let path = self.dir.join("bridge.sock");
         runtime::reclaim_socket(&path)?;
-        Ok((lease, runtime::bind(&path)?))
+        Ok((lease, app_lease, runtime::bind(&path)?))
     }
 
     fn ensure_offline(&self, cfg: Option<&Config>) -> io::Result<()> {
@@ -404,6 +524,7 @@ impl Place {
         if !Path::new(cfg.text("work_dir")).is_dir() {
             return Err(invalid("working directory does not exist"));
         }
+        self.register(&cfg)?;
         runtime::write_json(&self.dir.join(OWNER), &json!(cfg.text("installation_id")))?;
         runtime::write_json(&self.dir.join(CONFIG), &cfg.0)?;
         runtime::write_json(&self.supervisor.join(SELECTION), &json!(self.dir))?;
@@ -726,5 +847,56 @@ impl Config {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    #[test]
+    fn two_enrollments_survive_selection_changes_and_refuse_aliases() {
+        let dir =
+            std::env::temp_dir().join(format!("swarm-places-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&dir).unwrap();
+        let make = |name: &str, app: &str| {
+            let path = dir.join(name);
+            runtime::private_dir(&path).unwrap();
+            let cfg = Config(
+                json!({"version":1,"enabled":true,"installation_id":name,"name":name,
+                "application_id":app,"owner_id":"10","mode":"personal","manager_cli":"codex","dm_channel_id":"44",
+                "work_dir":dir,"token_file":dir.join("token"),"daemon_socket":dir.join("daemon")}),
+            );
+            let place = Place {
+                dir: path,
+                supervisor: dir.clone(),
+                explicit: true,
+            };
+            runtime::write_json(&place.dir.join(OWNER), &json!(name)).unwrap();
+            runtime::write_json(&place.dir.join(CONFIG), &cfg.0).unwrap();
+            (place, cfg)
+        };
+        let (a, acfg) = make("first", "21");
+        a.register(&acfg).unwrap();
+        runtime::write_json(&dir.join(SELECTION), &json!(a.dir)).unwrap();
+        let (b, bcfg) = make("second", "22");
+        b.register(&bcfg).unwrap();
+        runtime::write_json(&dir.join(SELECTION), &json!(b.dir)).unwrap();
+        assert_eq!(
+            Place::for_installation(&dir, "first").unwrap().0.dir,
+            a.dir.canonicalize().unwrap()
+        );
+        assert_eq!(
+            Place::for_installation(&dir, "second").unwrap().0.dir,
+            b.dir.canonicalize().unwrap()
+        );
+        assert_eq!(Place::enrolled(&dir).unwrap().len(), 2);
+        let (duplicate, cfg) = make("conflict", "21");
+        assert!(duplicate.register(&cfg).is_err());
+        assert!(Place::for_installation(&dir, "conflict").is_err());
+        runtime::write_json(&a.dir.join(OWNER), &json!("wrong")).unwrap();
+        assert!(Place::for_installation(&dir, "first").is_err());
+        assert_eq!(Place::enrolled(&dir).unwrap().len(), 1);
+        fs::remove_dir_all(dir).unwrap();
     }
 }
