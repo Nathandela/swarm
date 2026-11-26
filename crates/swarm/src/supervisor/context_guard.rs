@@ -44,6 +44,25 @@ pub(super) struct Store {
     current: Mutex<Option<Settings>>,
 }
 
+fn write_lock(root: &Path) -> PathBuf {
+    root.join("context-guard-write.lock")
+}
+
+pub(crate) fn acquire_write(root: &Path) -> io::Result<std::fs::File> {
+    runtime::lock(&write_lock(root))
+}
+
+pub(crate) fn read_runtime(
+    root: &Path,
+) -> io::Result<crate::providers::codex_context_guard::Settings> {
+    let policy = Store::read(&root.join(FILE))?;
+    Ok(crate::providers::codex_context_guard::Settings {
+        enabled: policy.auto_compact.enabled,
+        threshold: policy.auto_compact.threshold_percent as u8,
+        revision: policy.revision,
+    })
+}
+
 impl Store {
     pub(super) fn open(root: &Path) -> Self {
         let path = root.join(FILE);
@@ -134,6 +153,12 @@ impl Store {
                     revision,
                     auto_compact,
                     ..old
+                };
+                let Ok(_native_write) = runtime::lock_for(
+                    &write_lock(self.path.parent().expect("owner settings directory")),
+                    std::time::Duration::from_secs(1),
+                ) else {
+                    return unavailable();
                 };
                 if runtime::write_atomic(&self.path, |file| {
                     serde_json::to_writer(file, &next).map_err(io::Error::from)

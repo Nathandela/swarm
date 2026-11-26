@@ -234,7 +234,10 @@ pub(crate) fn managed(release: &str) -> bool {
         .filter_map(|part| part.parse::<u32>().ok());
     let major = parts.next().unwrap_or_default();
     let minor = parts.next().unwrap_or_default();
-    major > 0 || minor >= 160
+    major > 0
+        || minor >= 160
+        || super::codex_context_guard::support(release)
+            != super::codex_context_guard::Support::Unsupported
 }
 
 #[cfg(test)]

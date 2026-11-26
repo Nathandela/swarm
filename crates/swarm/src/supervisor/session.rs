@@ -154,6 +154,7 @@ pub(super) struct Session {
     launch_plan: Mutex<Option<(LaunchPlan, Value)>>,
     pub(super) schedule: Option<worker::Binding>,
     observed_status: Mutex<Option<Value>>,
+    context_guard_view: Mutex<Option<Value>>,
     opened: Instant,
 }
 
@@ -226,6 +227,7 @@ impl Session {
             launch_plan: Mutex::new(None),
             schedule,
             observed_status: Mutex::new(None),
+            context_guard_view: Mutex::new(None),
             opened: Instant::now(),
         })
     }
@@ -2017,6 +2019,20 @@ impl Session {
         if field(&record, "token") != self.token {
             return false;
         }
+        let guard_changed = if self.agent == "codex" {
+            let mut view = self.context_guard_view.lock().unwrap();
+            let next = record["context_guard"]
+                .is_object()
+                .then(|| record["context_guard"].clone());
+            if *view == next {
+                false
+            } else {
+                *view = next;
+                true
+            }
+        } else {
+            false
+        };
         let renamed = self.agent == "agy"
             && self
                 .observe_agy_title(&record["provider_title"])
@@ -2038,11 +2054,11 @@ impl Session {
                 "none" | "permission" | "prompt" | "error"
             )
         {
-            return renamed;
+            return renamed || guard_changed;
         }
         let mut observed = self.observed_status.lock().unwrap();
         if observed.as_ref() == Some(status) {
-            return renamed;
+            return renamed || guard_changed;
         }
         *observed = Some(status.clone());
         drop(observed);
@@ -2409,6 +2425,11 @@ impl Session {
         }
         if labels.scheduled_completed && labels.tag == "automation" {
             view["scheduled_completed"] = json!(true);
+        }
+        if process == "running"
+            && let Some(guard) = self.context_guard_view.lock().unwrap().as_ref()
+        {
+            view["context_guard"] = guard.clone();
         }
         if self.agent == "hermes" {
             self.hermes_view_fields(&mut view);

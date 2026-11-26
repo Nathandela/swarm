@@ -176,6 +176,18 @@ pub(crate) fn fence_for(
     let semantic = dir.join("semantic");
     durable_dir(&semantic)?;
     let pending = semantic.join("pending.json");
+    require_resolved(dir, session, token, thread, agent)?;
+    runtime::write_json(&pending, &json!(operation))
+}
+
+pub(crate) fn require_resolved(
+    dir: &Path,
+    session: &str,
+    token: &str,
+    thread: &str,
+    agent: &str,
+) -> io::Result<()> {
+    let pending = dir.join("semantic/pending.json");
     match runtime::read_json(&pending) {
         Ok(value) => {
             let prior = value
@@ -196,9 +208,8 @@ pub(crate) fn fence_for(
         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
         Err(err) => return Err(err),
     }
-    runtime::write_json(&pending, &json!(operation))
+    Ok(())
 }
-
 pub(crate) fn save(dir: &Path, operation: &str, hash: &str, receipt: &Value) -> io::Result<()> {
     let path = path(dir, operation)?;
     durable_dir(path.parent().expect("receipt directory"))?;
