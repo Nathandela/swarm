@@ -63,7 +63,7 @@ On macOS the harness uses `sandbox-exec`. On Linux run the command in the existi
 
 ## Original Go shared-native viewer
 
-A live Go schema-5 Hermes 0.22.5 session can be inspected in Rust with the same two compatibility switches. This lane qualifies fresh, ordinary Go launches on the default Hermes profile with an explicit local provider home. Rust cross-checks the original Go metadata, launch plan, descriptor, canonical conversation, physical private session directory, Go shim and PTY identities, and Hermes gateway identity before giving the client the terminal stream. The roster describes the session as a read-only Hermes viewer. Rust discards keyboard input and resize requests. The original Go supervisor owns native input receipts and lifecycle controls, and both supervisors leave the gateway process in place.
+A live Go schema-5 Hermes 0.22.5 session can be inspected in Rust with the same two compatibility switches. This lane qualifies fresh, ordinary Go launches on the default Hermes profile with an explicit local provider home. Rust cross-checks the original Go metadata, launch plan, descriptor, canonical conversation, physical private session directory, Go shim and PTY identities, and Hermes gateway identity before giving the client the terminal stream. The roster describes the session as a read-only Hermes viewer. Rust discards keyboard input and resize requests. The original Go supervisor owns native input receipts and lifecycle controls by default. Both supervisors leave the gateway process in place.
 
 The witness passed on macOS arm64 and Linux x86_64 with the actual pinned Go binary and Hermes 0.22.5 using the loopback model. A private synthetic configuration enabled Go's native adapter while no connector ran. Two Go viewers joined distinct native conversations on the same gateway. Substituting the sibling's genuine native binding into the first viewer's descriptor prevented Rust startup. Rust then viewed the restored original terminal and withheld raw terminal input, resize, semantic input, stop and delete. Original Go recovered its exact native receipt without duplicate model work, and a second Go turn continued the same native SQLite conversation. Neither the conversation descriptor nor the original shim socket changed across supervisors.
 
@@ -76,3 +76,14 @@ python scripts/verification/hermes_native_admission.py \
   --swarm "$pinned_go_swarm" --candidate "$rust_swarm" \
   --probe "$PWD/scripts/verification/live_go_hermes_shared.py"
 ```
+
+
+### Shared-native semantic input with Go rollback
+
+Start Rust with `SWARM_DAEMON_GO_HERMES_SEMANTIC_COMPAT=1` and both Go compatibility switches to enable `swarm message` for a qualified live shared-native viewer. Rust holds the canonical Go daemon lock and checks the Go session instance against the original shim and capability record. The original Go shim still owns the terminal. The original Hermes gateway owns the native conversation. Rust writes an executing operation to Go's existing idempotency log and synchronizes it before asking the gateway to admit the message. Both supervisors can replay a retained admission for the exact operation and body within the ordinary one-hour replay window. An operation with no confirmed admission fences later semantic input in either supervisor. The scope covers the default profile and owner-local plain text. Raw input, resize, lifecycle changes, new launches, and stopped-state export stay fenced.
+
+The guarded Darwin and Linux x86_64 witnesses used the pinned Go binary and actual Hermes 0.22.5 with a loopback model. Go sent the first prompt, Rust sent the second through `swarm message`, and restored Go sent the third. It verified three turns and exactly three model calls in the same native conversation. Rust replayed its receipt after restart and Go replayed it after rollback. A changed body and stale instance were refused. Both owners blocked input with a simulated interrupted operation that never reached the gateway. The original Go metadata, launch, instance, capability and descriptor files stayed byte-for-byte intact during Rust custody. [Darwin native result](hermes-shared-native-writer-darwin.json) · [Linux native result](hermes-shared-native-writer-linux.json)
+
+On Linux, stage the same witness and helper modules in a private `/dev/shm/swarm-hermes-qual-*` directory. Name the pinned Go binary `go-owner` and the candidate `swarm`. Pass `shared-go` as the final argument to [the namespace wrapper](../../../scripts/verification/hermes_native_linux.sh).
+
+Named profiles and other Hermes versions need separate qualification.

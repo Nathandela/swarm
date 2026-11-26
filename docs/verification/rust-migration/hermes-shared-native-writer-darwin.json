@@ -1,0 +1,22 @@
+{
+  "go_shared_native": true,
+  "original_go_to_rust_to_go": true,
+  "native_thread_and_custody_retained": true,
+  "same_scope_forged_thread_refused": true,
+  "rust_input_withheld": true,
+  "rust_lifecycle_withheld": true,
+  "go_receipt_replayed": true,
+  "rust_receipt_replayed_in_go": true,
+  "unknown_admission_fenced_on_both_owners": true,
+  "model_calls": 3,
+  "source_pin": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
+  "provider_version": "0.22.5",
+  "platform": "Darwin",
+  "os_write_guard": true,
+  "os_network_guard": true,
+  "no_production_auth": true,
+  "candidate_commit": "cc40607a6a882c281c0c1b4cf0d80dc4211e42f9",
+  "target": "aarch64-apple-darwin",
+  "candidate_sha256": "684388ce8046410dcf3153beeede937801daee3c4d11ffd90a8c4f27553f5b2b",
+  "go_sha256": "5f92beebd77f4d49a45ca7989a9d88d42bc3192b623356661217f102366fe179"
+}
