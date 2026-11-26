@@ -284,7 +284,7 @@ fn qualified_role(meta: &Value) -> io::Result<()> {
             "Go schema {schema:?} requires offline qualification"
         )));
     }
-    if !matches!(field(meta, "agent_type"), "claude" | "agy")
+    if !matches!(field(meta, "agent_type"), "claude" | "agy" | "codex")
         || ROLE_TEXT_FIELDS
             .iter()
             .any(|key| !meta[*key].is_null() && meta[*key] != "")
@@ -334,7 +334,7 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
             c"backend.json",
         ],
     )?;
-    launch_evidence(file, meta)?;
+    let launch = launch_evidence(file, meta)?;
     if meta["agent_type"] == "agy" {
         // The classic agy shim writes exit.json after joining its PTY group.
         // Managed-native custody uses a different proof and is excluded here.
@@ -357,11 +357,11 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
         || stopped["writers_stopped"] != true
         || native["shim_pid"] != meta["shim_pid"]
         || native["shim_start_time"] != meta["shim_start_time"]
-        || native["provider"] != "claude"
+        || native["provider"] != meta["agent_type"]
         || field(&native, "generation").is_empty()
-        || !native["backend_pid"].is_null()
-        || !native["backend_start_time"].is_null()
         || !native["incident_id"].is_null()
+        || meta["agent_type"] == "codex"
+            && native["runtime"] != json!({"provider":"","epoch":0,"identity":"","home":""})
     {
         return Err(io::Error::other(
             "Go native writer stop proof disagrees with session custody",
@@ -380,7 +380,32 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
             "unproven Go native process group identity",
         ));
     }
-    inactive(native_pid, native_birth)
+    inactive(native_pid, native_birth)?;
+    if meta["agent_type"] == "codex" && !field(&launch, "backend_program").is_empty() {
+        let backend = native["backend_pid"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|backend| {
+                (2..=i32::MAX as u32).contains(backend) && *backend != native_pid && *backend != pid
+            });
+        let epoch = native["backend_start_time"]
+            .as_u64()
+            .filter(|value| *value > 0);
+        let (Some(backend), Some(epoch)) = (backend, epoch) else {
+            return Err(io::Error::other("missing Go Codex backend birth identity"));
+        };
+        if exit["backend_exit"].as_i64().is_none() {
+            return Err(io::Error::other("missing Go Codex backend exit"));
+        }
+        inactive(backend, epoch)
+    } else if !native["backend_pid"].is_null()
+        || !native["backend_start_time"].is_null()
+        || !exit["backend_exit"].is_null()
+    {
+        Err(io::Error::other("unexpected Go session backend custody"))
+    } else {
+        Ok(())
+    }
 }
 
 fn absent_sidefiles(file: &File, names: &[&CStr]) -> io::Result<()> {
@@ -429,6 +454,7 @@ fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
         || Path::new(field(&launch, "socket_path")) != launch_dir.join("shim.sock")
         || (meta["agent_type"] == "claude" && launch["native_provider"] != "claude")
         || (meta["agent_type"] == "agy" && !classic_agy(meta, &launch))
+        || (meta["agent_type"] == "codex" && !classic_codex(meta, &launch))
         || [
             "claude_input",
             "require_launch_identity",
@@ -440,14 +466,10 @@ fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
         || ["login_runtime", "opencode", "hermes_input", "agy_input"]
             .iter()
             .any(|key| !launch[*key].is_null())
-        || [
-            "backend_program",
-            "backend_socket_path",
-            "manager_replay_id",
-            "input_embargo",
-        ]
-        .iter()
-        .any(|key| !launch[*key].is_null() && launch[*key] != "")
+        || (meta["agent_type"] != "codex" && backend_declared(&launch))
+        || ["manager_replay_id", "input_embargo"]
+            .iter()
+            .any(|key| !launch[*key].is_null() && launch[*key] != "")
     {
         return Err(io::Error::other(
             "Go launch binding or native writer is unqualified",
@@ -456,19 +478,77 @@ fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
     Ok(launch)
 }
 
-fn classic_agy(meta: &Value, launch: &Value) -> bool {
+fn executable_binding(meta: &Value, launch: &Value, agent: &str) -> bool {
     let identity = &launch["cli_identity"];
     let executable = Path::new(field(identity, "path"));
     let fingerprint = field(identity, "fingerprint");
+    identity.is_object()
+        && *identity == meta["cli_identity"]
+        && executable.is_absolute()
+        && executable.file_name().and_then(|n| n.to_str()) == Some(agent)
+        && fingerprint.len() == 64
+        && fingerprint.bytes().all(|b| b.is_ascii_hexdigit())
+        && launch["argv"].as_array().and_then(|args| args.first()) == Some(&identity["path"])
+}
+
+fn backend_declared(launch: &Value) -> bool {
+    ["backend_program", "backend_socket_path", "backend_cwd"]
+        .iter()
+        .any(|key| !launch[*key].is_null() && launch[*key] != "")
+        || [
+            "backend_args",
+            "backend_agent_args",
+            "backend_agent_command_args",
+            "backend_env",
+        ]
+        .iter()
+        .any(|key| !launch[*key].is_null() && !launch[*key].as_array().is_some_and(Vec::is_empty))
+}
+
+fn classic_codex(meta: &Value, launch: &Value) -> bool {
+    if launch["native_provider"] != "codex"
+        || meta["shim_wire_version"] != 2
+        || !executable_binding(meta, launch, "codex")
+        || !launch["argv"].as_array().is_some_and(|args| {
+            args.iter().skip(1).all(|arg| {
+                arg.as_str().is_some_and(|arg| {
+                    !matches!(
+                        arg.split('=').next(),
+                        Some("app-server" | "--remote" | "--listen")
+                    )
+                })
+            })
+        })
+        || ["backend_args", "backend_env"].iter().any(|key| {
+            !launch[*key].is_null()
+                && !launch[*key]
+                    .as_array()
+                    .is_some_and(|items| items.iter().all(Value::is_string))
+        })
+        || crate::providers::codex::version(field(&launch["cli_identity"], "version")).is_err()
+    {
+        return false;
+    }
+    if !backend_declared(launch) {
+        return true;
+    }
+    let socket = Path::new(field(launch, "session_dir")).join("codex.sock");
+    let address = format!("unix://{}", socket.display());
+    Path::new(field(launch, "backend_socket_path")) == socket
+        && launch["backend_program"] == launch["cli_identity"]["path"]
+        && launch["backend_cwd"] == launch["cwd"]
+        && launch["backend_args"].as_array().is_some_and(|args| {
+            args.starts_with(&[json!("app-server"), json!("--listen"), json!(address)])
+        })
+        && launch["backend_agent_args"] == json!(["--remote", address])
+        && launch["backend_agent_command_args"].is_null()
+}
+
+fn classic_agy(meta: &Value, launch: &Value) -> bool {
     if !launch["native_provider"].is_null()
         || meta["shim_wire_version"] != 2
-        || !identity.is_object()
-        || *identity != meta["cli_identity"]
-        || !executable.is_absolute()
-        || executable.file_name().and_then(|n| n.to_str()) != Some("agy")
-        || fingerprint.len() != 64
-        || !fingerprint.bytes().all(|b| b.is_ascii_hexdigit())
-        || crate::providers::agy::version(field(identity, "version")).is_err()
+        || !executable_binding(meta, launch, "agy")
+        || crate::providers::agy::version(field(&launch["cli_identity"], "version")).is_err()
         || !launch["env"].as_array().is_some_and(|values| {
             values.iter().all(|v| {
                 v.as_str().is_some_and(|v| {
@@ -479,15 +559,9 @@ fn classic_agy(meta: &Value, launch: &Value) -> bool {
     {
         return false;
     }
-    let Some((program, remaining)) = launch["argv"]
+    let remaining = &launch["argv"]
         .as_array()
-        .and_then(|args| args.split_first())
-    else {
-        return false;
-    };
-    if program != &identity["path"] {
-        return false;
-    }
+        .expect("established launch arguments")[1..];
     let mut args = remaining.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
