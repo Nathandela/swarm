@@ -4,6 +4,7 @@
 import argparse
 import base64
 import copy
+import fcntl
 import importlib.util
 from importlib.machinery import SourceFileLoader
 import json
@@ -63,10 +64,10 @@ def owner_request(path, capability, body, *, discard=False):
         return receive(conn)
 
 
-def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False, static_grid=False, roster_motion=False, layout_options=False):
+def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False, static_grid=False, roster_motion=False, layout_options=False, managed=None):
     env = p.environment(root)
     cwd = root / "work"
-    binary = root / "bin/swarm"
+    binary = managed / "swarm" if managed else root / "bin/swarm"
 
     def cli(*args):
         return subprocess.run([binary, *args], cwd=cwd, env=env, stdin=subprocess.DEVNULL,
@@ -315,7 +316,7 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
         return
 
     def terminal(payload, fresh):
-        board = p.Board([str(root / "bin/board")], root, env)
+        board = p.Board([str(binary if managed else root / "bin/board")], root, env)
         try:
             if fresh:
                 board.wait_bytes(b"swarm")
@@ -996,8 +997,32 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             grid_witness(root, cli, roster, start, tmux)
         return
 
+    def writer_held():
+        with (managed / "writers.lock").open("rb") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            return False
+
+    def checked(*args):
+        result = cli(*args)
+        assert result.returncode == 0, (args, result.stderr)
+        return result.stdout
+
+    if managed:
+        card = json.loads(checked("release-info"))
+        generation = binary.resolve(strict=True)
+        media_check = checked("release-check-media")
+        assert not media_check
+        assert not writer_held()
+        assert not list((managed / "effects").iterdir())
     (cwd / "qualified").mkdir()
     daemon = start()
+    if managed:
+        daemon_before = (daemon.pid, p.generation(daemon.pid))
+        assert Path(p.executable(daemon.pid)).resolve() == generation
+        assert writer_held()
     before = terminal(b"before", True)
     rows, = roster()
     assert len(rows) == 1 and rows[0]["name"] == "amber"
@@ -1006,7 +1031,16 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
     daemon.kill()
     daemon.wait(timeout=5)
     assert p.generation(before[0]) == before[1]
+    if managed:
+        # The old daemon is dead. The retained shim still owns the writer lease.
+        assert writer_held()
+        inflight = {name.name: name.read_text() for name in (managed / "inflight").iterdir()}
+        assert len(inflight) == 1 and set(inflight.values()) == {generation.parent.name}
     daemon = start()
+    if managed:
+        daemon_after = (daemon.pid, p.generation(daemon.pid))
+        assert daemon_after != daemon_before
+        assert Path(p.executable(daemon.pid)).resolve() == generation
     rows, = roster()
     assert [row["id"] for row in rows] == [identity]
     assert terminal(b"after", False) == before
@@ -1014,6 +1048,17 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
     assert cli("kill", identity).returncode == 0
     daemon.terminate()
     daemon.wait(timeout=5)
+    if managed:
+        p.wait_for(lambda: not writer_held(), "managed writer lease released")
+        assert not list((managed / "inflight").iterdir())
+        assert binary.resolve(strict=True) == generation
+        assert (managed / "effects" / generation.parent.name).is_file()
+        return {"platform": sys.platform, "machine": os.uname().machine,
+                "launcher": str(binary), "generation": str(generation), "release": card,
+                "binary_sha256": p.hash_file(generation), "media_self_check": "passed",
+                "daemon_before": daemon_before, "daemon_after": daemon_after,
+                "worker": before, "session": identity, "writer_held_after_daemon_death": True,
+                "writer_released_after_exit": True, "terminal_restored": True}
 
 
 TMUX_MODES = ("cursor_x", "cursor_y", "cursor_flag", "alternate_on", "insert_flag",
