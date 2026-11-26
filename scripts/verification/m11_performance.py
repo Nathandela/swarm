@@ -244,7 +244,7 @@ def main():
                     and evidence['idle']['one_core_percent'] <= BUDGETS['idle_cpu_percent']
                 )
             result['result'] = ('calibrated' if args.smoke or not args.quiet_host else
-                                'passed' if all(v['numeric_gates_passed'] for _, v in pair) else 'failed')
+                                'passed' if result['arm']['candidate']['numeric_gates_passed'] else 'failed')
     except BaseException as exc:
         result.update(result='failed', error=repr(exc))
         raise

@@ -133,6 +133,8 @@ per-role RSS and descriptors around 100 attach cycles, binary/source
 identities, host load and cleanup. Record actual host activity with the
 evidence. Omit `--quiet-host` for a descriptive run during other work.
 `--smoke` uses fewer trials and never produces a gate pass.
+Both arms must complete. The published budgets qualify the candidate, and the
+reference supplies the measured baseline.
 
 Use a separate run to measure the Rust board at the Go N-1 boundary.
 Build the owner and unit test executable from the same checkout.

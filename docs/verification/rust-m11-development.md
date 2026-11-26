@@ -144,6 +144,10 @@ The matching Rust post-dial test uses the real owner, subscription, board initia
 
 The joined `d9577d2f` default suites passed 281 tests on Darwin arm64 and 280 on Linux x86_64, with 26 explicitly guarded tests left to their separate environments. Their logs have SHA-256 `4f201779c750ce542a3e59c99e4f78844b9cb41967e080f0003ca20bebe00531` and `d44fcd035211d842af59807931d085f30146d6b46f2207cb4d2b801153c02036`. The guarded enrolled partial-reply test passed on both hosts. The original Go retained guild fixture passed all seven signed v0.29.26 cases on Linux. [Quiet reply witness](rust-discord-service.md) · [Retained guild witness](rust-discord-retained-state.md)
 
+On native `tf_nathan` Linux x86_64, the optimized `e531937e` Rust application and signed Go v0.29.26 each painted 50 real sessions in 25 alternating cold PTY trials. Rust measured 95.368 ms p95 first paint, 0.256 ms p95 echo and 0.399% of one core idle. Go measured 127.452 ms, 0.421 ms and 2.180% respectively. Both arms reaped their fixture processes. The VM was also running an endurance fixture, so the driver recorded a calibrated comparison. Receipt SHA-256 is `9542549067bc7afbe7bcc292390ddc8eb35836646790d86ddc3664014c6128bc`.
+
+The matching optimized post-dial suites completed all 25 first-frame trials on both native hosts. Darwin arm64 measured 2.398 ms p95 and reaped all 90 fixture processes. Linux x86_64 measured 4.277 ms p95 and reaped all 101. Receipt SHA-256 is `f2e7533753f28f521ad466d3e40b0abeb05401f365fd15f39860d51007039705` on Mac and `593cc932cdec64737d7381a9dd4e166099af8b7d3ea119167003fcb830bd4d80` on Linux.
+
 | Evidence | SHA-256 |
 | --- | --- |
 | `performance-macos.json` | `c75ab9a2731e2075a88b5bd4221c3f1563b6bb487a1f6a65121d176d9aa3f9e5` |
