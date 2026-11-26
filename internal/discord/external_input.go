@@ -315,9 +315,10 @@ func (t *teammateConnector) processExternal(ctx context.Context, candidate teamm
 			return t.saveAdmissionPhase(candidate, phase)
 		}
 	}
-	if candidate.Deleted || candidate.Edited {
+	if candidate.Deleted {
 		return fail(ErrTeammateSourceChanged)
 	}
+	// Discord can update the starter's metadata when it attaches a thread.
 	bits, err := t.externalAnchor(ctx, candidate.Route, record, true)
 	if err != nil {
 		return fail(err)

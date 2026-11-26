@@ -68,7 +68,9 @@ func TestExternalAdmissionRecoversThreadAndNativeCutover(t *testing.T) {
 	var threadPosts atomic.Int32
 	followup := teammateTestMessage("202", "201", "77", "Please include the report", false)
 	t.Run("replay", func(t *testing.T) {
-		bridge, manager := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		var bridge *teammateConnector
+		var manager *teammateTestManager
+		bridge, manager = teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
 			switch r.Method + " " + r.URL.Path {
 			case "GET /channels/20":
 				fmt.Fprint(w, `{"id":"20","guild_id":"10","type":0}`)
@@ -84,6 +86,9 @@ func TestExternalAdmissionRecoversThreadAndNativeCutover(t *testing.T) {
 				fmt.Fprint(w, teammatePublic)
 			case "POST /channels/20/messages/201/threads":
 				threadPosts.Add(1)
+				teammateTestEvent(t, bridge, 2, "MESSAGE_UPDATE", map[string]any{
+					"id": "201", "channel_id": "20", "guild_id": "10", "flags": 32,
+				})
 				http.Error(w, "response lost after creation", http.StatusBadGateway)
 			case "GET /channels/201/messages/202":
 				_ = json.NewEncoder(w).Encode(followup)
@@ -111,8 +116,15 @@ func TestExternalAdmissionRecoversThreadAndNativeCutover(t *testing.T) {
 		if err != nil || len(rows) != 1 {
 			t.Fatalf("pending %v: %v", rows, err)
 		}
+		if err = bridge.process(ctx, rows[0]); !errors.Is(err, ErrConflict) || len(manager.admitted) != 0 {
+			t.Fatalf("unchanged starter update must retry the binding: %v", err)
+		}
+		rows, err = bridge.service.Store.teammatePending("install")
+		if err != nil || len(rows) != 1 || !rows[0].Edited {
+			t.Fatalf("pending after metadata update %v: %v", rows, err)
+		}
 		if err = bridge.process(ctx, rows[0]); !errors.Is(err, io.ErrUnexpectedEOF) {
-			t.Fatalf("initial attempt: %v", err)
+			t.Fatalf("recovered thread with ambiguous native response: %v", err)
 		}
 		waiting := externalTestRequest(t, bridge, http.MethodGet, "?event_id=job-1", externalTestBearer, externalInput{}, http.StatusOK)
 		if waiting.State != externalDispatching || waiting.ThreadID != "201" || waiting.DiscussionID == "" {
@@ -151,6 +163,9 @@ func TestExternalAdmissionRecoversThreadAndNativeCutover(t *testing.T) {
 			t.Fatalf("native inputs %v, thread creates %d", manager.admitted, threadPosts.Load())
 		}
 		origin := manager.admitted[0]
+		teammateTestEvent(t, bridge, 3, "MESSAGE_UPDATE", map[string]any{
+			"id": "201", "channel_id": "20", "guild_id": "10", "flags": 32,
+		})
 		if err := bridge.verifyAdmissionMessage(ctx, origin.Discussion, TeammateHistoryQuery{
 			Source: "grant", MessageID: origin.Route.MessageID, AuthorID: origin.Author.ID,
 			AdmissionID: origin.OperationID, Revision: origin.Revision,
@@ -158,7 +173,7 @@ func TestExternalAdmissionRecoversThreadAndNativeCutover(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		teammateTestEvent(t, bridge, 2, "MESSAGE_CREATE", followup)
+		teammateTestEvent(t, bridge, 4, "MESSAGE_CREATE", followup)
 		rows, err = reopened.teammatePending("install")
 		if err != nil || len(rows) != 1 {
 			t.Fatalf("pending human followup %v: %v", rows, err)
@@ -225,6 +240,7 @@ func TestExternalAdmissionRejectsExpiredAndChangedSource(t *testing.T) {
 				message.WebhookID = "93"
 			case "edited content":
 				message.Content = "Replacement announcement"
+				teammateTestEvent(t, bridge, 1, "MESSAGE_UPDATE", message)
 			case "deleted before dispatch":
 				teammateTestEvent(t, bridge, 1, "MESSAGE_DELETE", map[string]string{"id": "201", "channel_id": "20"})
 			}

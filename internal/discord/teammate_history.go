@@ -561,8 +561,7 @@ func (t *teammateConnector) verifyAdmissionMessage(ctx context.Context, d Teamma
 	if a := record.Admission; a != nil {
 		if a.Discussion.ID != d.ID || a.Discussion.Route != d.Route || a.OperationID != q.AdmissionID ||
 			a.Revision != q.Revision || a.Author.ID != q.AuthorID || record.Deleted ||
-			record.State != StateSending && record.State != teammateStateAccepted && record.State != StateSent ||
-			eventID != "" && record.Edited {
+			record.State != StateSending && record.State != teammateStateAccepted && record.State != StateSent {
 			return ErrTeammateSourceChanged
 		}
 		if q.Source == "grant" && record.State != StateSent {
@@ -583,9 +582,6 @@ func (t *teammateConnector) verifyAdmissionMessage(ctx context.Context, d Teamma
 			return ErrTeammateSourceChanged
 		}
 		eventID = guard.ExternalEventID
-		if eventID != "" && guard.LastChange != "" {
-			return ErrTeammateSourceChanged
-		}
 		record.Admission = &TeammateAdmission{Route: guard.Route, Author: Actor{ID: guard.ActorID}, RequireMention: guard.RequireMention}
 	}
 	route := record.Admission.Route
