@@ -72,6 +72,10 @@ On November 26 the GitHub releases API reported v0.29.25 as the latest stable re
 
 The complete v0.29.25 normal source round passed 97 test-bearing packages with eight packages containing no tests. The runner was the macOS arm64 host using the Darwin x86_64 Go 1.26.5 toolchain under Rosetta, with umask `022` and `-count=1 -p=1 -parallel=1 -timeout 35m`. The normal round log SHA-256 is `aa9740e40bf391148b6f3d8f4c0d2b802c5f72533713687bbdd1a12fe0cb5f0c`. The separately downloaded signed v0.29.25 binaries and the Rust qualification arms use the native architectures listed above.
 
+The subsequent complete normal source round also passed all 97 test-bearing packages and eight packages containing no tests using native Darwin arm64 Go 1.26.10. The isolated checkout remained at the signed v0.29.25 source. Native log SHA-256 is `54d31da39cb850567a93b9d0d2edd5e7ca6a79410f44d9970826b6b9b8ee9e54`.
+
+The full Rosetta race round also passed all 97 test-bearing packages with eight containing no tests. It used Go 1.26.5 Darwin x86_64 and the same serial package and test settings. Its log SHA-256 is `487d02f6bafcd6df5305a98ba651dfd8c28a0e3427fe9bc7b12449ce7334f223`.
+
 ## v0.29.26 worker attachments
 
 Go `main` advanced six commits past the previous signed tag to `7f67c067f153f4c1cdd13f3cb20d9610dc6ca9cf`. GitHub published that exact source as v0.29.26 at 17:20 UTC. It broadens worker attachment formats, makes filenames stable through Discord, refuses hidden and credential paths, and adds an opt-in live test. The final merge retains the v0.29.25 HTTP 413 handling. Beads `agents-tracker-8fp1.9.2` tracks the parity work. [v0.29.26 source comparison](https://github.com/Nathandela/swarm/compare/v0.29.25...v0.29.26) · [v0.29.26 release](https://github.com/Nathandela/swarm/releases/tag/v0.29.26)
@@ -84,6 +88,8 @@ The original checksum manifest verified with the pinned Ed25519 key, and the ver
 | `tf_nathan` Linux x86_64 | `58cc17331cc8357f0bf5a8b639afa010b50d1d0b3d8d8e78c8d4bf455149ca9e` | `629ffb0eca67906dfefcbe3f0e5c63e648f8973c05bcd486fd83a15dd3d8859b` |
 
 The six new offline Go attachment tests passed from exact source on macOS arm64 and isolated Linux x86_64, including the unsafe file-set subtests. The native Mac compiler was Go 1.26.10 and also produced the Linux test executables. Log SHA-256 is `acf747d858759400344a269b2c1dacdd29179b36a9e497ffd45e4193e4337511` on macOS and `91066987d9d3caa05daeddd58c3d84b00ef12ceca5211e1a76390544cd8f06e1` on Linux. Rust's paired capture and attachment-only loopback checks read the same Go source and retained the original v0.29.25 publication behavior. Live user-origin attachment delivery remains open. [Rust attachment witness](../../verification/rust-discord-retained-state.md)
+
+The integrated Rust and signed Go v0.29.26 executables returned identical exit codes, stdout and stderr for both `teammate message` help flags and a file supplied with `--kind needs-input` on both native hosts. The help advertises the expanded formats, ten files and the 8 MiB total. The two comparison logs have SHA-256 `8075deec939ad3af71b1fda94b366e9459c5a82952fd851c7b2e5ae642637a57`.
 
 ## M0 source build repeatability on Apple Silicon
 

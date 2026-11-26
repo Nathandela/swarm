@@ -240,11 +240,11 @@ def run(root, rust, go):
             assert edited["name"] == large["name"] + "!" and edited["prompt"] == big_prompt
             assert edited["created_at"] == large["created_at"]
             step(b"\x1b[27u", b"Automations")
-            step(b"n", b"New automation")
+            step(b"n", b"Automations / New")
             step(b"\x14", b"Large retained Go template!")
-            step(b"\x1b[B\x1b[B\r", b"New automation")
+            step(b"\x1b[B\x1b[B\r", b"Automations / New")
             step(b"\x05", b"Personal templates / Edit")
-            step(b" Copy\r", b"New automation")
+            step(b" Copy\r", b"Automations / New")
             copied, = [row for row in json.loads(cli(go, "list").stdout) if row["name"] == edited["name"] + " Copy"]
             assert copied["id"] != edited["id"] and copied["prompt"] == big_prompt
             board.send(b"\x1b[27u\x1b[27u\x1b[27u")

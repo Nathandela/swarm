@@ -262,3 +262,11 @@ Integrated source `aec3365e` passed 269 default tests with 25 opt-in cases on ea
 The integrated Automations row correction and its workspace regression passed 270 default tests with 25 opt-ins on both native hosts. Formatting and warnings-denied Clippy passed. Workspace log SHA-256 is `5b8d4821fec83f482f28f22bd0dedd29babe0bd5ff4648ec4a196cf02e622a7c` on macOS and `d7a21a58b356c958dc07ed88a5807c8840a323bcd2355d7a9af8d73d90611833` on Linux. [XTerm and tmux comparisons](rust-schedules.md#archive-confirmation-and-list-navigation)
 
 A new isolated Linux development soak started from the frozen `aec3365e` executable with SHA-256 `4c58f86f5c33475b864c881b899c6a3201911de5f372fd3cb6b467380b662f60` and the same native OpenCode 1.19.3 fixture executable. Its private unit is running the 24-hour stage and has verified the first three inputs. The 72-hour stage is conditional on a completed, clean 24-hour result. This run qualifies the development build. The final signed artifact retains its own duration gate.
+
+Integrated `f1b1e0e6` passed 277 default tests on macOS arm64 and 276 on Linux x86_64. Both suites list 25 opt-ins. macOS has one additional native case for binding the writable Bolt descriptor across a pathname replacement. Formatting, warnings-denied Clippy, the five packaging-script cases, and 162 JavaScript bridge cases passed. The native template retest initially waited on the old draft title. After switching to the typed editor title it exercised template copy and edit through the real dashboard, exact lost-ack recovery, truncation, both lock deadlines and a competing Go edit against signed v0.29.26 on both hosts. The integrated nine-arm inline timer fixture passed separately on both hosts.
+
+| Integrated `f1b1e0e6` log SHA-256 | macOS arm64 | Linux x86_64 |
+| --- | --- | --- |
+| Default workspace tests | `1c0e3af721c38ec931762daf630acfeed396859acf72fd8721342e5a8765e05e` | `709e3483257350db0771fd0d0880880950eab9442c7be7390fcf7bde2489c774` |
+| Signed Go v0.29.26 template and lock checks | `8a77de09dd1bb36ab86ad7151d9cbc575759ac9ac715cc9bc94954bfbb321e9c` | `8a77de09dd1bb36ab86ad7151d9cbc575759ac9ac715cc9bc94954bfbb321e9c` |
+| Inline timer fixture | `a4e17be53fbe5bf28ecea5a959c5be08e900401c22d495cbcc366b785a6ca0ff` | `81863e1af53b301b8968eda499686b530efe1a73234160c5ce53b1f8813b51b4` |
