@@ -1356,8 +1356,25 @@ mod tests {
         let api = super::super::rest::Discord::loopback_fixture(&cfg, port).unwrap();
         let marker = root.join("rust-wake-ready");
         let deliver = std::env::var("SWARM_TEST_DISCORD_WAKE_DELIVERY").unwrap_or_default();
+        if std::env::var_os("SWARM_TEST_DISCORD_EXPECT_WAKE_HOLD").is_some() {
+            let mut opened = false;
+            let run = service::with(&place, &api, Some(1), |_| {
+                opened = true;
+                Ok(|| Ok(None))
+            });
+            assert!(!opened);
+            assert!(run.unwrap_err().to_string().contains("unconfirmed effects"));
+            assert!(activation::migrate(&place, false, true, true).unwrap());
+            return;
+        }
+        let restart = deliver.starts_with("ordinary-restart");
+        let lost_ack = deliver == "ordinary-restart-lost";
         let blocked = deliver.strip_prefix("ordinary-fence-");
-        if blocked.is_some()
+        let live = deliver.starts_with("ordinary-live");
+        let live_edited = deliver == "ordinary-live-edit";
+        if live
+            || restart
+            || blocked.is_some()
             || matches!(
                 deliver.as_str(),
                 "ordinary-sent" | "ordinary-mixed" | "ordinary-replace" | "ordinary-fresh"
@@ -1389,7 +1406,7 @@ mod tests {
                     }}),
                 )
                 .unwrap();
-                if mixed {
+                if mixed || live {
                     gateway::send(&mut peer,json!({"op":0,"s":2,"t":"MESSAGE_CREATE","d":{
                         "id":"702","type":0,"channel_id":"400","author":{"id":"200","username":"synthetic owner"},
                         "attachments":[],"content":"Continue after the retained VM file."
@@ -1409,16 +1426,18 @@ mod tests {
                 .join(format!("swarm-dm-{}", unsafe { libc::getuid() }))
                 .join(&discussion[..32])
                 .join("bridge.sock");
-            let notify = std::thread::spawn(move || {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-                while std::time::Instant::now() < deadline {
-                    if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
-                        fs::write(marker, b"ready").unwrap();
-                        return;
+            let notify = (!live).then(|| {
+                std::thread::spawn(move || {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+                    while std::time::Instant::now() < deadline {
+                        if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+                            fs::write(marker, b"ready").unwrap();
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(25));
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(25));
-                }
-                panic!("ordinary service did not own the old native wake bridge");
+                    panic!("ordinary service did not own the old native wake bridge");
+                })
             });
             let shutdown = (blocked == Some("stop")).then(|| {
                 let root = root.to_owned();
@@ -1443,21 +1462,37 @@ mod tests {
                 })
             });
             let mut left = Some(left);
-            let run = service::with(&place, &api, Some(if mixed { 2 } else { 1 }), |cfg| {
-                use super::super::gateway;
-                let (mut socket, _) =
-                    tungstenite::client("ws://localhost", left.take().unwrap()).unwrap();
-                let mut cursor = gateway::ready(&mut socket, cfg, "synthetic-only").unwrap();
-                Ok(move || cursor.event(&mut socket))
-            });
+            let run = service::with(
+                &place,
+                &api,
+                Some(if live {
+                    3
+                } else if mixed {
+                    2
+                } else {
+                    1
+                }),
+                |cfg| {
+                    use super::super::gateway;
+                    let (mut socket, _) =
+                        tungstenite::client("ws://localhost", left.take().unwrap()).unwrap();
+                    let mut cursor = gateway::ready(&mut socket, cfg, "synthetic-only").unwrap();
+                    Ok(move || cursor.event(&mut socket))
+                },
+            );
             finish.send(()).unwrap();
             gateway.join().unwrap();
-            notify.join().unwrap();
+            if let Some(notify) = notify {
+                notify.join().unwrap();
+            }
             if let Some(shutdown) = shutdown {
                 shutdown.join().unwrap();
             }
-            if matches!(blocked, Some("edit" | "delete")) {
-                assert!(run.is_err(), "withdrawn parent should hold dispatch");
+            if lost_ack || live_edited || matches!(blocked, Some("edit" | "delete")) {
+                assert!(
+                    run.is_err(),
+                    "unconfirmed source or delivery should hold dispatch"
+                );
             } else {
                 assert!(run.unwrap());
             }
@@ -1468,8 +1503,12 @@ mod tests {
                     activation::Ready::Idle
                 ));
             }
-            assert!(command(&["migrate-state", "--activate-personal-vm", "--rollback"]).unwrap());
-            assert!(!activation::selected(&place).unwrap());
+            if !lost_ack {
+                assert!(
+                    command(&["migrate-state", "--activate-personal-vm", "--rollback"]).unwrap()
+                );
+                assert!(!activation::selected(&place).unwrap());
+            }
             return;
         }
         let run = service::with_vm_wake(&place, &api, !deliver.is_empty(), || {

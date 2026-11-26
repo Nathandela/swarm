@@ -1,4 +1,4 @@
-//! Inspect a single genuine original Go queued file without admitting it.
+//! Continue a single genuine original Go worker file through the original scheduler.
 use super::*;
 use std::io::Read;
 
@@ -17,7 +17,7 @@ pub(super) fn inspect(
     place: &Place,
     cfg: &Config,
     connector: &impl DbApi,
-) -> io::Result<QueuedFile> {
+) -> io::Result<Option<QueuedFile>> {
     let tx = connector.begin().map_err(io::Error::other)?;
     let scope = format!(
         "{}\0{}",
@@ -52,17 +52,8 @@ pub(super) fn inspect(
     original_boundary(&tx, cfg, &route)?;
     let (directory, id, endpoint) = voice_location(place, cfg, &route)?;
     let conversation = format!("discord-teammate-{id}");
-    let (note, mailbox_identity) =
-        supervisor::mail_store::original_queued_file(place.supervisor_root(), &conversation)?
-            .ok_or_else(invalid)?;
-    let project = field(&note, "Project");
-    if !grants::project(cfg, project)
-        || !field(&note, "Session").starts_with(&format!("{endpoint}/"))
-        || !field(&note, "Attempt").starts_with("vm-child-")
-        || field(&note, "ParentInputHash").len() != 64
-    {
-        return Err(invalid());
-    }
+    let queued =
+        supervisor::mail_store::original_queued_file(place.supervisor_root(), &conversation)?;
     open_owner_file(&directory.join("voice.initialized"))?;
     let voice_path = directory.join("voice.db");
     let (voice_pin, db) = open_bolt(&voice_path, 64 << 20)?;
@@ -81,6 +72,43 @@ pub(super) fn inspect(
     }
     let records = root.bucket(b"records").ok_or_else(invalid)?;
     if records.iter_buckets().next().is_some() {
+        return Err(invalid());
+    }
+    let recovered = queued.is_none();
+    let existing = prepared_file(&records, &conversation)?;
+    let (note, mailbox_identity) = match queued {
+        Some((note, identity)) => {
+            if existing.as_ref().is_some_and(|(binding, id, files)| {
+                note["ID"] != *id
+                    || note["Files"] != *files
+                    || ["Discussion", "Session", "Instance", "Attempt"]
+                        .into_iter()
+                        .any(|field| note[field] != binding[field])
+            }) {
+                return Err(io::Error::other(
+                    "another original Go wake remains prepared",
+                ));
+            }
+            (note, identity)
+        }
+        None => {
+            let Some((binding, id, files)) = existing else {
+                return Ok(None);
+            };
+            supervisor::mail_store::original_ingested_file(
+                place.supervisor_root(),
+                &binding,
+                &id,
+                &files,
+            )?
+        }
+    };
+    let project = field(&note, "Project");
+    if !grants::project(cfg, project)
+        || !field(&note, "Session").starts_with(&format!("{endpoint}/"))
+        || !field(&note, "Attempt").starts_with("vm-child-")
+        || field(&note, "ParentInputHash").len() != 64
+    {
         return Err(invalid());
     }
     let event = format!(
@@ -251,9 +279,11 @@ pub(super) fn inspect(
                 "the original queued worker already has conflicting Voice state",
             ));
         }
+    } else if recovered {
+        return Err(invalid());
     }
     let pin = voice_pin.metadata()?;
-    Ok(QueuedFile {
+    Ok(Some(QueuedFile {
         input: parent,
         note,
         conversation,
@@ -262,7 +292,48 @@ pub(super) fn inspect(
         voice_identity: (pin.dev(), pin.ino()),
         mailbox_identity,
         header: parsed,
-    })
+    }))
+}
+
+fn prepared_file<'tx>(
+    records: &impl BucketApi<'tx>,
+    conversation: &str,
+) -> io::Result<Option<(Value, String, Value)>> {
+    let mut found = None;
+    for (index, (key, raw)) in records.iter_entries().enumerate() {
+        if index >= 4096 || raw.len() > 1 << 20 {
+            return Err(invalid());
+        }
+        if !key.starts_with(b"wakes\0") {
+            continue;
+        }
+        let wake: Value = serde_json::from_slice(raw)?;
+        if wake["state"] != "prepared" {
+            continue;
+        }
+        let event = field(&wake, "event_id");
+        if found.is_some()
+            || wake["conversation_id"] != conversation
+            || wake["id"] != event
+            || !event.starts_with("worker-message-")
+            || key != record_key("wakes", conversation, event)?
+            || wake["admission"].as_u64().unwrap_or_default() != 0
+            || !field(&wake, "native_input_id").is_empty()
+            || semantic_issued_at(field(&wake, "operation_id")).is_none()
+        {
+            return Err(invalid());
+        }
+        let saved = wake::record(records, "events", &[conversation, event])?;
+        let meta = &saved["metadata"];
+        let binding = json!({"Discussion":conversation, "Session":meta["Session"],
+            "Instance":meta["Instance"], "Attempt":saved["attempt_id"]});
+        found = Some((
+            binding,
+            field(meta, "NoteID").to_owned(),
+            meta["files"].clone(),
+        ));
+    }
+    Ok(found)
 }
 
 fn digest(value: &Value) -> io::Result<String> {
@@ -324,7 +395,7 @@ pub(super) fn prepare(
     room: &impl service::Room,
 ) -> io::Result<Prepared> {
     current_turn_enrollment(place, cfg)?;
-    let first = inspect(place, cfg, &lease.db)?;
+    let first = inspect(place, cfg, &lease.db)?.ok_or_else(invalid)?;
     let origin = &first.input["origin"];
     room.verify(cfg)?;
     let current = room.message(cfg, field(origin, "message_id"))?;
@@ -333,7 +404,7 @@ pub(super) fn prepare(
     {
         return Err(invalid());
     }
-    let proof = inspect(place, cfg, &lease.db)?;
+    let proof = inspect(place, cfg, &lease.db)?.ok_or_else(invalid)?;
     if proof.note != first.note
         || proof.input != first.input
         || proof.conversation != first.conversation
@@ -369,12 +440,6 @@ pub(super) fn prepare(
     });
     let request = wake_request(&event)?;
     let request_hash = digest(&request)?;
-    let mut random = [0u8; 16];
-    fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
-    let nonce: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
-    let mut operation = format!("semantic:{}:{nonce}", crate::ipc::spawn::now_ms());
-    let wake = json!({"id":event_id,"conversation_id":conversation,"event_id":event_id,
-        "operation_id":operation,"request":request,"request_hash":request_hash,"state":"prepared"});
     let tx = db.begin_rw().map_err(io::Error::other)?;
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
     let current_header: Value = serde_json::from_slice(root.get(b"state").ok_or_else(invalid)?)?;
@@ -401,7 +466,7 @@ pub(super) fn prepare(
     } else {
         false
     };
-    if let Some(raw) = records.get(&event_key) {
+    let operation = if let Some(raw) = records.get(&event_key) {
         if !have_worker {
             return Err(invalid());
         }
@@ -418,12 +483,18 @@ pub(super) fn prepare(
         {
             return Err(invalid());
         }
-        operation = field(&saved, "operation_id").to_owned();
         drop(tx);
+        field(&saved, "operation_id").to_owned()
     } else {
-        if records.get(&wake_key).is_some() {
+        if note["State"] != "queued" || records.get(&wake_key).is_some() {
             return Err(invalid());
         }
+        let mut random = [0u8; 16];
+        fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+        let nonce: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let operation = format!("semantic:{}:{nonce}", crate::ipc::spawn::now_ms());
+        let wake = json!({"id":event_id,"conversation_id":conversation,"event_id":event_id,
+            "operation_id":operation,"request":request,"request_hash":request_hash,"state":"prepared"});
         let mut changes = vec![(event_key, event), (wake_key, wake)];
         if !have_worker {
             changes.push((worker_key, worker));
@@ -431,17 +502,30 @@ pub(super) fn prepare(
         let mut header = proof.header;
         header["version"] = json!(4);
         manager_publication::apply_voice(tx, header, &changes)?;
-    }
+        operation
+    };
     #[cfg(test)]
     if std::env::var_os("SWARM_TEST_DISCORD_QUEUE_EXIT_AFTER_VOICE").is_some() {
         std::process::exit(87);
     }
     current_turn_enrollment(place, cfg)?;
-    supervisor::mail_store::acknowledge_original_file(
-        place.supervisor_root(),
-        note,
-        proof.mailbox_identity,
-    )?;
+    match note["State"].as_str() {
+        Some("queued") => supervisor::mail_store::acknowledge_original_file(
+            place.supervisor_root(),
+            note,
+            proof.mailbox_identity,
+        )?,
+        Some("ingested") => supervisor::mail_store::verify_original_ingested_file(
+            place.supervisor_root(),
+            note,
+            proof.mailbox_identity,
+        )?,
+        _ => return Err(invalid()),
+    }
+    #[cfg(test)]
+    if std::env::var_os("SWARM_TEST_DISCORD_QUEUE_EXIT_AFTER_MAILBOX").is_some() {
+        std::process::exit(88);
+    }
     Ok(Prepared {
         parent_message: field(&proof.input["origin"], "message_id").to_owned(),
         path: proof.path,

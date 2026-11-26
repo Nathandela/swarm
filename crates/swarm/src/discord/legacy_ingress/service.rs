@@ -524,84 +524,79 @@ where
         if let Some(discussion) = &vm_discussion
             && Instant::now() >= next_mail_check
         {
-            activation::require_no_pending_vm_mail(place, discussion)?;
             next_mail_check = Instant::now() + Duration::from_millis(250);
+            return activation::pending_vm_mail(place, discussion);
         }
-        Ok::<(), io::Error>(())
+        Ok(false)
     };
     let status = StatusSocket::start(place, &cfg)?;
     room.verify(&cfg)?;
     let mut event = open(&cfg)?;
     let mut pending = history_backlog(room, &cfg, boundary)?;
     status.online(true);
-    let wake = match readiness {
-        activation::Ready::Idle => None,
-        activation::Ready::AdmittedFile { parent_message } => Some((parent_message, None)),
-        activation::Ready::QueuedFile => {
-            let prepared = queue::prepare(place, &cfg, &lease, room)?;
-            Some((prepared.parent_message.clone(), Some(prepared)))
-        }
-    };
-    let mut handled = 0;
-    if let Some((parent_message, prepared)) = wake {
-        let result = VmRelay {
-            place,
-            cfg: &cfg,
-            binding: &binding,
-            room,
-            authority: VmAuthority::Activated,
-            prepared,
-        }
-        .run(
-            &mut lease,
-            true,
-            || {},
-            || {
-                if status.stopping() {
-                    return Ok(true);
-                }
-                // A Gateway gap cannot silently transfer an active native effect.
-                if let Some(frame) = event()? {
-                    if matches!(field(&frame, "t"), "MESSAGE_UPDATE" | "MESSAGE_DELETE")
-                        && frame["d"]["id"] == parent_message
-                    {
-                        return Err(io::Error::other(
-                            "original worker's owner source changed during the native wake",
-                        ));
-                    }
-                    queue_event(&cfg, &frame, boundary, &mut pending)?;
-                }
-                Ok(status.stopping())
-            },
-        )?;
-        let Some(output) = result else {
-            return Ok(true);
-        };
-        manager_publication::complete_vm_wake(place, &cfg, &lease, &binding, &output)?;
-        if limit == Some(1) {
-            return Ok(true);
-        }
-        if !matches!(
-            activation::ready(place, &cfg, &lease.db)?,
-            activation::Ready::Idle
-        ) {
-            return Err(io::Error::other(
-                "the original VM scheduler has other active work",
-            ));
-        }
-        handled = 1;
-    }
     let mut through = boundary;
     let mut reconnects = 0;
+    let mut handled = 0;
+    let mut initial = Some(readiness);
     loop {
-        let sequence = loop {
-            if status.stopping() {
+        if status.stopping() {
+            return Ok(true);
+        }
+        let readiness = match initial.take() {
+            Some(startup) => startup,
+            None if check_mail()? => activation::ready_to_run(place, &cfg, &lease.db)?,
+            None => activation::Ready::Idle,
+        };
+        let wake = match readiness {
+            activation::Ready::Idle => None,
+            activation::Ready::AdmittedFile { parent_message } => Some((parent_message, None)),
+            activation::Ready::QueuedFile => {
+                let prepared = queue::prepare(place, &cfg, &lease, room)?;
+                Some((prepared.parent_message.clone(), Some(prepared)))
+            }
+        };
+        if let Some((parent_message, prepared)) = wake {
+            let result = VmRelay {
+                place,
+                cfg: &cfg,
+                binding: &binding,
+                room,
+                authority: VmAuthority::Activated,
+                prepared,
+            }
+            .run(
+                &mut lease,
+                true,
+                || {},
+                || {
+                    if status.stopping() {
+                        return Ok(true);
+                    }
+                    // A Gateway gap cannot silently transfer an active native effect.
+                    if let Some(frame) = event()? {
+                        if matches!(field(&frame, "t"), "MESSAGE_UPDATE" | "MESSAGE_DELETE")
+                            && frame["d"]["id"] == parent_message
+                        {
+                            return Err(io::Error::other(
+                                "original worker's owner source changed during the native wake",
+                            ));
+                        }
+                        queue_event(&cfg, &frame, through, &mut pending)?;
+                    }
+                    Ok(status.stopping())
+                },
+            )?;
+            let Some(output) = result else {
+                return Ok(true);
+            };
+            manager_publication::complete_vm_wake(place, &cfg, &lease, &binding, &output)?;
+            handled += 1;
+            if limit == Some(handled) {
                 return Ok(true);
             }
-            check_mail()?;
-            if let Some(id) = pending.pop_first() {
-                break id;
-            }
+            continue;
+        }
+        let Some(sequence) = pending.pop_first() else {
             match event() {
                 Ok(Some(frame)) => {
                     reconnects = 0;
@@ -618,6 +613,7 @@ where
                 }
                 Err(error) => return Err(error),
             }
+            continue;
         };
         let message = sequence.to_string();
         let fetch = || room.message(&cfg, &message);
@@ -635,7 +631,6 @@ where
             if status.stopping() {
                 return Ok(true);
             }
-            check_mail()?;
             if Instant::now() >= deadline {
                 return Err(io::Error::other(
                     "the original native manager has no verified final publication",

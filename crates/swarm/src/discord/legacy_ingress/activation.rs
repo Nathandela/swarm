@@ -106,6 +106,7 @@ fn probe(place: &Place, cfg: &Config, db: &impl DbApi, inspect_queued: bool) -> 
         && pending_vm_mail(place, &format!("discord-teammate-{ledger}"))?
     {
         return queue::inspect(place, cfg, db)
+            .and_then(|proof| proof.ok_or_else(invalid))
             .map(|_| Ready::QueuedFile)
             .map_err(|error| {
                 io::Error::other(format!(
@@ -119,6 +120,9 @@ fn probe(place: &Place, cfg: &Config, db: &impl DbApi, inspect_queued: bool) -> 
     let voice_tx = voice.begin().map_err(io::Error::other)?;
     let state = match prepare::read_voice(&voice_tx, &ledger, cfg, &endpoint) {
         Err(_) if retained_vm(cfg) => {
+            if inspect_queued && queue::inspect(place, cfg, db)?.is_some() {
+                return Ok(Ready::QueuedFile);
+            }
             require_no_pending_vm_mail(place, &format!("discord-teammate-{ledger}"))?;
             return wake::inspect(place, cfg, &tx, &voice_tx, &binding, &ledger, &endpoint).map(
                 |proof| Ready::AdmittedFile {
@@ -185,7 +189,7 @@ fn probe(place: &Place, cfg: &Config, db: &impl DbApi, inspect_queued: bool) -> 
     Ok(Ready::Idle)
 }
 
-fn pending_vm_mail(place: &Place, discussion: &str) -> io::Result<bool> {
+pub(super) fn pending_vm_mail(place: &Place, discussion: &str) -> io::Result<bool> {
     let path = place.supervisor_root().join("dispatcher-mail.db");
     let (_pin, db) = match open_bolt(&path, 256 << 20) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),

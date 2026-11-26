@@ -511,6 +511,46 @@ fn open_original_writer(root: &Path, identity: (u64, u64)) -> io::Result<(File, 
     Ok((pin, db))
 }
 
+pub(crate) fn original_ingested_file(
+    root: &Path,
+    binding: &Value,
+    id: &str,
+    files: &Value,
+) -> io::Result<(Value, (u64, u64))> {
+    let path = open_path(root, false)?;
+    let (pin, db) = crate::checkout::state::receipts::open_bolt(&path, 256 << 20)?;
+    let key = key(binding, id)?;
+    let tx = db.begin().map_err(io_error)?;
+    let notes = tx.bucket(b"notes").ok_or_else(absent)?;
+    let raw = notes
+        .get(&key)
+        .filter(|value| value.len() <= 128 << 10)
+        .ok_or_else(absent)?;
+    let note: Value = serde_json::from_slice(raw)?;
+    let pending = tx.bucket(b"pending").ok_or_else(absent)?;
+    let prefix = format!("{}\0", note["Discussion"].as_str().ok_or_else(absent)?);
+    if note["Settled"] != ZERO
+        || pending
+            .cursor()
+            .seek(prefix.as_bytes())
+            .is_some_and(|(order, _)| order.starts_with(prefix.as_bytes()))
+    {
+        return Err(absent());
+    }
+    let actual = with_files(&tx, &key, note)?;
+    if actual["Files"] != *files {
+        return Err(absent());
+    }
+    publication_files(&tx, &key, binding, id, files, "ingested")?;
+    let resolved = pin.metadata()?;
+    let current = std::fs::symlink_metadata(path)?;
+    let identity = (resolved.dev(), resolved.ino());
+    if (current.dev(), current.ino()) != identity {
+        return Err(io_error("original ingested mailbox identity changed"));
+    }
+    Ok((actual, identity))
+}
+
 pub(crate) fn verify_original_ingested_file(
     root: &Path,
     queued: &Value,

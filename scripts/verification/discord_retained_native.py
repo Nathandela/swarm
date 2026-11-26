@@ -256,9 +256,14 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
     file_sha = hashlib.sha256(original_bytes).hexdigest()
     file_id = hashlib.sha256(f"completion.csv\0{file_sha}".encode()).hexdigest()
 
+    restart = mode.startswith("ordinary-restart")
+    lost_ack = mode == "ordinary-restart-lost"
+    live = mode.startswith("ordinary-live")
+    foreground_ready = threading.Event()
+    foreground_release = threading.Event()
     worker_wake_requests = []
     mode_fence = mode.removeprefix("ordinary-fence-") if mode.startswith("ordinary-fence-") else ""
-    fresh = mode == "ordinary-fresh" or bool(mode_fence)
+    fresh = mode == "ordinary-fresh" or bool(mode_fence) or live or restart
     queued = fresh or mode in ("pending-file", "prepare-queued", "prepare-queued-crash",
                                "prepare-malformed", "prepare-aged")
 
@@ -266,17 +271,27 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
         observed = json.dumps(body["input"], ensure_ascii=False)
         tool_outputs.extend(item["output"] for item in body["input"]
                             if item.get("type") == "function_call_output")
-        if mode == "ordinary-mixed" and "Continue after the retained VM file." in observed:
+        next_owner = "Continue after the retained VM file." in observed
+        original_reply = (live and not next_owner and "offline original owner prompt" in observed
+                          and "spawn" in selected
+                          and any(item.get("type") == "function_call_output" for item in body["input"]))
+        if original_reply or ((mode == "ordinary-mixed" or live) and next_owner):
+            role = "parent-reply" if original_reply else "text"
             names = [(tool.get("name"), child.get("name"))
                      for tool in body.get("tools", []) for child in tool.get("tools", [])
                      if child.get("name") == "publish"]
             with lock:
-                if not names or "text" in selected:
-                    return None
-                selected.add("text")
-            namespace, name = names[0]
-            return namespace, name, dict(output_id="retained-text-after-file",sequence=1,
-                                         text="Verified native final reply.",final=True)
+                if names and role not in selected:
+                    selected.add(role)
+                else:
+                    names = []
+            if names:
+                if live and next_owner:
+                    foreground_ready.set()
+                    assert foreground_release.wait(timeout=40)
+                namespace, name = names[0]
+                reply = "Verified native final reply."
+                return namespace, name, dict(output_id=role, sequence=1, text=reply, final=True)
         if "Worker message and identity" in observed:
             worker_wake_requests.append(observed)
             names = [(tool.get("name"), child.get("name"))
@@ -330,8 +345,8 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
 
     source_change = threading.Event()
     model, _ = model_fixture(base, False, fixture_tool=choose)
-    discord, posts = discord_fixture(mode != "uncertain", wake=True,
-                                     change_source=lambda: mode_fence if source_change.is_set() else None,
+    discord, posts = discord_fixture(mode != "uncertain" and not lost_ack, wake=True,
+                                     change_source=lambda: (mode_fence or "edit") if source_change.is_set() else None,
                                      expected_file=original_bytes, revoke=mode == "revoked")
     try:
         place = base / "connector"
@@ -343,6 +358,39 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
             try:
                 initial = activate_original(fixture, env, place)
                 assert initial["native_cli"] is True
+                if live:
+                    live_env = env | {"SWARM_TEST_DISCORD_ADMITTED_FILE_WAKE_ROOT": str(base / "state"),
+                        "SWARM_TEST_DISCORD_REST_PORT": str(discord.server_port),
+                        "SWARM_TEST_DISCORD_WAKE_DELIVERY": mode}
+                    with subprocess.Popen([rust_test, "retained_original_go_stages_native_vm_file_call",
+                            "--nocapture"], env=live_env, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True) as test:
+                        await_value(lambda: foreground_ready.is_set() or test.poll() is not None)
+                        assert foreground_ready.is_set(), test.communicate(timeout=5)
+                        assert pending_ready.is_set() or pending_ready.wait(8)
+                        allow_pending.set()
+                        await_value(lambda: any('"state":"queued"' in str(item) for item in tool_outputs))
+                        assert test.poll() is None and len(posts) == 1 and worker_wake_requests == []
+                        worker_file.write_bytes(b"fixture,value\nchanged,2\n")
+                        if mode == "ordinary-live-edit":
+                            source_change.set()
+                        release.set()
+                        foreground_release.set()
+                        output, _ = test.communicate(timeout=55)
+                        assert test.returncode == 0, (output, model.history, tool_outputs[-5:])
+                    if mode == "ordinary-live-edit":
+                        assert len(posts) == 2 and file_calls == [] and worker_wake_requests == []
+                        ledger, = (place / "discussions").glob("*/voice.db")
+                        run(fixture, env, "vm-verify-queued-file", place, "original-room", ledger.parent, "701")
+                    else:
+                        assert len(posts) == 3 and len(file_calls) == 3
+                        ledger, = (place / "discussions").glob("*/voice.db")
+                        payload, = json.loads(run(fixture, env, "vm-validate-staged-wake", ledger.parent, base / "state"))
+                        assert base64.b64decode(payload) == original_bytes
+                    reopened = activate_original(fixture, env, place)
+                    assert reopened.pop("generation") > initial.pop("generation")
+                    assert reopened == initial
+                    return
                 go_args = [fixture,"vm-controller-run",place,"original-room","701",stop,parent_fence]
                 if fresh:
                     go_args.append("completed-parent")
@@ -391,6 +439,18 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                             rust_env = env | {"SWARM_TEST_DISCORD_ADMITTED_FILE_WAKE_ROOT":str(base / "state"),
                                 "SWARM_TEST_DISCORD_REST_PORT":str(discord.server_port), "SWARM_TEST_DISCORD_WAKE_DELIVERY":mode}
                             release.set()
+                            receipt = None
+                            if restart:
+                                test_name = "retained_original_go_stages_native_vm_file_call"
+                                fault = subprocess.run([rust_test, test_name, "--nocapture"],
+                                    env=rust_env | {"SWARM_TEST_DISCORD_QUEUE_EXIT_AFTER_MAILBOX": "1"},
+                                    capture_output=True, text=True, timeout=30)
+                                assert fault.returncode == 88, (fault.stdout, fault.stderr)
+                                receipt = json.loads(run(fixture, env, "vm-read-prepared-queued-wake",
+                                    ledger.parent, base / "state", note["Discussion"], note["Session"],
+                                    note["Instance"], note["Attempt"], note["ID"], "ingested"))
+                                assert list(map(base64.b64decode, receipt["Files"])) == [original_bytes]
+                                assert posts == [] and worker_wake_requests == []
                             if mode_fence:
                                 rust_env["SWARM_TEST_DISCORD_DISPATCH_BLOCK_RUNTIME"] = "1"
                                 blocked = base / "state/rust-dispatch-runtime-blocked"
@@ -428,6 +488,27 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                                 run(rust_test,rust_env,"retained_original_go_stages_native_vm_file_call","--nocapture")
                             except AssertionError as error:
                                 raise AssertionError((error.args,file_calls,model.history,tool_outputs[-5:])) from error
+                            if receipt:
+                                native = owner(env, {
+                                    "op": "semantic_status", "session_id": initial["session_id"],
+                                    "operation_id": receipt["Operation"],
+                                }, caps=("semantic-send",))
+                                observed = native.get("semantic_receipt", {})
+                                assert observed["operation_id"] == receipt["Operation"]
+                                assert observed["state"] in ("admitted", "submitted", "completed"), observed
+                                assert observed["session_instance"] == initial["session_instance"], observed
+                            if lost_ack:
+                                assert len(posts) == 1 and len(file_calls) == 3
+                                phases = json.loads(run(fixture, env, "publication-phases", place, "original-room"))
+                                assert len(phases) == 1 and phases[0].startswith("uncertain true ")
+                                assert phases[0].split()[-1] == posts[0]
+                                run(rust_test, rust_env | {"SWARM_TEST_DISCORD_EXPECT_WAKE_HOLD": "1"},
+                                    "retained_original_go_stages_native_vm_file_call", "--nocapture")
+                                assert len(posts) == 1
+                                run(fixture, env, "vm-resume-publication", place, "original-room", "uncertain")
+                                assert json.loads(run(fixture, env, "publication-phases", place, "original-room")) == phases
+                                assert len(posts) == 1
+                                return
                             states = json.loads(run(fixture,env,"publication-phases",place,"original-room"))
                             assert len(file_calls) == 3 and len(states) == 1 and states[0].startswith("sent true ")
                             assert posts == [states[0].split()[-1]]
@@ -598,7 +679,7 @@ if __name__ == "__main__":
     go, fixture, codex, rust_test = (str(Path(arg).resolve(strict=True)) for arg in sys.argv[1:])
     if modes := os.environ.get("SWARM_DISCORD_ADMITTED_WAKE"):
         for mode in ("prepared", "sent", "uncertain", "revoked") if modes == "1" else modes.split(","):
-            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed", "ordinary-replace", "pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged", "ordinary-fresh", "ordinary-fence-edit", "ordinary-fence-delete", "ordinary-fence-stop")
+            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed", "ordinary-replace", "pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged", "ordinary-fresh", "ordinary-fence-edit", "ordinary-fence-delete", "ordinary-fence-stop", "ordinary-live", "ordinary-live-edit", "ordinary-restart", "ordinary-restart-lost")
             with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
                 admit_vm_worker_wake(go, fixture, codex, rust_test, Path(directory), mode)
             if mode == "pending-file":
