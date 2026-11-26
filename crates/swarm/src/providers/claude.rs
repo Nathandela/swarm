@@ -516,6 +516,61 @@ pub(crate) fn profile(
     }))
 }
 
+/// Pinned ordinary Go records retain a launch key, but carry no historical OAuth identity.
+pub(crate) fn go_api_profile(
+    env: &[(String, String)],
+    supplied: &Value,
+    options: &Value,
+) -> io::Result<Value> {
+    let profile = profile(env, supplied, options)?;
+    let home = std::path::Path::new(crate::ipc::field(&profile, "home"));
+    let config = read_private_optional(&home.join(".claude.json"))?;
+    let settings = read_private_optional(&home.join(".claude/settings.json"))?;
+    let mut keys = env.iter().filter(|(name, _)| name == "ANTHROPIC_API_KEY");
+    let approved = keys.next().is_some_and(|(_, key)| {
+        let suffix = key.get(key.len().saturating_sub(20)..).unwrap_or_default();
+        !key.is_empty()
+            && !suffix.is_empty()
+            && config["customApiKeyResponses"]["approved"]
+                .as_array()
+                .is_some_and(|values| values.iter().any(|item| item == key || item == suffix))
+            && !config["customApiKeyResponses"]["rejected"]
+                .as_array()
+                .is_some_and(|values| values.iter().any(|item| item == key || item == suffix))
+    });
+    if !approved
+        || keys.next().is_some()
+        || profile["origin"]["kind"] != "api-key"
+        || !config["oauthAccount"].is_null()
+        || !settings["forceLoginMethod"].is_null()
+        || !settings["forceLoginOrgUUID"].is_null()
+        || !settings["modelProviders"].is_null()
+        || !settings["env"].is_null()
+            && settings["env"].as_object().is_none_or(|variables| {
+                variables.iter().any(|(name, value)| match name.as_str() {
+                    "ANTHROPIC_BASE_URL" => value
+                        .as_str()
+                        .and_then(|url| url.strip_prefix("http://127.0.0.1:"))
+                        .and_then(|port| port.parse::<u16>().ok())
+                        .is_none_or(|port| port == 0),
+                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" | "DISABLE_AUTOUPDATER" => {
+                        value != "1"
+                    }
+                    "CLAUDE_CODE_MAX_RETRIES" => value != "0",
+                    "CLAUDE_CODE_TMPDIR" => !value
+                        .as_str()
+                        .is_some_and(|dir| std::path::Path::new(dir).is_absolute()),
+                    _ => true,
+                })
+            })
+    {
+        return Err(io::Error::other(
+            "Go Claude requires the saved approved API-key authority",
+        ));
+    }
+    Ok(profile)
+}
+
 /// Claude managers grant effects under one native OAuth profile only.
 pub(crate) fn manager_account(home: &std::path::Path) -> io::Result<String> {
     let current = profile(
@@ -674,6 +729,23 @@ pub(crate) fn transcript(
     cwd: &std::path::Path,
     id: &str,
 ) -> io::Result<(std::path::PathBuf, Value)> {
+    transcript_record(home, cwd, id, false)
+}
+
+pub(crate) fn literal_transcript(
+    home: &std::path::Path,
+    cwd: &std::path::Path,
+    id: &str,
+) -> io::Result<(std::path::PathBuf, Value)> {
+    transcript_record(home, cwd, id, true)
+}
+
+fn transcript_record(
+    home: &std::path::Path,
+    cwd: &std::path::Path,
+    id: &str,
+    literal: bool,
+) -> io::Result<(std::path::PathBuf, Value)> {
     use std::fs::{self, OpenOptions};
     use std::io::{BufRead, BufReader};
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -727,7 +799,13 @@ pub(crate) fn transcript(
         let location = crate::ipc::field(&value, "cwd");
         if !thread.is_empty() && !location.is_empty() && value["isSidechain"] != true {
             let recorded = std::path::Path::new(location);
-            if thread != id || (recorded != cwd && recorded.canonicalize()? != cwd) {
+            if thread != id
+                || if literal {
+                    location != cwd_text
+                } else {
+                    recorded != cwd && recorded.canonicalize()? != cwd
+                }
+            {
                 return Err(io::Error::other(
                     "Claude transcript identity or checkout changed",
                 ));

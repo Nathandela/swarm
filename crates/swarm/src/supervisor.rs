@@ -260,7 +260,10 @@ impl State {
                 )
                 || request["launch"]["worktree"] == true
                 || request["launch"]["options"].get("resume_from").is_some()
-                    && field(&request["launch"], "agent") != "codex"
+                    && !matches!(
+                        field(&request["launch"], "agent"),
+                        "codex" | "claude" | "claude-code"
+                    )
                 || ["resume_conversation_id", "resume_relocate", "handoff_from"]
                     .iter()
                     .any(|key| request["launch"]["options"].get(*key).is_some())
@@ -269,7 +272,7 @@ impl State {
                     .any(|key| !field(&request["launch"], key).is_empty()))
         {
             return Err(io::Error::other(
-                "stopped rollback supports ordinary non-worktree launches and qualified stopped Go Codex resume",
+                "stopped rollback supports ordinary non-worktree launches and qualified stopped Go Claude or Codex resume",
             ));
         }
         if managed.is_some()
@@ -387,17 +390,16 @@ impl State {
                 format!("{}/{}", self.endpoint, source)
             };
             if let Some(store) = &self.stopped_go
-                && field(launch, "agent") == "codex"
+                && matches!(field(launch, "agent"), "codex" | "claude" | "claude-code")
             {
                 let (endpoint, local) = qualified.split_once('/').expect("qualified source");
                 if endpoint != self.endpoint || expected_nonce.is_some() {
                     return Err(io::Error::other(
-                        "Go Codex resume requires an ordinary local source",
+                        "Go resume requires an ordinary local source",
                     ));
                 }
                 let reservation = self.launch_gate.lock().unwrap();
-                let (prepared, _listener) =
-                    store.prepare_codex_resume(launch, &qualified, local)?;
+                let (prepared, _listener) = store.prepare_resume(launch, &qualified, local)?;
                 runtime::private_dir(&self.root)?;
                 return self.reserve_locked(prepared, false, None, None, None, &reservation);
             }

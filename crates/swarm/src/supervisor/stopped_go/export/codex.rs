@@ -1,11 +1,6 @@
-use crate::{
-    ipc::field,
-    providers::{self, codex_continuity},
-    supervisor::runtime,
-};
+use crate::{ipc::field, providers::codex_continuity, supervisor::runtime};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use std::{io, os::unix::fs::MetadataExt, path::Path};
+use std::{io, path::Path};
 
 pub(in crate::supervisor) const RELEASE: &str = "0.172.0";
 
@@ -14,32 +9,10 @@ pub(in crate::supervisor) fn legacy_identity(
     version: &str,
     effective_identity: &Value,
 ) -> io::Result<Value> {
-    let invalid = || io::Error::other("unproved Codex rollback executable");
-    if version != RELEASE
-        || !executable.is_absolute()
-        || executable.file_name().and_then(|name| name.to_str()) != Some("codex")
-        || executable.canonicalize()? != executable
-    {
-        return Err(invalid());
+    if version != RELEASE {
+        return Err(io::Error::other("unproved Codex rollback executable"));
     }
-    let before = executable.metadata()?;
-    if before.mode() & 0o7000 != 0 || &providers::identity(executable)? != effective_identity {
-        return Err(invalid());
-    }
-    let unix_ns = i128::from(before.mtime()) * 1_000_000_000 + i128::from(before.mtime_nsec());
-    // The pinned Go persisted CLI identity uses os.FileMode's ordinary permissions
-    // and the physical launch path. Keep the Rust admission identity separate.
-    let legacy = format!(
-        "{}:{}:{}:{}:{}:{}",
-        executable.display(),
-        before.dev(),
-        before.ino(),
-        before.size(),
-        unix_ns,
-        before.mode() & 0o777,
-    );
-    Ok(json!({"path":executable,"version":version,
-        "fingerprint":format!("{:x}",Sha256::digest(legacy.as_bytes()))}))
+    super::legacy_identity(executable, version, effective_identity, "codex")
 }
 
 pub(super) fn resume_proof(dir: &Path, exported: &Value, token: &str) -> io::Result<Value> {

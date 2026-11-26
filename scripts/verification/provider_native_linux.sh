@@ -21,6 +21,10 @@ case "$witness" in
     test "$#" -eq 3
     mounted=/native/agy
     set -- /fixture/swarm "$mounted" ;;
+  stopped_go_claude_resume.py)
+    test "$#" -eq 3
+    test -x "$fixture_dir/go-owner"
+    set -- /fixture/go-owner /fixture/swarm /native/claude ;;
   rust_claude_resume.py)
     case "${4:-direct}" in
       direct|internal) set -- ;;

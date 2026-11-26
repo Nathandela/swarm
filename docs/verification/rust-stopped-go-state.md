@@ -34,3 +34,20 @@ After stopping the Rust supervisor, `swarm daemon export-stopped-go` validates t
 The witness starts pinned Go on the exported copy and checks the intervening Rust labels and native conversation ID. It then resumes the exported attempt through Go's owner protocol and inspects the provider's observed `--resume` argument for the exact previously captured conversation ID. The exported attempt has no fabricated Go shim configuration or Go native process record.
 
 This remains a drained rollback rehearsal for ordinary Claude attempts. Linux proves the dedicated subreaper has no children after the registered worker joins. Darwin proves the owned process group is absent. The fixture does not demonstrate custody of detached Darwin descendants. Reliable launch receipts, worktrees, other providers and roles, retained history APIs, and hot cross-language shim adoption have separate qualification gates.
+
+## Resume a stopped ordinary Go Claude conversation
+
+With stopped compatibility enabled, the board's **r** action and the ordinary owner `resume_from` route accept a qualified stopped Go Claude attempt. The source is a fresh ordinary launch created by Go v0.29.24 with Claude Code 2.1.329. Rust checks the fresh Go arguments, saved environment, Go shim's executable observation and writer-stop records. The saved and requested account must use the same explicitly supplied API key approved in the physical default Claude home. The original physical checkout and literal native transcript must match the saved Go conversation.
+
+Rust anchors the current Claude project settings and transcript inode at admission and rechecks them in the shim. Export requires an authenticated Claude Stop hook naming that exact transcript, successful writer containment, and the same CLI identity, key, checkout and settings. The Rust successor exports a separate stopped Go row carrying the original conversation, CLI fingerprint and launch options. The original Go attempt retains its source files.
+
+Go v0.29.24 provides no historical Claude OAuth fingerprint or project-settings snapshot. The verified scope uses the API key recorded verbatim by Go's launcher and anchors current project authority at migration. OAuth, custom credential providers or homes, historical settings reconstruction, moves, previously resumed Go rows, initial prompts and independently managed native writers require separate qualification.
+
+Run the fixture on macOS with the released Go v0.29.24 executable and installed signed Claude binary:
+
+```bash
+cargo build --locked -p swarm
+python3 -Bu scripts/verification/stopped_go_claude_resume.py GO_V0_29_24 target/debug/swarm CLAUDE_2_1_329
+```
+
+On Linux, stage the Rust candidate as `swarm` and the released Go v0.29.24 executable as `go-owner` alongside `stopped_go_claude_resume.py`, `stopped_go_state.py`, `native_fixture_sandbox.py`, and `rust_claude_worker_input.py`. Pass that directory and the physical native executable to `sh scripts/verification/provider_native_linux.sh STAGED CLAUDE_2_1_329 stopped_go_claude_resume.py`. Both commands use isolated homes and a synthetic loopback model. The model records that each resumed request includes the preceding turns, and each new Claude response is read from the original transcript.

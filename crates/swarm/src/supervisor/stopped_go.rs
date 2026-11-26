@@ -1,4 +1,5 @@
 // The Go store remains authoritative throughout stopped-session compatibility.
+pub(super) mod claude;
 mod codex;
 pub(super) mod export;
 pub(super) mod live;
@@ -944,7 +945,7 @@ impl Store {
         self.rows.lock().unwrap().contains_key(id)
     }
 
-    pub(super) fn prepare_codex_resume(
+    pub(super) fn prepare_resume(
         &self,
         launch: &Value,
         qualified: &str,
@@ -954,19 +955,24 @@ impl Store {
         let entry = rows
             .get(id)
             .ok_or_else(|| io::Error::other("unknown Go resume source"))?;
+        let agent = field(&entry.meta, "agent_type");
+        if agent != field(launch, "agent")
+            && !(agent == "claude" && launch["agent"] == "claude-code")
+        {
+            return Err(io::Error::other("Go resume agent differs from the source"));
+        }
         let thread = field(&entry.meta, "conversation_id");
         if entry.live.is_some()
             || entry.observed_exit.is_some()
             || entry.exported
-            || entry.meta["agent_type"] != "codex"
             || rows.iter().any(|(other, row)| {
-                row.meta["agent_type"] == "codex"
+                row.meta["agent_type"] == agent
                     && (row.live.is_some()
                         || other != id && !row.exported && row.meta["conversation_id"] == thread)
             })
         {
             return Err(io::Error::other(
-                "Go Codex source has live, duplicate or unqualified custody",
+                "Go source has live, duplicate or unqualified custody",
             ));
         }
         let raw = read_meta(&entry.dir)?;
@@ -977,17 +983,45 @@ impl Store {
             || qualified_role(&entry.meta).is_err()
             || entry.meta["status"]["Process"] != "exited"
         {
-            return Err(io::Error::other("stopped Go Codex source changed"));
+            return Err(io::Error::other("stopped Go source changed"));
         }
         let evidence = launch_evidence(&entry.dir, &entry.meta)?;
-        let prepared = codex::prepare(launch, qualified, &entry.meta, &evidence)?;
         let listener = exited(&entry.dir, &entry.meta)?;
+        if agent == "claude" {
+            let stopped = read_at(&entry.dir, c"native-writers-stopped.json")?;
+            let native = &stopped["native"];
+            let pgid = native["pgid"]
+                .as_i64()
+                .and_then(|pid| i32::try_from(pid).ok())
+                .filter(|pid| *pid > 1)
+                .ok_or_else(|| io::Error::other("missing Go Claude process group"))?;
+            if read_at(&entry.dir, c"observed-cli.json")
+                .map_or(true, |identity| identity != entry.meta["cli_identity"])
+                || native["runtime"] != json!({"provider":"","epoch":0,"identity":"","home":""})
+                || !field(native, "generation")
+                    .as_bytes()
+                    .iter()
+                    .all(u8::is_ascii_hexdigit)
+                || field(native, "generation").len() != 32
+                || stopped["descendants_contained"] != cfg!(target_os = "linux")
+                || unsafe { libc::kill(-pgid, 0) } != -1
+                || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+            {
+                return Err(io::Error::other("Go Claude writer death is unproved"));
+            }
+        }
+        let prepared = match agent {
+            "codex" => codex::prepare(launch, qualified, &entry.meta, &evidence)?,
+            "claude" => claude::prepare(launch, qualified, &entry.meta, &evidence)?,
+            _ => return Err(io::Error::other("unsupported Go resume agent")),
+        };
         if !same_file(
             &entry.dir.metadata()?,
             &fs::symlink_metadata(self.root.join(id))?,
         ) || read_meta(&entry.dir)? != raw
+            || agent == "claude" && launch_evidence(&entry.dir, &entry.meta)? != evidence
         {
-            return Err(io::Error::other("stopped Go Codex source changed"));
+            return Err(io::Error::other("stopped Go source changed"));
         }
         Ok((prepared, listener))
     }

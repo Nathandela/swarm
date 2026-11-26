@@ -355,7 +355,7 @@ pub(crate) fn detect_for_board(agent: &str, cwd: &Path) -> io::Result<String> {
     Ok(admitted_version(agent, &output)?.to_owned())
 }
 
-fn resolve(binary: &str, cwd: &Path, path: &str) -> io::Result<PathBuf> {
+pub(crate) fn resolve(binary: &str, cwd: &Path, path: &str) -> io::Result<PathBuf> {
     for directory in std::env::split_paths(path) {
         let candidate = cwd.join(directory).join(binary);
         if let Ok(meta) = fs::metadata(&candidate)

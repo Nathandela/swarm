@@ -106,6 +106,7 @@ struct State {
     agy_broker: Option<agy_input::Broker>,
     claude_broker: Option<Arc<providers::claude_input::Broker>>,
     schedule: Option<worker::Binding>,
+    claude_go_resume_path: Option<String>,
     claude_schedule: Option<String>,
     manager: bool,
     manager_terminal: Mutex<manager_terminal::Input>,
@@ -444,15 +445,25 @@ fn serve(dir: &Path) -> io::Result<()> {
         }
         if provider["name"]=="claude" && config["claude_resume"].is_object() {
             let saved=&config["claude_profile"];
-            let live=providers::claude::profile(&environment,&Value::Null,&saved["options"])?;
+            let live=if rollback {
+                providers::claude::go_api_profile(&environment,&Value::Null,&saved["options"])?
+            } else {
+                providers::claude::profile(&environment,&Value::Null,&saved["options"])?
+            };
             let id=field(&config["claude_resume"],"conversation_id");
             let home=Path::new(field(saved,"home"));
             let cwd=Path::new(working_dir);
             providers::claude::verify_project_authority(home,cwd,&config["claude_resume"]["project_authority"])?;
-            let (_,transcript)=match config["claude_resume"].get("source_cwd") {
+            let transcript=if rollback {
+                let (path, identity) = providers::claude::literal_transcript(home,cwd,id)?;
+                if json!(path) != config["claude_resume"]["path"] {
+                    return Err(io::Error::other("Go Claude resume transcript path changed before exec"));
+                }
+                identity
+            } else { match config["claude_resume"].get("source_cwd") {
                 Some(value) => providers::claude::relocation::transcript(home,Path::new(value.as_str().ok_or_else(|| io::Error::other("invalid original Claude project"))?),id)?,
                 None => providers::claude::transcript(home,cwd,id)?,
-            };
+            }.1 };
             if config["claude_resume"]["external_source"].is_object()
                 && providers::claude::external_proof(executable,cwd,&environment,home,id,true)?
                     !=config["claude_resume"]["external_source"] {
@@ -713,6 +724,10 @@ fn serve(dir: &Path) -> io::Result<()> {
         agy_broker,
         claude_broker,
         schedule: schedule.clone(),
+        claude_go_resume_path: config["claude_resume"]["path"]
+            .as_str()
+            .filter(|_| rollback)
+            .map(str::to_owned),
         claude_schedule,
         manager: !scope.is_null(),
         manager_terminal: Mutex::default(),
@@ -2096,6 +2111,15 @@ fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> 
         && !cwd.is_empty()
         && observed.conversation.as_deref() == conversation
     {
+        if let Some(path) = &state.claude_go_resume_path
+            && field(payload, "transcript_path") == path
+            && Some(cwd) == state.working_dir.to_str()
+        {
+            runtime::write_json(
+                &state.dir.join("claude-go-resume-observed.json"),
+                &json!({"token":state.token,"conversation_id":conversation,"path":path}),
+            )?;
+        }
         let reply = field(payload, "last_assistant_message");
         if !reply.is_empty() && reply.len() <= 4096 {
             capture_pilot_item(

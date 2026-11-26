@@ -179,13 +179,55 @@ pub(in crate::supervisor) fn collect(root: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(sessions)
 }
 
+pub(in crate::supervisor) fn legacy_identity(
+    executable: &Path,
+    version: &str,
+    effective_identity: &Value,
+    agent: &str,
+) -> io::Result<Value> {
+    use sha2::{Digest, Sha256};
+    let invalid = || io::Error::other("unproved Go rollback executable");
+    if version.is_empty()
+        || !executable.is_absolute()
+        || executable.file_name().and_then(|name| name.to_str()) != Some(agent)
+        || executable.canonicalize()? != executable
+    {
+        return Err(invalid());
+    }
+    let before = executable.metadata()?;
+    if before.mode() & 0o7000 != 0 || &crate::providers::identity(executable)? != effective_identity
+    {
+        return Err(invalid());
+    }
+    let unix_ns = i128::from(before.mtime()) * 1_000_000_000 + i128::from(before.mtime_nsec());
+    // The pinned Go persisted CLI identity uses os.FileMode's ordinary permissions
+    // and the physical launch path. Keep the Rust admission identity separate.
+    let legacy = format!(
+        "{}:{}:{}:{}:{}:{}",
+        executable.display(),
+        before.dev(),
+        before.ino(),
+        before.size(),
+        unix_ns,
+        before.mode() & 0o777,
+    );
+    Ok(json!({"path":executable,"version":version,
+        "fingerprint":format!("{:x}",Sha256::digest(legacy.as_bytes()))}))
+}
+
 fn configuration(dir: &Path, id: &str) -> io::Result<Value> {
     fs::symlink_metadata(dir)?;
     runtime::private_dir(dir)?;
     let config = runtime::read_json(&dir.join("session.json"))?;
     let provider = &config["provider"];
     let admitted_provider = match ipc::field(provider, "name") {
-        "claude" | "agy" => provider["mode"] == "classic",
+        "claude" => {
+            provider["mode"] == "classic"
+                && config["claude_resume"] == config["go_rollback"]["claude_resume"]
+                && (config["claude_resume"].is_null()
+                    || config["go_rollback"]["cli_identity"].is_object())
+        }
+        "agy" => provider["mode"] == "classic",
         "codex" => {
             provider["mode"] == "managed"
                 && provider["version"] == codex::RELEASE
@@ -206,7 +248,7 @@ fn configuration(dir: &Path, id: &str) -> io::Result<Value> {
         || !config["agy_launch"]["resumed_from"].is_null()
         || !config["manager"].is_null()
         || !config["mailbox"].is_null()
-        || !config["claude_resume"].is_null()
+        || provider["name"] != "claude" && !config["claude_resume"].is_null()
         || !config["schedule"].is_null()
         || !config["checkout"].is_null()
         || config["lineage"] != json!({})
@@ -391,6 +433,17 @@ impl Attempt {
         if self.meta["agent_type"] == "codex" {
             return codex::resume_proof(&self.dir, &self.meta, &self.token).map(Some);
         }
+        if self.meta["agent_type"] == "claude" {
+            let config = configuration(&self.dir, &self.id)?;
+            if config["claude_resume"].is_object() {
+                return super::claude::export_proof(
+                    &self.dir,
+                    &config,
+                    &self.meta["conversation_id"],
+                )
+                .map(Some);
+            }
+        }
         if self.meta["agent_type"] != "agy" {
             return Ok(None);
         }
@@ -498,7 +551,7 @@ impl Attempt {
                 crate::providers::agy::handoff::verify(&self.dir, proof)?;
             } else if self.resume_proof()?.as_ref() != Some(proof) {
                 return Err(io::Error::other(
-                    "Codex rollback source changed before publication",
+                    "native rollback source changed before publication",
                 ));
             }
         }
@@ -605,7 +658,7 @@ fn validate(dir: &Path) -> io::Result<Attempt> {
             "resumed_from":"", "spawned_from":"", "spawn_intent":"", "supervision":"",
         }),
     };
-    if agent == "codex" {
+    if agent == "codex" || config["claude_resume"].is_object() {
         attempt.meta["cli_identity"] = config["go_rollback"]["cli_identity"].clone();
         if let Some(auth) = config["go_rollback"].get("auth_identity") {
             attempt.meta["auth_identity"] = auth.clone();
