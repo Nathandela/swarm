@@ -306,6 +306,34 @@ impl Dispatcher {
                 && state["input"]["draft_retry"] == "prepared"
                 && crate::providers::codex_receipt::timely(field(&state["input"], "operation"))
             {
+                let input = &state["input"];
+                let id = field(input, "source_id");
+                let origin = &input["composer"]["origin"];
+                if input["worker_wake"].is_null() {
+                    if origin["voice"].is_object() {
+                        let Some((place, _)) = calls else {
+                            return Ok(());
+                        };
+                        if super::call_runtime::verify_live(place, origin).is_err()
+                            || api.verify(cfg).is_err()
+                        {
+                            return Ok(());
+                        }
+                    } else {
+                        match Self::owner_source_current(
+                            cfg,
+                            inbox,
+                            api,
+                            id,
+                            &origin["revision"],
+                            "sending",
+                        )? {
+                            Some(true) => {}
+                            Some(false) => return inbox.withdraw_draft_retry(id),
+                            None => return Ok(()),
+                        }
+                    }
+                }
                 state["input"]["draft_retry"] = json!("executing");
                 inbox.set_manager(state.clone())?;
                 let input = &state["input"];
@@ -553,11 +581,25 @@ impl Dispatcher {
         id: &str,
         revision: &Value,
     ) -> io::Result<Option<bool>> {
-        if !inbox.matches_owner_admission(id, revision) {
-            return Ok(Some(false));
-        }
         if super::call_origin::key(id) {
+            if !inbox.matches_owner_admission(id, revision, "accepted") {
+                return Ok(Some(false));
+            }
             return Ok(api.verify(cfg).ok().map(|_| true));
+        }
+        Self::owner_source_current(cfg, inbox, api, id, revision, "accepted")
+    }
+
+    fn owner_source_current(
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        id: &str,
+        revision: &Value,
+        state: &str,
+    ) -> io::Result<Option<bool>> {
+        if !inbox.matches_owner_admission(id, revision, state) {
+            return Ok(Some(false));
         }
         let source = match api.current(cfg, id) {
             Ok(Some(source)) => source,
@@ -575,9 +617,9 @@ impl Dispatcher {
         }
         match api.admit(inbox, &source) {
             Ok(receipt) => Ok(Some(receipt.is_some_and(|current| {
-                current["state"] == "accepted" && current["revision"] == *revision
+                current["state"] == state && current["revision"] == *revision
             }))),
-            // Exact scoped GET succeeded, but the accepted revision conflicts with it.
+            // Exact scoped GET succeeded, but the retained revision conflicts with it.
             Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(Some(false)),
             Err(error) => Err(error),
         }
@@ -1511,14 +1553,31 @@ mod tests {
         assert!(!exact_draft_refusal(&input, &receipt));
     }
 
+    #[derive(Clone, Copy)]
+    enum LiveSource {
+        Exact,
+        Unavailable,
+        Edited,
+    }
+
     struct MockDiscord {
+        source: std::cell::Cell<LiveSource>,
         outcome: RefCell<Post>,
         posted: RefCell<Vec<(String, String)>>,
     }
 
     impl Audience for MockDiscord {
         fn current(&self, cfg: &Config, id: &str) -> io::Result<Option<Value>> {
-            Ok(Some(source(cfg, id)))
+            let mut message = source(cfg, id);
+            match self.source.get() {
+                LiveSource::Exact => {}
+                LiveSource::Unavailable => return Err(io::ErrorKind::TimedOut.into()),
+                LiveSource::Edited => {
+                    message["content"] = json!("edited while disconnected");
+                    message["edited_timestamp"] = json!("2026-11-26T01:00:00Z");
+                }
+            }
+            Ok(Some(message))
         }
 
         fn verify(&self, cfg: &Config) -> io::Result<()> {
@@ -1676,6 +1735,7 @@ mod tests {
             .unwrap();
         inbox.publication_state(&nonce, "sending", None).unwrap();
         let api = MockDiscord {
+            source: std::cell::Cell::new(LiveSource::Exact),
             outcome: RefCell::new(Post::Acknowledged(Value::Null)),
             posted: RefCell::new(Vec::new()),
         };
@@ -1690,6 +1750,15 @@ mod tests {
 
     #[test]
     fn owner_dm_runs_through_bound_manager_and_exact_reply_once() {
+        owner_dm_after_draft(false);
+    }
+
+    #[test]
+    fn reconnected_owner_dm_drops_the_edited_source_without_sending() {
+        owner_dm_after_draft(true);
+    }
+
+    fn owner_dm_after_draft(edited: bool) {
         let dir =
             crate::test_temp::root().join(format!("d-{}", &runtime::random_id().unwrap()[..12]));
         runtime::private_dir(&dir).unwrap();
@@ -1756,6 +1825,7 @@ mod tests {
         inbox.admit(&source(&cfg, "101")).unwrap();
         let dispatcher = Dispatcher::open(&cfg, &dir).unwrap().unwrap();
         let api = MockDiscord {
+            source: std::cell::Cell::new(LiveSource::Exact),
             outcome: RefCell::new(Post::RateLimited(60_000)),
             posted: RefCell::new(Vec::new()),
         };
@@ -1774,6 +1844,10 @@ mod tests {
         assert!(dispatcher.tick(&cfg, &mut inbox, &api).is_err());
         assert_eq!(state.lock().unwrap().sends, 1);
         let held = inbox.manager()["input"].clone();
+        state.lock().unwrap().snapshot_busy = true;
+        dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        assert_eq!(inbox.manager()["input"], held);
+        state.lock().unwrap().snapshot_busy = false;
         dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
         let renewed = inbox.manager()["input"].clone();
         assert_ne!(held["operation"], renewed["operation"]);
@@ -1782,6 +1856,28 @@ mod tests {
         assert_eq!(held["source_id"], renewed["source_id"]);
         drop(inbox);
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        api.source.set(LiveSource::Unavailable);
+        dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        assert_eq!(state.lock().unwrap().sends, 1);
+        assert_eq!(inbox.manager()["input"], renewed);
+        if edited {
+            api.source.set(LiveSource::Edited);
+            dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+            assert_eq!(state.lock().unwrap().sends, 1);
+            assert!(inbox.manager()["input"].is_null());
+            assert!(!inbox.matches_owner_admission(
+                field(&renewed, "source_id"),
+                &renewed["composer"]["origin"]["revision"],
+                "sending",
+            ));
+            done.store(true, Ordering::Relaxed);
+            let _ = std::os::unix::net::UnixStream::connect(&socket).unwrap();
+            server.join().unwrap();
+            drop(dispatcher);
+            fs::remove_dir_all(dir).unwrap();
+            return;
+        }
+        api.source.set(LiveSource::Exact);
         for _ in 0..3 {
             dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
         }

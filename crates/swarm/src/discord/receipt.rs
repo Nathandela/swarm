@@ -522,6 +522,25 @@ impl Inbox {
         self.save(next)
     }
 
+    pub(super) fn withdraw_draft_retry(&mut self, id: &str) -> io::Result<()> {
+        let input = &self.data["manager"]["input"];
+        if input["draft_retry"] != "prepared"
+            || input["source_id"] != id
+            || !input["turn_id"].is_null()
+            || !input["worker_wake"].is_null()
+        {
+            return Err(invalid("no matching prepared dispatcher retry to withdraw"));
+        }
+        let mut next = self.data.clone();
+        if let Some(source) = next["messages"][id].as_object_mut() {
+            source.shift_remove("text");
+            source.shift_remove("addressed_text");
+            source.insert("state".into(), json!("withdrawn"));
+        }
+        next["manager"]["input"] = Value::Null;
+        self.save(next)
+    }
+
     pub(super) fn read_active_attachment(
         &self,
         input: &Value,
@@ -953,9 +972,14 @@ pub(super) fn hash(value: &Value) -> io::Result<String> {
 }
 
 impl Inbox {
-    pub(super) fn matches_owner_admission(&self, source: &str, revision: &Value) -> bool {
+    pub(super) fn matches_owner_admission(
+        &self,
+        source: &str,
+        revision: &Value,
+        state: &str,
+    ) -> bool {
         let current = &self.data["messages"][source];
-        current["state"] == "accepted" && current["revision"] == *revision
+        current["state"] == state && current["revision"] == *revision
     }
 
     pub(super) fn worker_mail_anchor(
