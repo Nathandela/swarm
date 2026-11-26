@@ -572,11 +572,7 @@ fn persist_cutover<'tx>(mut tx: impl TxRwApi<'tx>, receipt: &mut Receipt) -> io:
 }
 
 pub(super) fn dispatch(place: &Place, message: &str, dry_run: bool) -> io::Result<bool> {
-    dispatch_with(place, message, dry_run, |cfg| {
-        let api = super::rest::Discord::connect(cfg)?;
-        api.verify_app(cfg)?;
-        api.owner_message(cfg, message)?.ok_or_else(invalid)
-    })
+    dispatch_with(place, message, dry_run, |cfg| capture_source(cfg, message))
 }
 
 fn dispatch_with(
@@ -588,8 +584,12 @@ fn dispatch_with(
     let cfg = scope(place, message)?;
     let source = place.dir.join("discord.db");
     let (source_pin, db) = open_bolt(&source, 64 << 20)?;
-    let c =
-        candidate(&db.begin().map_err(io::Error::other)?, &cfg, message)?.ok_or_else(invalid)?;
+    let c = {
+        let tx = db.begin().map_err(io::Error::other)?;
+        let c = candidate(&tx, &cfg, message)?.ok_or_else(invalid)?;
+        require_repaired(&tx, &cfg, &c.binding)?;
+        c
+    };
     let (directory, id, endpoint) = voice_location(place, &cfg, &c)?;
     let (voice_pin, voice_db, receipt) = controller(
         &directory,
@@ -703,6 +703,214 @@ fn dispatch_with(
         "Native input acknowledged. The original Go controller retains the operation for reconciliation."
     );
     Ok(true)
+}
+
+fn capture_source(cfg: &Config, message: &str) -> io::Result<Value> {
+    let api = super::rest::Discord::connect(cfg)?;
+    api.verify_app(cfg)?;
+    api.owner_message(cfg, message)?.ok_or_else(invalid)
+}
+
+pub(super) fn capture(place: &Place, message: &str, dry_run: bool) -> io::Result<bool> {
+    capture_with(place, message, dry_run, capture_source)
+}
+
+fn capture_with(
+    place: &Place,
+    message: &str,
+    dry_run: bool,
+    fetch: impl FnOnce(&Config, &str) -> io::Result<Value>,
+) -> io::Result<bool> {
+    let cfg = scope(place, message)?;
+    let source = place.dir.join("discord.db");
+    let identity = fs::symlink_metadata(&source)?;
+    let install = cfg.text("installation_id");
+    let channel = cfg.text("dm_channel_id");
+    let actor = cfg.text("owner_id");
+    let key = format!("{install}\0{message}").into_bytes();
+    let active_key = format!("{install}\0{channel}").into_bytes();
+    {
+        let (_pin, db) = open_bolt(&source, 64 << 20)?;
+        let tx = db.begin().map_err(io::Error::other)?;
+        if capture_binding(&tx, &cfg, message, &key, &active_key)?.is_none() {
+            println!("Original Go ingress already knows this personal DM.");
+            return Ok(true);
+        }
+    }
+    if dry_run {
+        println!("Original Go ingress can accept a new owner DM after source verification.");
+        return Ok(true);
+    }
+    let _cfg = place.lock()?;
+    let _bridge = runtime::lock(&place.dir.join("bridge.lock"))?;
+    if scope(place, message)?.0 != cfg.0 {
+        return Err(invalid());
+    }
+    let file = writable_pin(&source)?;
+    let opened = file.metadata()?;
+    if (opened.dev(), opened.ino()) != (identity.dev(), identity.ino()) {
+        return Err(invalid());
+    }
+    let (pin, mut db) = bounded_writer(file)?;
+    let mut tx = db.begin_rw().map_err(io::Error::other)?;
+    let Some(mut binding) = capture_binding(&tx, &cfg, message, &key, &active_key)? else {
+        return Ok(true);
+    };
+    let input = fetch(&cfg, message)?;
+    original_revision(
+        &input,
+        &json!({"message_id":message,"channel_id":channel,"actor_id":actor}),
+    )?;
+    let name = input["author"]["username"]
+        .as_str()
+        .filter(|name| !name.is_empty() && name.len() <= 256 && !name.chars().any(char::is_control))
+        .ok_or_else(invalid)?;
+    if !self::identity(&pin, &source)? {
+        return Err(invalid());
+    }
+    let sequence = {
+        let mut ingress = tx.bucket_mut(b"teammate_ingress").ok_or_else(invalid)?;
+        let n = ingress.next_sequence().map_err(io::Error::other)?;
+        if n == 0
+            || n <= binding["LastIngressSequence"]
+                .as_u64()
+                .ok_or_else(invalid)?
+        {
+            return Err(invalid());
+        }
+        let captured = json!({"Route":{"guild_id":"","channel_id":channel,"message_id":message},
+            "Author":{"id":actor,"name":name},"Opening":false,"Edited":false,"Deleted":false,
+            "Mutation":0,"Sequence":n,"State":"prepared","Error":"","Admission":null});
+        ingress
+            .put(&key, serde_json::to_vec(&captured)?)
+            .map_err(io::Error::other)?;
+        n
+    };
+    binding["LastIngressSequence"] = json!(sequence);
+    tx.bucket_mut(b"teammate_discussions")
+        .ok_or_else(invalid)?
+        .put(&active_key, serde_json::to_vec(&binding)?)
+        .map_err(io::Error::other)?;
+    let pending_key = [install.as_bytes(), b"\0", &sequence.to_be_bytes()].concat();
+    tx.bucket_mut(b"teammate_pending")
+        .ok_or_else(invalid)?
+        .put(pending_key, &key)
+        .map_err(io::Error::other)?;
+    tx.bucket_mut(b"teammate_meta")
+        .ok_or_else(invalid)?
+        .put(b"active_ingress_count", 1u64.to_be_bytes())
+        .map_err(io::Error::other)?;
+    tx.commit().map_err(io::Error::other)?;
+    println!("Captured the personal DM in the original Go ingress queue.");
+    Ok(true)
+}
+
+fn require_repaired<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, binding: &Value) -> io::Result<()> {
+    let key = format!("{}\0checkpoint", cfg.text("installation_id"));
+    let checkpoint = value(tx, "teammate_meta", key.as_bytes())?;
+    let gap = checkpoint
+        .as_ref()
+        .map_or(Ok(0), |cp| cp["GapEpoch"].as_u64().ok_or_else(invalid))?;
+    let repair = match &binding["PersonalRepairEpoch"] {
+        Value::Null => 0,
+        epoch => epoch.as_u64().ok_or_else(invalid)?,
+    };
+    if repair < gap {
+        return Err(io::Error::other(
+            "original Go personal history repair is still pending",
+        ));
+    }
+    Ok(())
+}
+
+fn capture_binding<'tx>(
+    tx: &impl TxApi<'tx>,
+    cfg: &Config,
+    message: &str,
+    key: &[u8],
+    active_key: &[u8],
+) -> io::Result<Option<Value>> {
+    let install = cfg.text("installation_id");
+    let channel = cfg.text("dm_channel_id");
+    let actor = cfg.text("owner_id");
+    let active = tx
+        .bucket(b"teammate_active_discussions")
+        .ok_or_else(invalid)?;
+    let ids = tx.bucket(b"teammate_discussion_ids").ok_or_else(invalid)?;
+    let binding = value(tx, "teammate_discussions", active_key)?.ok_or_else(invalid)?;
+    let id = field(&binding, "ID");
+    if id.is_empty()
+        || id.len() > 512
+        || id.contains('\0')
+        || binding["InstallationID"] != install
+        || binding["Route"]["channel_id"] != channel
+        || binding["Route"]["guild_id"] != ""
+        || !binding["Route"]["parent_id"].is_null()
+        || binding["Opened"] != true
+        || binding["ProvisionalCancelled"] != false
+        || binding["StartupNoticePending"] != false
+        || (!binding["supervisor_socket"].is_null()
+            && binding["supervisor_socket"] != cfg.text("daemon_socket"))
+        || active.get(active_key) != Some([1].as_slice())
+        || ids.get(format!("{install}\0{id}").as_bytes()) != Some(active_key)
+    {
+        return Err(invalid());
+    }
+    for (bucket, author) in [
+        ("teammate_ingress", "Author"),
+        ("teammate_ingress_guard", "ActorID"),
+    ] {
+        if let Some(prior) = value(tx, bucket, key)? {
+            let same_actor = if author == "Author" {
+                prior[author]["id"] == actor
+            } else {
+                prior[author] == actor
+            };
+            if same_actor
+                && prior["Route"]["channel_id"] == channel
+                && prior["Route"]["guild_id"] == ""
+                && prior["Route"]["message_id"] == message
+            {
+                return Ok(None);
+            }
+            return Err(invalid());
+        }
+    }
+    require_repaired(tx, cfg, &binding)?;
+    let minimum = field(&binding, "Boundary");
+    if !snowflake(minimum)
+        || minimum.parse::<u64>().map_err(|_| invalid())?
+            >= message.parse::<u64>().map_err(|_| invalid())?
+    {
+        return Err(invalid());
+    }
+    let meta = tx.bucket(b"teammate_meta").ok_or_else(invalid)?;
+    if meta.get(b"active_ingress_count") != Some([0; 8].as_slice()) {
+        return Err(invalid());
+    }
+    for name in ["teammate_pending", "teammate_ingress"] {
+        let bucket = tx.bucket(name).ok_or_else(invalid)?;
+        if bucket.iter_buckets().next().is_some() || bucket.iter_entries().next().is_some() {
+            return Err(invalid());
+        }
+    }
+    let guards = tx.bucket(b"teammate_ingress_guard").ok_or_else(invalid)?;
+    let expected = operation(install, minimum)?;
+    let known = guards
+        .get(format!("{install}\0{minimum}").as_bytes())
+        .ok_or_else(invalid)?;
+    let known: Value = serde_json::from_slice(known)?;
+    if known["Disposition"] != "sent"
+        || known["OperationID"] != expected
+        || known["DiscussionID"] != id
+        || known["ActorID"] != actor
+        || known["Route"]["guild_id"] != ""
+        || known["Route"]["channel_id"] != channel
+        || known["Route"]["message_id"] != minimum
+    {
+        return Err(invalid());
+    }
+    Ok(Some(binding))
 }
 
 #[cfg(test)]
@@ -855,6 +1063,70 @@ mod tests {
             );
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn pinned_go_continues_a_personal_dm_first_captured_by_rust() {
+        let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
+            return;
+        };
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("dm-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&root).unwrap();
+        let dir = root.join("fixture");
+        let p = dir.to_str().unwrap();
+        let run = |args: &[&str]| {
+            let output = Command::new(&fixture).args(args).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap()
+        };
+        run(&["create", p, root.to_str().unwrap(), "personal", "true"]);
+        run(&["bind", p, "existing-dm", "400"]);
+        assert_eq!(
+            run(&["ingress", p, "existing-dm", "501", "settle"]).trim(),
+            "1"
+        );
+        let place = Place::for_supervisor(&root).unwrap();
+        let database = dir.join("discord.db");
+        let before = fs::read(&database).unwrap();
+        assert!(capture_with(&place, "601", true, |_, _| panic!("dry run cannot fetch")).unwrap());
+        let mut source = json!({"author":{"id":"201","username":"owner"},"channel_id":"400","id":"601",
+            "content":"offline new owner DM", "type":0, "attachments":[]});
+        assert!(capture_with(&place, "601", false, |_, _| Ok(source.clone())).is_err());
+        assert_eq!(fs::read(&database).unwrap(), before);
+        source["author"]["id"] = json!("200");
+        assert!(capture_with(&place, "601", false, |_, _| Ok(source)).unwrap());
+        let after = fs::read(&database).unwrap();
+        assert_ne!(after, before);
+        assert!(
+            capture_with(&place, "601", false, |_, _| panic!(
+                "duplicate cannot fetch"
+            ))
+            .unwrap()
+        );
+        assert_eq!(fs::read(&database).unwrap(), after);
+        assert_eq!(
+            run(&["ingress", p, "existing-dm", "601", "settle"]).trim(),
+            "1"
+        );
+        assert_eq!(
+            run(&["ingress", p, "existing-dm", "601", "replay"]).trim(),
+            "0"
+        );
+        run(&["ingress-gap", p]);
+        assert!(
+            capture_with(&place, "602", true, |_, _| panic!(
+                "history gap cannot fetch"
+            ))
+            .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -73,3 +73,9 @@ func (s *Store) FixturePendingPersonal(d TeammateDiscussion, owner, id string) (
 		ChannelID: route.ChannelID, MessageID: id, Revision: rev}
 	return origin, s.teammateCandidateChange(d.InstallationID, pending[0], StateSending, "", admission)
 }
+
+func (s *Store) FixturePersonalGap(installation string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return teammateCheckpointUpdate(tx, installation, "synthetic-reconnected-gateway", 2, true, "")
+	})
+}

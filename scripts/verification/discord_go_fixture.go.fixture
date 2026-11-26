@@ -102,6 +102,10 @@ func main() {
 		}
 		check(store.FixtureBind(discord.TeammateDiscussion{ID: id, InstallationID: cfg.InstallationID,
 			Route: route, Starter: route, SupervisorSocket: socket}))
+	case "ingress-gap":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		check(store.FixturePersonalGap(cfg.InstallationID))
 	case "ingress":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)

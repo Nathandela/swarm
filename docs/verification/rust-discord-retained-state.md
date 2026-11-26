@@ -13,6 +13,8 @@ Use `swarm discord migrate-state --settle-personal-ingress MESSAGE_ID --dry-run`
 
 For an unsent original prepared DM with a live original native manager, `swarm discord migrate-state --dispatch-personal-ingress MESSAGE_ID` checks the current owner socket, manager incarnation and enrolled direct message revision. It durably records the source cutover in the original voice bbolt database before submitting the already-prepared operation to the original supervisor. A missing response does not grant permission to resubmit. The original voice controller retains the exact operation on downgrade. This command continues a prepared input while the connector is stopped. It has no Gateway intake or independent manager scheduling.
 
+Use `swarm discord migrate-state --capture-personal-ingress MESSAGE_ID` to capture a new, plain owner DM in the stopped original connector’s Go ingress queue. It rechecks the enrolled source, archived consent boundary and original completed history repair. It preserves the original Go voice ledger and sends no native input. The pinned Go connector can reopen the prepared input after a downgrade. The offline fixture checks one retry and a foreign author refusal.
+
 In a disposable copy of the pinned Go repository, copy the fixture program to `cmd/swarm-discord-state-fixture/main.go`, the bindings fixture to `internal/discord/migration_fixture.go`, the route fixture to `internal/teammatemanager/migration_fixture.go`, and the voice fixture to `internal/voice/migration_fixture.go`. Build `./cmd/swarm-discord-state-fixture` in that copy and run the witness with both binaries.
 
 ```bash
