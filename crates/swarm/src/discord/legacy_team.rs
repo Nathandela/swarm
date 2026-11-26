@@ -1,6 +1,8 @@
 //! Gateway custody and capture of one original Go thread.
+mod admit;
 mod capture;
 mod prepare;
+mod render;
 use super::{
     config::{Config, LockDescription, Place, invalid, open_owner_file},
     gateway, guild,
@@ -25,7 +27,15 @@ const RECHECK_INTERVAL: Duration = Duration::from_secs(5);
 enum Mode<'a> {
     Observe,
     Capture,
-    Prepare { message: &'a str, dry_run: bool },
+    Prepare {
+        message: &'a str,
+        dry_run: bool,
+    },
+    Admit {
+        message: &'a str,
+        dry_run: bool,
+        before_commit: fn(),
+    },
 }
 
 pub(super) fn run(place: &Place, cfg: &Config, capture_once: bool) -> io::Result<()> {
@@ -48,6 +58,23 @@ pub(super) fn prepare_ingress(place: &Place, message: &str, dry_run: bool) -> io
     Ok(true)
 }
 
+pub(super) fn admit_ingress(place: &Place, message: &str, dry_run: bool) -> io::Result<bool> {
+    let cfg = place.load()?;
+    let api = Discord::connect(&cfg)?;
+    continue_without_gateway(
+        place,
+        &cfg,
+        &api,
+        message,
+        Mode::Admit {
+            message,
+            dry_run,
+            before_commit: || {},
+        },
+    )?;
+    Ok(true)
+}
+
 fn prepare_with(
     place: &Place,
     cfg: &Config,
@@ -55,17 +82,22 @@ fn prepare_with(
     message: &str,
     dry_run: bool,
 ) -> io::Result<()> {
+    continue_without_gateway(place, cfg, api, message, Mode::Prepare { message, dry_run })
+}
+
+fn continue_without_gateway(
+    place: &Place,
+    cfg: &Config,
+    api: &Discord,
+    message: &str,
+    mode: Mode<'_>,
+) -> io::Result<()> {
     if !super::config::snowflake(message) {
         return Err(invalid("invalid retained teammate message ID"));
     }
-    observe(
-        place,
-        cfg,
-        api,
-        Mode::Prepare { message, dry_run },
-        RECHECK_INTERVAL,
-        |_| Err::<fn() -> io::Result<Option<Value>>, _>(invalid("preparation cannot open Gateway")),
-    )
+    observe(place, cfg, api, mode, RECHECK_INTERVAL, |_| {
+        Err::<fn() -> io::Result<Option<Value>>, _>(invalid("preparation cannot open Gateway"))
+    })
 }
 
 fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
@@ -111,7 +143,8 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
     if cfg.0 != place.load()?.0 || !verify_config()? {
         return Err(invalid("original connector configuration changed"));
     }
-    if matches!(mode, Mode::Prepare { .. }) {
+    let changing = matches!(mode, Mode::Prepare { .. } | Mode::Admit { .. });
+    if changing {
         prepare::verify_config(open_owner_file(&config_file)?, cfg)?;
     }
     let source = place.dir.join("discord.db");
@@ -119,13 +152,13 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
     let (route, guard, pending, binding) = {
         let tx = db.begin().map_err(io::Error::other)?;
         let needs_capture_scope = !matches!(mode, Mode::Observe);
-        let pending = if needs_capture_scope {
-            capture::pending(&tx, cfg)?
-        } else {
-            None
+        let pending = match mode {
+            Mode::Observe => None,
+            Mode::Admit { message, .. } => Some(admit::pending(&tx, cfg, message)?),
+            _ => capture::pending(&tx, cfg)?,
         };
         let (route, guard) = read_scope(&tx, cfg, pending.as_ref())?;
-        if matches!(mode, Mode::Prepare { .. }) {
+        if changing {
             prepare::verify_ledger(&tx, cfg, &route, &guard)?;
         }
         let binding = needs_capture_scope
@@ -137,6 +170,7 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         Mode::Observe => "retained_teammate_read_only",
         Mode::Capture => "retained_teammate_capture_once",
         Mode::Prepare { .. } => "retained_teammate_preparing",
+        Mode::Admit { .. } => "retained_teammate_admitting",
     };
     let status = StatusSocket::start(place, cfg, Some(connector_state))?;
     let verify_pins = || {
@@ -158,7 +192,7 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
             .ok_or_else(|| invalid("original thread binding is unavailable"))?;
         prepare::ready_discussion(binding)?;
         capture::verify_pending(api, cfg, &route, &guard, pending, true)?;
-        let manager = prepare::Manager::claim(place, cfg, binding)?;
+        let manager = prepare::Manager::claim(place, cfg, binding, None)?;
         verify_pins()?;
         if status.stopping() {
             return Ok(());
@@ -187,6 +221,40 @@ fn observe<ReadEvent: FnMut() -> io::Result<Option<Value>>>(
         )?;
         println!("Prepared the original teammate message for Go to resume.");
         return Ok(());
+    }
+    if let Mode::Admit {
+        message,
+        dry_run,
+        before_commit,
+    } = mode
+    {
+        let pending = pending
+            .as_ref()
+            .ok_or_else(|| invalid("original sending record is unavailable"))?;
+        let binding = binding
+            .as_ref()
+            .ok_or_else(|| invalid("original thread binding is unavailable"))?;
+        let bound = prepare::ready_discussion(binding)?;
+        let recheck = || {
+            {
+                let tx = db.begin().map_err(io::Error::other)?;
+                let fresh = admit::pending(&tx, cfg, message)?;
+                if fresh != *pending
+                    || capture::binding(&tx, cfg, &route, &guard, Some(&fresh))? != *binding
+                {
+                    return Err(invalid("original teammate ingress changed"));
+                }
+                admit::verify_record(&tx, cfg, &fresh, &bound)?;
+            }
+            let current = render::current(api, cfg, &route, &guard, pending, &bound)?;
+            verify_pins()?;
+            if status.stopping() {
+                return Err(invalid("original teammate place stopped"));
+            }
+            Ok(current)
+        };
+        let input = recheck()?;
+        return admit::queue(place, cfg, binding, &input, dry_run, recheck, before_commit);
     }
     if let Some(pending) = pending {
         capture::verify_pending(api, cfg, &route, &guard, &pending, false)?;
@@ -540,6 +608,31 @@ pub(super) fn native_prepare_witness() {
             }
         }
         "dry-run" => prepare_with(&place, &cfg, &api, "701", true).unwrap(),
+        "admit" | "admit-before" | "admit-after" | "admit-dry-run" | "admit-refuse" => {
+            let result = continue_without_gateway(
+                &place,
+                &cfg,
+                &api,
+                "701",
+                Mode::Admit {
+                    message: "701",
+                    dry_run: phase == "admit-dry-run",
+                    before_commit: if phase == "admit-before" {
+                        || std::process::exit(77)
+                    } else {
+                        || {}
+                    },
+                },
+            );
+            if phase == "admit-refuse" {
+                assert!(result.is_err());
+            } else {
+                result.unwrap();
+            }
+            if phase == "admit-after" {
+                std::process::exit(78);
+            }
+        }
         "refuse" => assert!(prepare_with(&place, &cfg, &api, "701", false).is_err()),
         "malformed-binding" | "malformed-binding-dry-run" => {
             let error =

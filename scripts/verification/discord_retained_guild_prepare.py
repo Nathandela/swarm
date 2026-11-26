@@ -25,7 +25,7 @@ REV = hashlib.sha256(json.dumps(["201", TEXT, "401", "300", "701", None, "", Non
                                 separators=(",", ":")).encode()).hexdigest()
 
 
-def serve_discord():
+def serve_discord(timestamps=False):
     permissions = [True]
     wait_for_capture = [False]
     attempts = []
@@ -35,6 +35,10 @@ def serve_discord():
                 for mid, actor, name, content in [("701", "201", "fixture external", TEXT),
                     ("501", "200", "fixture owner", "offline replay witness"),
                     ("500", "200", "fixture owner", "fixture starter")]}
+    if timestamps:
+        messages["501"]["timestamp"] = "2024-09-21T13:14:15.456000+00:00"
+        messages["500"]["timestamp"] = "2024-09-20T09:00:00Z"
+        messages["500"]["content"] += " <&>"
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -63,6 +67,9 @@ def serve_discord():
             else:
                 raise AssertionError(route)
             raw = json.dumps(data).encode()
+            if route == "/channels/401/messages/500" and rest.change_starter:
+                messages["500"]["content"] = "a changed starter during writer revalidation"
+                rest.change_starter = False
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(raw)))
@@ -74,11 +81,13 @@ def serve_discord():
             self.send_error(400)
 
     rest = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    rest.change_starter = False
+    rest.messages = messages
     Thread(target=rest.serve_forever, daemon=True).start()
     return rest, permissions, wait_for_capture, attempts
 
 
-def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_native=False):
+def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_native=False, queue_only=False):
     for part in ("home", "home/.codex", "bin", "work", "state"):
         (base / part).mkdir(mode=0o700)
     (base / "bin/codex").symlink_to(codex)
@@ -100,7 +109,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
         assert release_model.wait(timeout=35), "fixture never released the original model request"
         return "Native loopback reply."
     source, calls = model_fixture(base, False, answer_for_input=hold_model if interrupt else None)
-    rest, permissions, wait_for_capture, posts = serve_discord()
+    rest, permissions, wait_for_capture, posts = serve_discord(queue_only)
     go_port = str(rest.server_port)
     place = base / "connector"
     invoke = lambda *args: run(fixture, env, *args)
@@ -113,9 +122,11 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
         if evidence is not None:
             test_env["SWARM_TEST_DISCORD_VOICE_EVIDENCE"] = json.dumps(evidence)
         args = ["native_go_retained_guild_preparation", "--ignored", "--nocapture"]
-        if phase in ("prepare-and-exit", "voice-storage-and-exit"):
-            child = subprocess.run([rust_test, *args], env=test_env, capture_output=True, timeout=20)
-            assert child.returncode == (75 if phase == "prepare-and-exit" else 76), child.stderr
+        exit_code = {"prepare-and-exit":75, "voice-storage-and-exit":76,
+                     "admit-before":77, "admit-after":78}.get(phase)
+        if exit_code is not None:
+            child = subprocess.run([rust_test, *args], env=test_env, capture_output=True, timeout=25)
+            assert child.returncode == exit_code, child.stderr
             return
         return run(rust_test, test_env, *args)
     try:
@@ -215,6 +226,36 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
                 assert decline.returncode != 0 and b"not authorized" in decline.stderr, decline.stderr
                 assert pending() == [sending] and calls == [] and posts == []
                 permissions[0] = True
+                if queue_only and rust_test:
+                    connector = place / "discord.db"
+                    source_bytes = connector.read_bytes()
+                    before_queue = voice.read_bytes()
+                    rust("admit-dry-run")
+                    permissions[0] = False
+                    rust("admit-refuse")
+                    permissions[0] = True
+                    with Path(start["bridge_socket"]).with_name("controller.lock").open("rb") as lock:
+                        fcntl.flock(lock, fcntl.LOCK_EX)
+                        rust("admit-refuse")
+                    starter = rest.messages["500"]["content"]
+                    rest.change_starter = True
+                    try:
+                        rust("admit-refuse")
+                        assert not rest.change_starter
+                    finally:
+                        rest.messages["500"]["content"] = starter
+                    assert connector.read_bytes() == source_bytes and voice.read_bytes() == before_queue
+                    rust("admit-before")
+                    assert voice.read_bytes() == before_queue and native(voice)["sequence"] == 0
+                    assert connector.read_bytes() == source_bytes and pending() == [sending]
+                    rust("admit-after")
+                    queued = native(voice)
+                    assert queued["sequence"] > 0 and not queued.get("phase") and not queued.get("native_input_id")
+                    after_voice = voice.read_bytes()
+                    rust("admit")
+                    assert voice.read_bytes() == after_voice and native(voice) == queued
+                    assert connector.read_bytes() == source_bytes and pending() == [sending]
+                    assert calls == [] and posts == []
                 invoke("guild-advance", place, go_port, "accept")
                 accepted, = pending()
                 assert accepted["State"] == "accepted" and accepted["Admission"] == a
@@ -267,6 +308,16 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_n
                     assert calls == [] and posts == []
                     print("PASS Rust's existing storage stages the exact Go tuple in a copy that Go reopens; personal rendering differs", flush=True)
                     return prepared
+                if queue_only:
+                    assert not row.get("reply_check_after") and not row.get("operation_id") and not row.get("request")
+                    assert row["input_text"].count("Earlier Discord messages for context (JSON)") == 1
+                    assert row.pop("conversation_id") == binding["conversation_id"]
+                    assert row.pop("project") == str(base / "work")
+                    assert runtime()["binding"] == start["binding"] and voice.with_name("bridge.auth").read_bytes() == credential
+                    if rust_test:
+                        assert queued == native(voice), (queued, native(voice))
+                        print("PASS interrupted and repeated Rust Voice admission reopens once in signed Go, before nonce allocation", flush=True)
+                    return row
                 if interrupt:
                     marker = base / "withheld-ack"
                     log = base / "interrupted-owner.log"
@@ -359,6 +410,13 @@ if __name__ == "__main__":
     elif len(sys.argv) == 6 and sys.argv[5] == "--prepare-native-only":
         with tempfile.TemporaryDirectory(prefix="gp-") as root:
             witness(Path(root).resolve(), *sys.argv[1:5], prepare_native=True)
+    elif len(sys.argv) == 6 and sys.argv[5] == "--queue-only":
+        with tempfile.TemporaryDirectory(prefix="gp-") as root:
+            first = witness(Path(root).resolve(), *sys.argv[1:4], queue_only=True)
+        with tempfile.TemporaryDirectory(prefix="gp-") as root:
+            second = witness(Path(root).resolve(), *sys.argv[1:5], queue_only=True)
+        assert first == second, (first, second)
+        print("PASS Rust and Go matched the authenticated starter/history prompt byte-for-byte and omitted reply wait", flush=True)
     else:
         with tempfile.TemporaryDirectory(prefix="gp-") as root:
             first = witness(Path(root).resolve(), *sys.argv[1:4])

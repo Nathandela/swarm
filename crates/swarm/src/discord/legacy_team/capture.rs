@@ -77,11 +77,32 @@ pub(super) fn pending<'tx>(tx: &impl TxApi<'tx>, cfg: &Config) -> io::Result<Opt
         return Err(denied());
     }
     let row: Value = serde_json::from_slice(raw)?;
+    let captured = indexed_pending(tx, cfg, key, &row, field(&row, "CaptureRevision"))?;
+    // Go accepts duplicate and case-aliased members. Require exactly what this writer emits.
+    if raw
+        != super::super::legacy_ingress::pending_ingress_row(
+            &captured.candidate.route,
+            &captured.candidate.author,
+            captured.sequence,
+            Some(&captured.candidate.revision),
+        )?
+    {
+        return Err(denied());
+    }
+    Ok(Some(captured))
+}
+
+pub(super) fn indexed_pending<'tx>(
+    tx: &impl TxApi<'tx>,
+    cfg: &Config,
+    key: &[u8],
+    row: &Value,
+    revision: &str,
+) -> io::Result<Pending> {
     let sequence = row["Sequence"]
         .as_u64()
         .filter(|n| *n > 0)
         .ok_or_else(denied)?;
-    let revision = field(&row, "CaptureRevision");
     let install = cfg.text("installation_id");
     let route = &row["Route"];
     let message = field(route, "message_id");
@@ -94,10 +115,6 @@ pub(super) fn pending<'tx>(tx: &impl TxApi<'tx>, cfg: &Config) -> io::Result<Opt
         || !revision
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        // Go accepts duplicate and case-aliased members. Require exactly what this writer emits.
-        || raw != super::super::legacy_ingress::pending_ingress_row(
-            &route, &author, sequence, Some(revision),
-        )?
         || tx
             .bucket(b"teammate_pending")
             .ok_or_else(denied)?
@@ -111,7 +128,7 @@ pub(super) fn pending<'tx>(tx: &impl TxApi<'tx>, cfg: &Config) -> io::Result<Opt
     {
         return Err(denied());
     }
-    Ok(Some(Pending {
+    Ok(Pending {
         ingress_key: key.to_vec(),
         pending_key,
         sequence,
@@ -120,7 +137,7 @@ pub(super) fn pending<'tx>(tx: &impl TxApi<'tx>, cfg: &Config) -> io::Result<Opt
             author,
             revision: revision.to_owned(),
         },
-    }))
+    })
 }
 
 pub(super) fn verify_pending(

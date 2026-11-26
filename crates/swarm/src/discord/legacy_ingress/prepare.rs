@@ -2,8 +2,22 @@
 use super::*;
 use std::io::Read;
 
-fn go_bytes(value: &Value) -> io::Result<Vec<u8>> {
+pub(in crate::discord) fn go_bytes(value: &Value) -> io::Result<Vec<u8>> {
     Ok(crate::ipc::escape_json(serde_json::to_string(value)?).into_bytes())
+}
+
+pub(in crate::discord) const DISCUSSION_INSTRUCTIONS: &str = "Answer simple questions directly. Before longer work, acknowledge a new request once with final=false. Keep replies brief. Use swarm_discussion_yield when shared-thread participants are talking to each other. For a direct reply or clarification in a shared thread, specify recipient_id from the verified Discord actor. Use their message ID as recipient_message_id if needed. Use a distinct output_id and increasing sequence per post, with final=true on the last reply. Use the scoped manager tools and approved project. Verify results with swarm_read.\n";
+
+pub(in crate::discord) fn human_instruction(
+    author: &Value,
+    message: &Value,
+    text: &str,
+) -> io::Result<String> {
+    let source = json!({"Author":author,"MessageID":message,"ReplyTo":"","Text":text});
+    Ok(format!(
+        "Current human instruction (JSON) {}",
+        crate::ipc::escape_json(serde_json::to_string(&source)?)
+    ))
 }
 
 fn source_author(row: &Value, cfg: &Config, message: &str) -> io::Result<Value> {
@@ -32,6 +46,16 @@ pub(in crate::discord) struct Voice {
     pub(in crate::discord) conversation: Value,
     raw_conversation: Vec<u8>,
     admissions: u64,
+    queued: Option<Value>,
+}
+
+impl Voice {
+    pub(in crate::discord) fn generation(&self) -> io::Result<u64> {
+        self.header["generation"]
+            .as_u64()
+            .filter(|value| *value > 0)
+            .ok_or_else(invalid)
+    }
 }
 
 fn settled_vm_history<'tx>(
@@ -137,6 +161,16 @@ pub(in crate::discord) fn read_voice<'tx>(
     cfg: &Config,
     endpoint: &str,
 ) -> io::Result<Voice> {
+    read_voice_with_queue(tx, id, cfg, endpoint, None)
+}
+
+pub(in crate::discord) fn read_voice_with_queue<'tx>(
+    tx: &impl TxApi<'tx>,
+    id: &str,
+    cfg: &Config,
+    endpoint: &str,
+    origin: Option<&Value>,
+) -> io::Result<Voice> {
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
     let raw = root.get(b"state").ok_or_else(invalid)?;
     if raw.len() > 4096
@@ -164,6 +198,7 @@ pub(in crate::discord) fn read_voice<'tx>(
     }
     let mut count = 0;
     let mut admissions = 0;
+    let mut queued = None;
     let mut sum = [0u8; 32];
     for (key, raw) in records.iter_entries() {
         count += 1;
@@ -182,6 +217,28 @@ pub(in crate::discord) fn read_voice<'tx>(
         let value: Value = serde_json::from_slice(raw)?;
         if guild && !canonical_guild_voice(&value, raw)? {
             return Err(invalid());
+        }
+        if key.starts_with(b"admissions\0")
+            && let Some(origin) = origin
+            && value["origin"]["request_id"] == origin["request_id"]
+        {
+            let sequence = value["sequence"]
+                .as_u64()
+                .filter(|n| *n > 0)
+                .ok_or_else(invalid)?;
+            if !guild
+                || queued.is_some()
+                || value["origin"] != *origin
+                || value["conversation_id"] != conversation
+                || key != admission_key(&conversation, sequence)?.as_slice()
+                || !value["phase"].is_null()
+                || value["settled_at"] != "0001-01-01T00:00:00Z"
+            {
+                return Err(invalid());
+            }
+            queued = Some(value);
+            admissions += 1;
+            continue;
         }
         if key.starts_with(b"admissions\0")
             && value["conversation_id"] == conversation
@@ -285,7 +342,52 @@ pub(in crate::discord) fn read_voice<'tx>(
         conversation: state,
         raw_conversation,
         admissions,
+        queued,
     })
+}
+
+fn admission_key(conversation: &str, sequence: u64) -> io::Result<Vec<u8>> {
+    let id = crate::ipc::escape_json(serde_json::to_string(&[
+        conversation,
+        &sequence.to_string(),
+    ])?);
+    Ok(format!("admissions\0{id}").into_bytes())
+}
+
+pub(in crate::discord) fn queued_guild_admission(
+    voice: &mut Voice,
+    origin: &Value,
+    text: &str,
+    prompt: &str,
+    project: &str,
+) -> io::Result<Option<(Vec<u8>, Value)>> {
+    let last = voice.conversation["last_admission"]
+        .as_u64()
+        .ok_or_else(invalid)?;
+    let sequence = if voice.queued.is_some() {
+        last
+    } else {
+        last.checked_add(1).ok_or_else(invalid)?
+    };
+    let conversation = field(&voice.conversation["binding"], "conversation_id");
+    let key = admission_key(conversation, sequence)?;
+    let mut expected = json!({"reply_tracked":true,"human_reply":text,"origin":origin,"project":project,
+        "input_text":prompt,"conversation_id":conversation,"sequence":sequence,
+        "source_id":format!("discussion:{}",field(origin,"request_id")),"settled_at":"0001-01-01T00:00:00Z"});
+    if let Some(after) = voice.conversation["last_output"]
+        .as_u64()
+        .filter(|v| *v > 0)
+    {
+        expected["question_boundary"] = json!(after);
+    }
+    if let Some(saved) = &voice.queued {
+        if *saved != expected {
+            return Err(invalid());
+        }
+        return Ok(None);
+    }
+    voice.conversation["last_admission"] = json!(sequence);
+    Ok(Some((key, expected)))
 }
 
 fn canonical_guild_voice(value: &Value, raw: &[u8]) -> io::Result<bool> {
@@ -309,16 +411,11 @@ fn make_admission(
     settings: &str,
     projects: &std::collections::BTreeMap<String, String>,
 ) -> io::Result<(Vec<u8>, Value)> {
-    let raw_text = String::from_utf8(go_bytes(
-        &json!({"Author": author, "MessageID":origin["message_id"], "ReplyTo":"", "Text":text}),
-    )?)
-    .map_err(io::Error::other)?;
-    let instructions = concat!(
-        "Answer simple questions directly. Before longer work, acknowledge a new request once with final=false. Keep replies brief. Use swarm_discussion_yield when shared-thread participants are talking to each other. For a direct reply or clarification in a shared thread, specify recipient_id from the verified Discord actor. Use their message ID as recipient_message_id if needed. Use a distinct output_id and increasing sequence per post, with final=true on the last reply. Use the scoped manager tools and approved project. Verify results with swarm_read.\n",
-        "Current human instruction (JSON) "
-    );
     let (project, explicit) = grants::choose(projects, field(&voice.conversation, "project"), text);
-    let mut prompt = format!("{instructions}{raw_text}");
+    let mut prompt = format!(
+        "{DISCUSSION_INSTRUCTIONS}{}",
+        human_instruction(author, &origin["message_id"], text)?
+    );
     if projects.len() > 1 {
         let names = projects.keys().cloned().collect::<Vec<_>>().join(", ");
         if names.len() <= 512 {
@@ -355,8 +452,7 @@ fn make_admission(
     let now = crate::ipc::spawn::now_ms();
     let operation = format!("semantic:{now}:{}", hex(&operation));
     let conversation = field(&binding, "conversation_id");
-    let id = crate::ipc::escape_json(serde_json::to_string(&[conversation, &n.to_string()])?);
-    let key = format!("admissions\0{id}").into_bytes();
+    let key = admission_key(conversation, n)?;
     let mut admission = json!({
         "origin":origin, "reply_tracked":true, "reply_check_after":now / 1000 + 30,
         "human_reply":text,
@@ -381,7 +477,7 @@ fn make_admission(
     Ok((key, admission))
 }
 
-fn stage<'tx>(
+pub(in crate::discord) fn stage<'tx>(
     tx: &mut impl TxRwApi<'tx>,
     mut voice: Voice,
     key: &[u8],

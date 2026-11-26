@@ -2,7 +2,7 @@
 use super::*;
 use crate::discord::{legacy_discussions::operation, legacy_ingress};
 use crate::ipc::field;
-use bbolt_rs::{BucketApi, BucketRwApi, DbRwAPI, TxRwApi, TxRwRefApi};
+use bbolt_rs::{Bolt, BucketApi, BucketRwApi, DbRwAPI, TxRwApi, TxRwRefApi};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -144,10 +144,12 @@ pub(super) fn verify_ledger<'tx>(
 }
 
 pub(super) struct Manager {
-    directory: PathBuf,
-    id: String,
-    binding: Value,
-    voice: File,
+    pub(super) directory: PathBuf,
+    pub(super) id: String,
+    pub(super) endpoint: String,
+    pub(super) binding: Value,
+    pub(super) generation: u64,
+    voice: Option<File>,
     auth: File,
     auth_hash: String,
     socket: PathBuf,
@@ -155,7 +157,12 @@ pub(super) struct Manager {
 }
 
 impl Manager {
-    pub(super) fn claim(place: &Place, cfg: &Config, discussion: &Value) -> io::Result<Self> {
+    pub(super) fn claim(
+        place: &Place,
+        cfg: &Config,
+        discussion: &Value,
+        queued: Option<&Value>,
+    ) -> io::Result<Self> {
         let (directory, id, endpoint) = legacy_ingress::voice_location(place, cfg, discussion)?;
         let root = fs::canonicalize("/tmp")?
             .join(format!("swarm-dm-{}", unsafe { libc::getuid() }))
@@ -185,19 +192,22 @@ impl Manager {
         }
         let auth_hash = format!("{:x}", Sha256::digest(credential));
         let (voice, db) = open_bolt(&directory.join("voice.db"), 64 << 20)?;
-        let binding = legacy_ingress::prepare::read_voice(
+        let state = legacy_ingress::prepare::read_voice_with_queue(
             &db.begin().map_err(io::Error::other)?,
             &id,
             cfg,
             &endpoint,
-        )?
-        .conversation["binding"]
-            .clone();
+            queued,
+        )?;
+        let generation = state.generation()?;
+        let binding = state.conversation["binding"].clone();
         let manager = Self {
             directory,
             id,
+            endpoint,
             binding,
-            voice,
+            generation,
+            voice: Some(voice),
             auth,
             auth_hash,
             socket,
@@ -207,9 +217,24 @@ impl Manager {
         Ok(manager)
     }
 
+    pub(super) fn open_writer(&mut self) -> io::Result<(File, Bolt)> {
+        let held = self.voice.take().ok_or_else(unavailable)?.metadata()?;
+        let path = self.directory.join("voice.db");
+        let file = legacy_state::writable_pin(&path)?;
+        let current = file.metadata()?;
+        if (held.dev(), held.ino()) != (current.dev(), current.ino()) {
+            return Err(unavailable());
+        }
+        let (pin, db) = legacy_state::bounded_writer(file)?;
+        self.voice = Some(pin.try_clone()?);
+        Ok((pin, db))
+    }
+
     pub(super) fn verify(&self, place: &Place, cfg: &Config) -> io::Result<()> {
-        if !legacy_state::unchanged(&self.voice, &self.directory.join("voice.db"))?
-            || !legacy_state::unchanged(&self.auth, &self.directory.join("bridge.auth"))?
+        if !legacy_state::unchanged(
+            self.voice.as_ref().ok_or_else(unavailable)?,
+            &self.directory.join("voice.db"),
+        )? || !legacy_state::unchanged(&self.auth, &self.directory.join("bridge.auth"))?
             || legacy_state::file_digest(
                 &open_owner_file(&self.directory.join("bridge.auth"))?,
                 64,
@@ -262,43 +287,48 @@ pub(super) fn commit(
         return Err(unavailable());
     }
     let mut bucket = tx.bucket_mut(b"teammate_ingress").ok_or_else(unavailable)?;
-    let mut row: Value =
-        serde_json::from_slice(bucket.get(&pending.ingress_key).ok_or_else(unavailable)?)?;
+    bucket
+        .put(&pending.ingress_key, sending_record(cfg, pending, &bound)?)
+        .map_err(io::Error::other)?;
+    tx.commit().map_err(io::Error::other)
+}
+
+pub(super) fn sending_record(
+    cfg: &Config,
+    pending: &capture::Pending,
+    bound: &Discussion,
+) -> io::Result<Vec<u8>> {
     let candidate = &pending.candidate;
+    let mut row: Value = serde_json::from_slice(&legacy_ingress::pending_ingress_row(
+        &candidate.route,
+        &candidate.author,
+        pending.sequence,
+        None,
+    )?)?;
     let message = field(&candidate.route, "message_id");
     let actor = field(&candidate.author, "id");
-    let authority = if actor == cfg.text("owner_id") {
-        "owner_direct"
-    } else {
-        "external"
-    };
+    let authority = super::render::authority(cfg, actor);
     row["State"] = json!("sending");
     row["Admission"] = json!({"RequireMention":false,"Supersedes":"","Discussion":bound,
         "OperationID":operation(cfg.text("installation_id"), message)?,"Revision":candidate.revision,
         "Text":"","ReplyTo":"","QuestionID":"","QuestionHash":"","Route":candidate.route,
         "Author":candidate.author,"InvokerID":actor,"Authority":authority,"Sequence":pending.sequence});
-    row.as_object_mut()
-        .ok_or_else(unavailable)?
-        .remove("CaptureRevision");
-    bucket
-        .put(&pending.ingress_key, serde_json::to_vec(&row)?)
-        .map_err(io::Error::other)?;
-    tx.commit().map_err(io::Error::other)
+    Ok(serde_json::to_vec(&row)?)
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub(super) struct Discussion {
     #[serde(rename = "ID")]
-    id: String,
+    pub(super) id: String,
     #[serde(rename = "InstallationID")]
     installation_id: String,
     #[serde(rename = "supervisor_socket")]
     supervisor_socket: String,
     route: Route,
-    starter: Route,
-    parent_anchor: String,
-    gap: u64,
+    pub(super) starter: Route,
+    pub(super) parent_anchor: String,
+    pub(super) gap: u64,
 }
 
 #[derive(Deserialize)]

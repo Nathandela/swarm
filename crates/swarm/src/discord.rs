@@ -411,6 +411,7 @@ impl<'a> Request<'a> {
                     "capture-personal-ingress",
                     "prepare-personal-ingress",
                     "prepare-teammate-ingress",
+                    "admit-teammate-ingress",
                     "deliver-personal-publication",
                     "read-personal-publication-file",
                     "read-personal-source-attachment",
@@ -555,7 +556,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
         "connect" => return connect(req, place),
         "migrate-state" => {
             type Migration = fn(&Place, &str, bool) -> io::Result<bool>;
-            let ingress: [(&str, Migration); 6] = [
+            let ingress: [(&str, Migration); 7] = [
                 ("capture-personal-ingress", legacy_ingress::capture),
                 (
                     "deliver-personal-publication",
@@ -563,6 +564,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                 ),
                 ("prepare-personal-ingress", legacy_ingress::prepare::run),
                 ("prepare-teammate-ingress", legacy_team::prepare_ingress),
+                ("admit-teammate-ingress", legacy_team::admit_ingress),
                 ("dispatch-personal-ingress", legacy_ingress::dispatch),
                 ("settle-personal-ingress", legacy_ingress::settle),
             ];
