@@ -12,6 +12,7 @@ const MODES: [&str; 3] = ["passive", "manual", "none"];
 const TEMPLATE: &str = include_str!("../../assets/handoff/source.md.tmpl");
 const RUNNING_WARNING: &str = "the source may still be running and editing this checkout - the successor is told to check git status first";
 type Line = Vec<(&'static str, String)>;
+pub(super) type ApprovalFrame = ((u16, u16), bool);
 
 pub(super) struct Handoff {
     pub(super) source_id: String,
@@ -26,7 +27,7 @@ pub(super) struct Handoff {
     focus: usize,
     confirmation: Option<Selection>,
     reading: Option<(String, usize)>,
-    presented: Option<((u16, u16), bool)>,
+    presented: Option<ApprovalFrame>,
     error: String,
 }
 
@@ -116,10 +117,23 @@ impl Handoff {
         self.presented = None;
     }
 
-    pub(super) fn note_paint(&mut self, geometry: (u16, u16), notice: bool) {
-        if self.confirm_pending() {
-            self.presented = Some((geometry, notice));
+    pub(super) fn approval_frame(
+        &self,
+        source: Option<&Value>,
+        viewport: FormViewport<'_>,
+    ) -> Option<ApprovalFrame> {
+        if !self.confirm_pending() || !Launch::readable(viewport.geometry) {
+            return None;
         }
+        let (compact, width, budget) = reading_layout(viewport);
+        let messages = self.context(compact, source);
+        let count = reading_count(&messages, width);
+        (count <= budget || self.stop(&self.reading_key(source, &messages), count) == count)
+            .then_some((viewport.geometry, viewport.notice.is_some()))
+    }
+
+    pub(super) fn note_paint(&mut self, approval: Option<ApprovalFrame>) {
+        self.presented = approval;
     }
 
     pub(super) fn update(
@@ -387,8 +401,9 @@ impl Handoff {
 
     fn reading_key(&self, source: Option<&Value>, messages: &[(&str, String)]) -> String {
         format!(
-            "{}\0{}",
+            "{} → {}\0{}",
             self.source_name(source),
+            self.target_name().unwrap_or_default(),
             messages
                 .iter()
                 .map(|(_, text)| text.as_str())
@@ -406,10 +421,7 @@ impl Handoff {
     ) -> bool {
         let (compact, width, budget) = reading_layout(viewport);
         let messages = self.context(compact, source);
-        let count = messages
-            .iter()
-            .map(|(_, message)| wrap(message, width).len())
-            .sum();
+        let count = reading_count(&messages, width);
         if count <= budget {
             self.reading = None;
             return false;
@@ -583,6 +595,13 @@ fn reading_layout(viewport: FormViewport<'_>) -> (bool, usize, usize) {
     (compact, width, budget)
 }
 
+fn reading_count(messages: &[(&str, String)], width: usize) -> usize {
+    messages
+        .iter()
+        .map(|(_, message)| wrap(message, width).len())
+        .sum()
+}
+
 fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
@@ -733,7 +752,7 @@ mod tests {
             Action::None
         ));
 
-        form.note_paint(wide.geometry, false);
+        form.note_paint(form.approval_frame(Some(&source), wide));
         assert!(matches!(
             input(&mut form, Key::Text('y'), tiny),
             Action::None
@@ -742,7 +761,7 @@ mod tests {
             input(&mut form, Key::Text('y'), compact),
             Action::None
         ));
-        form.note_paint(compact.geometry, false);
+        form.note_paint(form.approval_frame(Some(&source), compact));
         assert!(matches!(
             input(&mut form, Key::Text('y'), compact),
             Action::None
@@ -752,7 +771,7 @@ mod tests {
             input(&mut form, Key::Text('y'), compact),
             Action::None
         ));
-        form.note_paint(compact.geometry, false);
+        form.note_paint(form.approval_frame(Some(&source), compact));
         input(&mut form, Key::Paste("different model".into()), compact);
         let Action::Request(request, "launch") = input(&mut form, Key::Text('y'), compact) else {
             panic!("expected the reviewed launch");
@@ -763,6 +782,39 @@ mod tests {
             request["launch"]["options"],
             json!({"handoff_from":"owner/session", "model":"Orchestrator (Carbon)"})
         );
+    }
+
+    #[test]
+    fn a_source_rename_does_not_make_an_unread_confirmation_approvable() {
+        let mut source = source();
+        source["status"]["Process"] = json!("exited");
+        source["name"] = json!("very-long-session-".repeat(12));
+        let mut form = Handoff::new(&source, Some(&detected(&["agy", "claude"])));
+        let wide = FormViewport {
+            geometry: (118, 26),
+            notice: None,
+        };
+        let compact = FormViewport {
+            geometry: (60, 10),
+            notice: None,
+        };
+        form.update(Key::Enter, Some(&source), wide, true, true);
+
+        let approval = form.approval_frame(Some(&source), compact);
+        assert!(approval.is_none());
+        form.note_paint(approval);
+        source["name"] = json!("amber");
+        let approval = form.approval_frame(Some(&source), compact);
+        assert!(approval.is_some());
+        assert!(matches!(
+            form.update(Key::Text('y'), Some(&source), compact, true, true),
+            Action::None
+        ));
+        form.note_paint(approval);
+        assert!(matches!(
+            form.update(Key::Text('y'), Some(&source), compact, true, true),
+            Action::Request(_, "launch")
+        ));
     }
 
     #[test]

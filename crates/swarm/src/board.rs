@@ -225,9 +225,12 @@ fn board(path: &Path) -> io::Result<()> {
             previous_editor = editor;
             previous_options = options;
             output.flush()?;
-            let has_notice = board.form_viewport(geometry).notice.is_some();
-            if let Some(Modal::Handoff(form)) = &mut board.modal {
-                form.note_paint(geometry, has_notice);
+            if let Some(Modal::Handoff(form)) = &board.modal {
+                let approval = form
+                    .approval_frame(board.by_id(&form.source_id), board.form_viewport(geometry));
+                if let Some(Modal::Handoff(form)) = &mut board.modal {
+                    form.note_paint(approval);
+                }
             }
             painted = true;
         }

@@ -1489,9 +1489,16 @@ def handoff_grid_witness(root, cli, roster, start, tmux, env):
         key("h")
         capture("opened", "▌ target      ◂ agy ▸", "not applicable - no supervisor exists",
                 "the source may still be running and editing this checkout", "arrows change target")
+        cols, rows = 40, 8
+        run("resize-window", "-t", "handoff:0", "-x", str(cols), "-y", str(rows))
+        capture("compact-target", "Handoff: amber → agy", "Session: amber")
+        key("PageDown", "PageDown")
+        capture("compact-target-scrolled", "▌ Confirm · enter", absent=("Session: amber",))
         key("Left")
-        capture("previous-target", "▌ target      ◂ claude ▸")
+        capture("compact-target-changed", "▌ target      ◂ claude ▸", "Session: amber")
         key("Right")
+        cols, rows = 118, 26
+        run("resize-window", "-t", "handoff:0", "-x", str(cols), "-y", str(rows))
         capture("next-target", "▌ target      ◂ agy ▸")
         key("Tab")
         capture("model-default", "▌ model       █ (agent default)", "←→ suggestions")
