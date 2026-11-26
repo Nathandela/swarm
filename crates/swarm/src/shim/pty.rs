@@ -1,3 +1,4 @@
+pub(super) use crate::supervisor::runtime::child_exited;
 use std::fs::File;
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -101,28 +102,6 @@ pub(super) fn input(mut master: &File, mut bytes: &[u8]) -> io::Result<()> {
         }
     }
     Ok(())
-}
-
-pub(super) fn child_exited(child: &Child) -> io::Result<bool> {
-    // waitid with WNOWAIT observes without reaping, so group ownership cannot
-    // transfer via PID recycling before the final group signal.
-    let mut status: libc::siginfo_t = unsafe { std::mem::zeroed() };
-    let rc = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            child.id() as libc::id_t,
-            &mut status,
-            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-        )
-    };
-    if rc == -1 {
-        let err = io::Error::last_os_error();
-        if err.kind() == io::ErrorKind::Interrupted {
-            return Ok(false);
-        }
-        return Err(err);
-    }
-    Ok(unsafe { status.si_pid() } != 0)
 }
 
 pub(super) fn signal_group(child: &Child, signal: i32) -> io::Result<()> {
