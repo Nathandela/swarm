@@ -18,6 +18,7 @@ mod call_room;
 
 mod config;
 mod dispatcher;
+mod doctor;
 mod gateway;
 mod guild;
 pub(crate) mod linked_board;
@@ -560,12 +561,6 @@ fn doctor(place: &Place, cfg: &Config, channel: Option<&str>) -> io::Result<bool
         ));
     }
     let mut findings = Vec::new();
-    let mut check = |name: &str, result: io::Result<&str>| {
-        findings.push(match result {
-            Ok(detail) => json!({"check": name, "status": "ok", "detail": detail}),
-            Err(err) => json!({"check": name, "status": "fail", "detail": err.to_string()}),
-        });
-    };
     let check_path = |root: &str| {
         if Path::new(root).is_dir() {
             Ok(())
@@ -574,45 +569,45 @@ fn doctor(place: &Place, cfg: &Config, channel: Option<&str>) -> io::Result<bool
         }
     };
     let root = cfg.text("work_dir");
-    check("default workspace", check_path(root).map(|_| root));
+    findings.push(doctor::finding(
+        "default workspace",
+        check_path(root).map(|_| root),
+    ));
     if let Some(projects) = cfg.0["projects"].as_object() {
         let mut projects: Vec<_> = projects.iter().collect();
         projects.sort_by_key(|(name, _)| *name);
         for (project, value) in projects {
             let root = value.as_str().unwrap();
-            check(
+            findings.push(doctor::finding(
                 &format!("project {project}"),
                 check_path(root).map(|_| root),
-            );
+            ));
         }
     }
     match rest::Discord::connect(cfg) {
-        Err(err) => check("bot credential", Err(err)),
+        Err(err) => findings.push(doctor::finding("bot credential", Err(err))),
         Ok(discord) => match discord.verify_app(cfg) {
-            Err(err) => check("Discord app", Err(err)),
+            Err(err) => findings.push(doctor::finding("Discord app", Err(err))),
             Ok(username) => {
-                check("Discord app", Ok(&username));
-                check("Gateway", place.probe_gateway(cfg));
+                findings.push(doctor::finding("Discord app", Ok(&username)));
+                findings.push(doctor::finding("Gateway", place.probe_gateway(cfg)));
                 if cfg.text("mode") == "personal" {
-                    check("owner DM", discord.verify_dm(cfg, channel));
+                    findings.push(doctor::finding("owner DM", discord.verify_dm(cfg, channel)));
                 } else {
-                    check(
-                        "discussion access",
-                        Err(io::Error::other(
-                            "guild discussion permissions are unavailable in this Rust build",
-                        )),
-                    );
+                    findings.extend(doctor::channels(cfg, channel, |path| {
+                        guild::lookup(&discord, path)
+                    }));
                 }
             }
         },
     }
     let caps = cfg.manager_capabilities();
-    check(
+    findings.push(doctor::finding(
         "home daemon",
         ipc::Client::dial(Path::new(cfg.text("daemon_socket")), &caps)
             .and_then(|client| cfg.check_supervisor(&client, &caps))
             .map(|_| "manager capabilities negotiated"),
-    );
+    ));
     let ok = findings.iter().all(|result| result["status"] != "fail");
     println!("{}", serde_json::to_string_pretty(&Value::Array(findings))?);
     Ok(ok)

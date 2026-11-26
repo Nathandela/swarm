@@ -195,16 +195,7 @@ fn scoped_message(
             Some(ids) => roles.extend(ids.iter().filter_map(Value::as_str).map(str::to_owned)),
             None => known_roles = false,
         }
-        let Some(grant) = get(&format!(
-            "/channels/{permission_channel}/permissions/member/{member}"
-        ))?
-        else {
-            return Ok(None);
-        };
-        let bits = grant["permissions"]
-            .as_str()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(0);
+        let bits = member_permissions(&mut get, permission_channel, member)?;
         let admin = bits & (1 << 3) != 0;
         if !admin && bits & ((1 << 10) | (1 << 16)) != ((1 << 10) | (1 << 16)) {
             return Ok(None);
@@ -235,6 +226,18 @@ fn scoped_message(
         source["audience_roles"] = json!(roles);
     }
     Ok(Some(source))
+}
+
+pub(super) fn member_permissions(
+    lookup: impl FnOnce(&str) -> io::Result<Option<Value>>,
+    channel: &str,
+    actor: &str,
+) -> io::Result<u64> {
+    Ok(
+        lookup(&format!("/channels/{channel}/permissions/member/{actor}"))?
+            .and_then(|bits| bits["permissions"].as_str()?.parse().ok())
+            .unwrap_or(0),
+    )
 }
 
 pub(super) fn lookup(api: &Discord, path: &str) -> io::Result<Option<Value>> {

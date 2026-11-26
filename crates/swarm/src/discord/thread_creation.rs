@@ -120,7 +120,7 @@ fn authorize(
         return Ok(None);
     }
     let bot = cfg.text("application_id");
-    let capacity = permissions(&lookup, parent, bot)?;
+    let capacity = guild::member_permissions(&lookup, parent, bot)?;
     const RIGHTS: u64 = (1 << 10) | (1 << 16) | (1 << 38);
     if capacity & (1 << 3) == 0 && capacity & RIGHTS != RIGHTS {
         return Ok(None);
@@ -144,7 +144,7 @@ fn authorize(
     {
         return Ok(None);
     }
-    let actor_rights = permissions(&lookup, parent, actor)?;
+    let actor_rights = guild::member_permissions(&lookup, parent, actor)?;
     const ACTOR: u64 = (1 << 10) | (1 << 11) | (1 << 16);
     if actor_rights & (1 << 3) == 0 && actor_rights & ACTOR != ACTOR {
         return Ok(None);
@@ -294,18 +294,6 @@ fn allowed(cfg: &Config, key: &str, id: &str) -> bool {
         .as_array()
         .is_some_and(|rows| rows.iter().any(|entry| entry == id))
 }
-fn permissions(
-    lookup: impl FnOnce(&str) -> io::Result<Option<Value>>,
-    channel: &str,
-    actor: &str,
-) -> io::Result<u64> {
-    Ok(
-        lookup(&format!("/channels/{channel}/permissions/member/{actor}"))?
-            .and_then(|bits| bits["permissions"].as_str()?.parse().ok())
-            .unwrap_or(0),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -207,15 +207,8 @@ impl Scope {
             {
                 return Ok(false);
             }
-            let mut permission = |channel| -> io::Result<u64> {
-                Ok(
-                    get(&format!("/channels/{channel}/permissions/member/{user}"))?
-                        .and_then(|response| response["permissions"].as_str()?.parse().ok())
-                        .unwrap_or(0),
-                )
-            };
-            let text = permission(parent)?;
-            let voice = permission(&self.room)?;
+            let text = super::guild::member_permissions(&mut get, parent, user)?;
+            let voice = super::guild::member_permissions(&mut get, &self.room, user)?;
             if text & ADMIN == 0 && text & REQUIRED_TEXT != REQUIRED_TEXT
                 || voice & ADMIN == 0 && voice & REQUIRED_VOICE != REQUIRED_VOICE
             {

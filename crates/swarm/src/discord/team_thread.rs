@@ -178,9 +178,7 @@ impl Route {
             {
                 return Ok(false);
             }
-            let bits = get(&format!("/channels/{parent}/permissions/member/{user}"))?
-                .and_then(|value| value["permissions"].as_str()?.parse::<u64>().ok())
-                .unwrap_or(0);
+            let bits = super::guild::member_permissions(&mut get, parent, user)?;
             if bits & ADMIN == 0 && bits & TEXT != TEXT {
                 return Ok(false);
             }
