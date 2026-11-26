@@ -76,6 +76,17 @@ class Model(http.server.BaseHTTPRequestHandler):
                     content=[dict(type="output_text", text=text, annotations=[])])
         response = dict(id="resp_worker", object="response", model="fixture",
                         created_at=int(time.time()), status="in_progress", output=[])
+        if self.server.missing_reply:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            data = json.dumps(dict(type="response.created", response=response))
+            self.wfile.write(f"event: response.created\ndata: {data}\n\n".encode())
+            self.wfile.flush()
+            (self.server.release.parent / ".fixture-worker-running").touch()
+            self.server.worker_release.wait(timeout=40)
+            self.close_connection = True
+            return
         events = [
             ("response.created", dict(response=response)),
             ("response.output_item.added", dict(output_index=0, item=item)),
@@ -128,7 +139,14 @@ class Model(http.server.BaseHTTPRequestHandler):
                 self.send_error(400)
                 return
         structured = None
-        if main and self.server.enrolled:
+        if main and self.server.missing_reply:
+            created = tool_result(request, "toolu_fixture_enrolled_create")
+            if not created:
+                structured = ("swarm_create", "toolu_fixture_enrolled_create", dict(action_id="native-enrolled-job",
+                    agent="codex", cwd=str(self.server.approved), prompt="Wait for the synthetic structured worker fixture."))
+            else:
+                assert mcp_object(created)["state"] == "created", created
+        elif main and self.server.enrolled:
             denied = tool_result(request,"toolu_fixture_off_project")
             created = tool_result(request,"toolu_fixture_enrolled_create")
             replay = tool_result(request,"toolu_fixture_enrolled_replay")
@@ -326,7 +344,7 @@ class Model(http.server.BaseHTTPRequestHandler):
                 text = "Restored worker note reached Claude." if wake else (
                     "Read the pinned forwarded file." if forwarded else "Bounded native Claude reply.")
                 args = dict(output_id="native-parked" if wake else "native-claude",
-                            sequence=1, final=True, text=text)
+                            sequence=1, final=not self.server.missing_reply, text=text)
             block = dict(type="tool_use", name=name if spawn or discover else f"mcp__swarm_voice__{name}", id=call, input={})
             delta = dict(type="input_json_delta", partial_json=json.dumps(args))
         else:
@@ -513,6 +531,8 @@ def verify(swarm, provider, test, root, server):
             save(native_home / "auth.json", dict(auth_mode="apikey", OPENAI_API_KEY="fixture-only"))
         access.update(project_access="enrolled", projects=dict(approved=str(server.approved)))
         env["SWARM_CLAUDE_MANAGER_FIXTURE_ENROLLED"] = "1"
+        if server.missing_reply:
+            env["SWARM_CLAUDE_MANAGER_FIXTURE_MISSING_REPLY"] = "1"
         if server.codex_send:
             env["SWARM_CLAUDE_MANAGER_FIXTURE_CODEX_SEND"] = "1"
         if server.codex_send_revoked and not server.replaced_issuer:
@@ -577,6 +597,9 @@ def verify(swarm, provider, test, root, server):
                         if row["type"] == "event_msg" and item.get("type") == "UserMessage":
                             authored.extend(part.get("text") for part in item["content"])
                 assert authored.count(opening) == 1, "durable native opening was duplicated"
+                if server.missing_reply:
+                    assert len(server.codex_requests) == 1
+                    assert sum(1 for _, content, _ in server.main_requests if "toolu_fixture_swarm_publish" not in content) == 2
                 if server.codex_send:
                     assert authored.count("Start the exact enrolled worker follow-up.") == (0 if server.codex_send_revoked else 1)
                     assert "This divergent action must never reach the worker." not in authored
@@ -645,6 +668,7 @@ if __name__ == "__main__":
     modes.add_argument("--vm-revoked", action="store_true")
     modes.add_argument("--enrolled", action="store_true")
     modes.add_argument("--enrolled-codex", type=Path)
+    modes.add_argument("--enrolled-codex-missing-reply", type=Path)
     modes.add_argument("--enrolled-codex-send", type=Path)
     modes.add_argument("--enrolled-codex-send-revoked", type=Path)
     modes.add_argument("--enrolled-deleted", action="store_true")
@@ -661,7 +685,9 @@ if __name__ == "__main__":
         server.vm_revoked = args.vm_revoked
         server.worktree = args.vm_worktree
         server.replaced_issuer = args.enrolled_codex_replaced_issuer is not None
-        server.codex = args.enrolled_codex or args.enrolled_codex_send or args.enrolled_codex_send_revoked or args.enrolled_codex_replaced_issuer
+        server.missing_reply = args.enrolled_codex_missing_reply is not None
+        server.worker_release = threading.Event()
+        server.codex = args.enrolled_codex or args.enrolled_codex_missing_reply or args.enrolled_codex_send or args.enrolled_codex_send_revoked or args.enrolled_codex_replaced_issuer
         server.codex_send_revoked = args.enrolled_codex_send_revoked is not None or server.replaced_issuer
         server.codex_send = bool(args.enrolled_codex_send or server.codex_send_revoked)
         server.enrolled = bool(args.enrolled or args.enrolled_deleted or server.codex)
@@ -673,4 +699,5 @@ if __name__ == "__main__":
         try:
             verify(args.swarm.resolve(), args.claude.resolve(), args.test.resolve(), Path(name).resolve(), server)
         finally:
+            server.worker_release.set()
             server.shutdown()

@@ -127,17 +127,35 @@ impl Inbox {
         Ok(())
     }
 
-    pub(in crate::discord) fn pending_unverified_reply(&self, now: u64) -> Option<(String, Value)> {
-        self.data["outbox"]
+    pub(in crate::discord) fn pending_unverified_reply(
+        &self,
+        now: u64,
+        cursor: &mut Option<(u64, u128)>,
+    ) -> Option<(String, Value)> {
+        let rows = self.data["outbox"]
             .as_object()?
             .iter()
-            .filter(|(_, row)| {
-                row["proof"]["kind"] == "unverified_reply"
+            .filter_map(|(nonce, row)| {
+                let due = row["proof"]["kind"] == "unverified_reply"
                     && row["state"] == "prepared"
-                    && row["retry_at"].as_u64().unwrap_or_default() <= now
-            })
-            .min_by_key(|(_, row)| row["proof"]["completed_at"].as_u64())
-            .map(|(nonce, row)| (nonce.clone(), row.clone()))
+                    && row["retry_at"].as_u64().unwrap_or_default() <= now;
+                if !due {
+                    return None;
+                }
+                let order = (
+                    row["proof"]["completed_at"].as_u64()?,
+                    u128::from_str_radix(nonce, 16).ok()?,
+                );
+                Some((order, nonce, row))
+            });
+        let after = *cursor;
+        let (order, nonce, row) = rows
+            .clone()
+            .filter(|(order, _, _)| after.is_none_or(|after| *order > after))
+            .min_by_key(|(order, _, _)| *order)
+            .or_else(|| rows.min_by_key(|(order, _, _)| *order))?;
+        *cursor = Some(order);
+        Some((nonce.clone(), row.clone()))
     }
 
     pub(super) fn unverified_reply_pending_for(&self, source: &str) -> bool {
@@ -280,7 +298,9 @@ mod tests {
         let mut stale = Inbox::open(&dir, &cfg).unwrap();
         assert!(advance(&mut inbox, admitted + 150_000, Some(&worker)));
         assert!(!advance(&mut stale, admitted + 150_000, Some(&worker)));
-        let (nonce, entry) = inbox.pending_unverified_reply(admitted + 150_000).unwrap();
+        let (nonce, entry) = inbox
+            .pending_unverified_reply(admitted + 150_000, &mut None)
+            .unwrap();
         assert!(
             inbox
                 .claim_publication(&nonce, &inbox.manager().clone(), &entry, |_| Ok(()))
@@ -289,7 +309,11 @@ mod tests {
         drop(inbox);
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
         assert!(!inbox.keeps_manager_for_reply(admitted + 150_000));
-        assert!(inbox.pending_unverified_reply(u64::MAX).is_none());
+        assert!(
+            inbox
+                .pending_unverified_reply(u64::MAX, &mut None)
+                .is_none()
+        );
         let mut echo = json!({"id":"402","channel_id":"401","author":{"id":"200","bot":true},"nonce":nonce,"content":UNVERIFIED_REPLY});
         assert!(!inbox.observe(&echo, Observation::Gateway).unwrap());
         echo["channel_id"] = json!("400");
@@ -299,13 +323,57 @@ mod tests {
         let recent = accept_partial(&mut inbox, "102", admitted + 200_000);
         assert!(advance(&mut inbox, admitted + 230_000, None));
         assert!(advance(&mut inbox, admitted + 350_000, Some(&recent)));
-        assert!(inbox.pending_unverified_reply(u64::MAX).is_none());
+        assert!(
+            inbox
+                .pending_unverified_reply(u64::MAX, &mut None)
+                .is_none()
+        );
         let boundary = admitted + 10 + WINDOW_MS;
         let later = accept_partial(&mut inbox, "103", boundary - 150_000);
         assert!(advance(&mut inbox, boundary - 120_000, None));
         assert!(advance(&mut inbox, boundary, Some(&later)));
-        let (next, _) = inbox.pending_unverified_reply(boundary).unwrap();
+        let (next, _) = inbox.pending_unverified_reply(boundary, &mut None).unwrap();
         assert_ne!(next, nonce);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stale_notice_keeps_its_bytes_and_yields_to_a_later_source_after_restart() {
+        let dir = crate::test_temp::root().join(format!("reply-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&dir).unwrap();
+        let cfg = Config(
+            json!({"installation_id":"fixture","application_id":"200","owner_id":"300","dm_channel_id":"400"}),
+        );
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        let admitted = 1000;
+        let old = accept_partial(&mut inbox, "101", admitted);
+        assert!(advance(&mut inbox, admitted + 30_000, None));
+        assert!(advance(&mut inbox, admitted + 150_000, Some(&old)));
+        let at = admitted + 10 + WINDOW_MS;
+        let later = accept_partial(&mut inbox, "102", at - 150_000);
+        assert!(advance(&mut inbox, at - 120_000, None));
+        assert!(advance(&mut inbox, at, Some(&later)));
+        drop(inbox);
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        let mut cursor = None;
+        let original = std::fs::read(&inbox.file).unwrap();
+        let (first, stale) = inbox.pending_unverified_reply(at, &mut cursor).unwrap();
+        assert_eq!(stale["proof"]["source_id"], "101");
+        let manager = inbox.manager().clone();
+        assert!(matches!(
+            inbox.claim_publication(&first, &manager, &stale, |_| Err(invalid("source deleted"))),
+            Err(PublicationClaimError::BeforeWrite(_))
+        ));
+        assert_eq!(std::fs::read(&inbox.file).unwrap(), original);
+        let (next, valid) = inbox.pending_unverified_reply(at, &mut cursor).unwrap();
+        assert_eq!(valid["proof"]["source_id"], "102");
+        assert!(
+            inbox
+                .claim_publication(&next, &manager, &valid, |_| Ok(()))
+                .is_ok()
+        );
+        assert_eq!(inbox.publication(&first), stale);
+        assert_eq!(inbox.publication(&next)["state"], "sending");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

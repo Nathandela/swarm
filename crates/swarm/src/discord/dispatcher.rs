@@ -94,6 +94,7 @@ pub(super) struct Dispatcher {
     released_pins: std::cell::RefCell<std::collections::HashSet<String>>,
     next_quiet_probe: std::cell::Cell<Option<Instant>>,
     quiet_cursor: std::cell::Cell<Option<(u64, u64)>>,
+    reply_notice_cursor: std::cell::Cell<Option<(u64, u128)>>,
 }
 
 impl Dispatcher {
@@ -127,6 +128,7 @@ impl Dispatcher {
             released_pins: Default::default(),
             next_quiet_probe: std::cell::Cell::new(None),
             quiet_cursor: Default::default(),
+            reply_notice_cursor: Default::default(),
             socket_identity: (meta.dev(), meta.ino()),
         };
         this.listener.set_nonblocking(true)?;
@@ -182,7 +184,7 @@ impl Dispatcher {
             let conversation = field(&self.launch["manager"], "conversation_id");
             let now = millis()?;
             if inbox.quiet_reply_due(conversation, now)
-                || inbox.pending_unverified_reply(now).is_some()
+                || inbox.pending_unverified_reply(now, &mut None).is_some()
             {
                 self.next_quiet_probe
                     .set(Some(Instant::now() + Duration::from_secs(2)));
@@ -514,6 +516,12 @@ impl Dispatcher {
     pub(super) fn fixture_idle_elapsed(&self) {
         self.idle_since
             .set(Some(Instant::now() - Duration::from_secs(121)));
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixture_reply_clock(&self, now: Option<u64>) {
+        TEST_MILLIS.with(|clock| clock.set(now));
+        self.next_quiet_probe.set(None);
     }
 
     fn park_if_idle(&self, cfg: &Config, inbox: &mut Inbox, status: &Value) -> io::Result<()> {
@@ -953,12 +961,15 @@ impl Dispatcher {
         api: &impl Audience,
         now: u64,
     ) -> io::Result<()> {
-        let Some((nonce, entry)) = inbox.pending_unverified_reply(now) else {
-            return Ok(());
-        };
         if !inbox.pending_publications().is_empty() {
             return Ok(());
         }
+        let mut cursor = self.reply_notice_cursor.get();
+        let notice = inbox.pending_unverified_reply(now, &mut cursor);
+        self.reply_notice_cursor.set(cursor);
+        let Some((nonce, entry)) = notice else {
+            return Ok(());
+        };
         let source = field(&entry["proof"], "source_id");
         let revision = &entry["proof"]["revision"];
         let manager = inbox.manager().clone();

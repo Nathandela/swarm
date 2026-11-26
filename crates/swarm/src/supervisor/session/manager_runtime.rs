@@ -255,6 +255,7 @@ impl Session {
         let instance = codex_receipt::instance(&child.token);
         let mail = &child.mailbox;
         if request["body_version"] != 1
+            || query.as_object().is_none_or(|fields| fields.len() != 4)
             || self.native_cli_manager()
             || manager["session"] != session
             || query["instance"] != instance
@@ -267,6 +268,7 @@ impl Session {
             || mail["parent_input_hash"] != crate::supervisor::mail::parent_hash(nonce)
             || mail["attempt"] != action["operation_id"]
             || mail["project"] != action["arguments"]["cwd"]
+            || child.view(&state.endpoint)["status"]["Process"] != "exited"
             || child.verified_exit().is_none()
         {
             return Err(refuse("enrolled worker has no matching verified exit"));

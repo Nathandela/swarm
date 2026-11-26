@@ -755,6 +755,11 @@ mod tests {
             files: &[crate::supervisor::mail_files::Captured],
         ) -> super::super::rest::Post {
             self.posts.borrow_mut().push((nonce.into(), text.into()));
+            if text == super::super::receipt::UNVERIFIED_REPLY
+                && std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_MISSING_REPLY").is_some()
+            {
+                return super::super::rest::Post::Unconfirmed;
+            }
             let mut receipt = json!({
                 "id":(401 + self.posts.borrow().len()).to_string(),
                 "channel_id":cfg.text("dm_channel_id"),"author":{"id":"200","bot":true},
@@ -1041,6 +1046,18 @@ mod tests {
             "toolu_fixture_swarm_publish"
         );
         drop(posts);
+        if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_MISSING_REPLY").is_some() {
+            installed_codex_worker_missing_reply(
+                &root,
+                &cfg,
+                &place,
+                &dispatcher,
+                &manager,
+                inbox,
+                &api,
+            );
+            return;
+        }
         if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_ENROLLED").is_some() {
             assert_eq!(runtime["native_cli"], false);
             let rows = manager.dial().unwrap().sessions().unwrap();
@@ -1218,6 +1235,128 @@ mod tests {
             );
             assert_eq!(inbox.manager()["generation"], 2);
         }
+    }
+
+    fn installed_codex_worker_missing_reply(
+        root: &Path,
+        cfg: &Config,
+        place: &Path,
+        dispatcher: &super::super::dispatcher::Dispatcher,
+        manager: &Manager,
+        mut inbox: super::super::receipt::Inbox,
+        api: &FixtureAudience,
+    ) {
+        use super::super::receipt::{Inbox, Observation, UNVERIFIED_REPLY};
+        use std::time::{Duration, Instant};
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !inbox.manager()["input"].is_null() || !root.join(".fixture-worker-running").is_file()
+        {
+            dispatcher.tick(cfg, &mut inbox, api).unwrap();
+            assert!(
+                Instant::now() < deadline,
+                "enrolled opening turn did not start or parent did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let ledger = runtime::read_json(&place.join("rust-text-v1.json")).unwrap();
+        let saved = &ledger["messages"]["401"]["native_completion"]["proof"];
+        let action = saved["quiet"]["worker_actions"]
+            .as_object()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap();
+        let parent = field(&saved["binding"], "session");
+        let receipt = manager.enrolled_worker(parent, action, false).unwrap();
+        let session = field(&receipt, "session");
+        let worker_dir = root
+            .join("s/rust-v1")
+            .join(session.rsplit('/').next().unwrap());
+        let metadata = runtime::read_json(&worker_dir.join("session.json")).unwrap();
+        let profile = runtime::read_json(&worker_dir.join("codex-profile.json")).unwrap();
+        let native = runtime::read_json(&worker_dir.join("observation.json")).unwrap();
+        assert!(
+            manager
+                .enrolled_reply_evidence(parent, "401", action)
+                .is_err()
+        );
+        let mut terminal = Client::dial(Path::new(cfg.text("daemon_socket")), &["attach"]).unwrap();
+        let lease = terminal.request("attach", Some(session), "lease").unwrap();
+        terminal
+            .take_snapshot(lease["snapshot_len"].as_u64().unwrap() as usize)
+            .unwrap();
+        crate::ipc::wire::write_frame(&mut terminal.stream(), runtime::DATA_IN, b"\x1b").unwrap();
+        drop(terminal);
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let observed = crate::providers::codex_continuity::worker_turn(
+                Path::new(field(&profile["profile"], "native_home")),
+                Path::new(field(&metadata, "cwd")),
+                field(&native, "conversation_id"),
+                field(&metadata["mailbox"], "prompt_hash"),
+                None,
+                256,
+            );
+            if observed.as_ref().is_ok_and(|proof| {
+                proof
+                    .as_ref()
+                    .is_some_and(|row| row["state"] == "interrupted")
+            }) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the real worker did not record its aborted opening turn: {observed:?}"
+            );
+            std::thread::sleep(Duration::from_millis(35));
+        }
+        manager
+            .dial()
+            .unwrap()
+            .request("kill", Some(session), "ok")
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let proof = loop {
+            let proof = manager.enrolled_reply_evidence(parent, "401", action);
+            if let Ok(proof) = proof {
+                break proof;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the bound supervisor could not prove the native worker's exit: {proof:?}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert_eq!(proof["state"], "interrupted");
+        let first = (saved["quiet"]["admitted_at"].as_u64().unwrap() + 30_000)
+            .max(saved["completed_at"].as_u64().unwrap());
+        dispatcher.fixture_reply_clock(Some(first));
+        dispatcher.tick(cfg, &mut inbox, api).unwrap();
+        assert_eq!(api.posts.borrow().len(), 1);
+        dispatcher.fixture_idle_elapsed();
+        dispatcher.fixture_reply_clock(Some(first + 119_999));
+        dispatcher.tick(cfg, &mut inbox, api).unwrap();
+        assert!(inbox.manager()["retirement"].is_null());
+        assert_eq!(api.posts.borrow().len(), 1);
+        dispatcher.fixture_reply_clock(Some(first + 120_000));
+        dispatcher.tick(cfg, &mut inbox, api).unwrap();
+        assert_eq!(api.posts.borrow().len(), 2);
+        let (nonce, body) = api.posts.borrow()[1].clone();
+        assert_eq!(body, UNVERIFIED_REPLY);
+        assert_eq!(inbox.publication(&nonce)["state"], "uncertain");
+        drop(inbox);
+        let mut inbox = Inbox::open(place, cfg).unwrap();
+        let mut echo = json!({"id":"403","channel_id":"401","author":{"id":"200","bot":true},
+            "nonce":nonce,"content":UNVERIFIED_REPLY});
+        assert!(!inbox.observe(&echo, Observation::Gateway).unwrap());
+        echo["channel_id"] = json!("400");
+        assert!(inbox.observe(&echo, Observation::Gateway).unwrap());
+        dispatcher.fixture_reply_clock(Some(first + 120_001));
+        dispatcher.tick(cfg, &mut inbox, api).unwrap();
+        assert_eq!(api.posts.borrow().len(), 2);
+        assert!(inbox.manager()["input"].is_null());
+        assert!(inbox.manager()["retirement"].is_object());
+        dispatcher.fixture_reply_clock(None);
     }
 
     fn dispatcher_input_routes(
