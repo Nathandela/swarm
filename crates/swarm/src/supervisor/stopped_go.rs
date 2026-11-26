@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub(super) const OPT_IN: &str = "SWARM_DAEMON_STOPPED_GO_COMPAT";
+const HERMES_VIEWER_ONLY: &str = "Go Hermes terminal custody only; use the original Go supervisor to manage the Hermes conversation";
 
 pub(super) struct Store {
     root: PathBuf,
@@ -784,6 +785,9 @@ fn valid_meta(meta: &Value, id: &str) -> bool {
 
 fn qualified(root: &Path, file: &File, meta: &Value) -> io::Result<bool> {
     qualified_role(meta)?;
+    if meta["agent_type"] == "hermes" {
+        return Err(io::Error::other(HERMES_VIEWER_ONLY));
+    }
     if meta["status"]["Process"] != "exited" {
         return Err(io::Error::other(
             "Go session is live or has uncertain custody",
@@ -869,6 +873,14 @@ impl Store {
                         Ok::<_, io::Error>((false, Some(Arc::new(owner)), None))
                     })();
                     adopt.map_err(|err| io::Error::other(format!("Go session {id}: {err}")))?
+                } else if adopt_live && meta["agent_type"] == "hermes" {
+                    qualified_role(&meta)?;
+                    if meta["status"]["Process"] != "exited" {
+                        return Err(io::Error::other(HERMES_VIEWER_ONLY));
+                    }
+                    exited(&file, &meta)
+                        .map_err(|err| io::Error::other(format!("Go session {id}: {err}")))?;
+                    (false, None, None)
                 } else {
                     let exported = qualified(root, &file, &meta)
                         .map_err(|err| io::Error::other(format!("Go session {id}: {err}")))?;
@@ -980,12 +992,17 @@ impl Store {
         })
     }
 
-    pub(super) fn has_live(&self) -> bool {
-        self.rows
-            .lock()
-            .unwrap()
+    pub(super) fn launch_blocker(&self) -> Option<&'static str> {
+        let rows = self.rows.lock().unwrap();
+        if rows
             .values()
+            .any(|entry| entry.meta["agent_type"] == "hermes")
+        {
+            return Some(HERMES_VIEWER_ONLY);
+        }
+        rows.values()
             .any(|entry| entry.live.is_some())
+            .then_some("new launches require separate live Go workspace qualification")
     }
 
     pub(super) fn live(&self, endpoint: &str, id: &str) -> Option<Arc<live::Owner>> {
@@ -1012,6 +1029,9 @@ impl Store {
         let entry = rows
             .get_mut(id)
             .ok_or_else(|| io::Error::other("unknown stopped Go session"))?;
+        if entry.meta["agent_type"] == "hermes" {
+            return Err(io::Error::other(HERMES_VIEWER_ONLY));
+        }
         if entry.live.is_some() {
             return Err(io::Error::other(
                 "live Go label mutation requires separate rollback qualification",
@@ -1075,13 +1095,21 @@ fn view(meta: &Value, endpoint: &str) -> Value {
         .into_iter()
         .find(|key| nonzero_time(&meta[*key]))
         .expect("validated creation time");
-    let mut status = json!({
-        "Process": meta["status"]["Process"], "Turn": meta["status"]["Turn"], "Interaction": meta["status"]["Interaction"]
-    });
+    let hermes_viewer_ended =
+        meta["agent_type"] == "hermes" && meta["status"]["Process"] == "exited";
+    let mut status = if hermes_viewer_ended {
+        super::session::hermes_viewer_unavailable_status()
+    } else {
+        json!({
+            "Process": meta["status"]["Process"], "Turn": meta["status"]["Turn"], "Interaction": meta["status"]["Interaction"]
+        })
+    };
     if meta["status"]["Attention"] == true {
         status["Attention"] = json!(true);
     }
-    let group = if status["Process"] != "running" {
+    let group = if hermes_viewer_ended {
+        "needs_input"
+    } else if status["Process"] != "running" {
         "completed"
     } else if status["Attention"] == true {
         "needs_input"
@@ -1105,6 +1133,9 @@ fn view(meta: &Value, endpoint: &str) -> Value {
         if !field(meta, key).is_empty() {
             row[key] = meta[key].clone();
         }
+    }
+    if hermes_viewer_ended {
+        row["resume_error"] = json!(HERMES_VIEWER_ONLY);
     }
     row
 }
@@ -1166,6 +1197,27 @@ mod tests {
         assert!(!classic_hermes(&meta, &launch));
         meta["hermes_native"] = json!(true);
         assert!(qualified_role(&meta).is_err());
+    }
+
+    #[test]
+    fn go_hermes_classic_argv_does_not_prove_stopped_native_work() {
+        let root = std::env::temp_dir();
+        let directory = File::open(&root).unwrap();
+        // A current Hermes CLI can talk to a gateway even with precisely this pinned Go record.
+        let meta = json!({"schema_version":1, "id":"viewer", "agent_type":"hermes",
+            "shim_wire_version":2, "conversation_id":"",
+            "created_at":"2026-11-26T10:00:00Z", "status":{"Process":"exited"}});
+        let launch = json!({"argv":["/bin/hermes", "chat", "--cli"]});
+        assert!(classic_hermes(&meta, &launch));
+        assert_eq!(
+            qualified(&root, &directory, &meta).unwrap_err().to_string(),
+            HERMES_VIEWER_ONLY
+        );
+        let projected = view(&meta, "local");
+        assert_eq!(projected["status"]["Process"], "lost");
+        assert_eq!(projected["status"]["NativeWorkUnknown"], true);
+        assert_eq!(projected["group"], "needs_input");
+        assert_eq!(projected["resume_error"], HERMES_VIEWER_ONLY);
     }
 
     #[test]

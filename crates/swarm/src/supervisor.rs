@@ -238,14 +238,12 @@ impl State {
         mailbox: Option<Value>,
         expected_nonce: Option<&str>,
     ) -> io::Result<Arc<Session>> {
-        if self
+        if let Some(reason) = self
             .stopped_go
             .as_ref()
-            .is_some_and(stopped_go::Store::has_live)
+            .and_then(stopped_go::Store::launch_blocker)
         {
-            return Err(io::Error::other(
-                "new launches require separate live Go workspace qualification",
-            ));
+            return Err(io::Error::other(reason));
         }
         if self.stopped_go.is_some()
             && (managed.is_some()

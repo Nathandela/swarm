@@ -8,12 +8,13 @@ import json
 import os
 from pathlib import Path
 import shlex
+import socket
 import sqlite3
 import subprocess
 import threading
 import time
 
-from live_go_shim import LIVE, attach, connect, snapshot
+from live_go_shim import LIVE, attach, connect, read_content, snapshot
 from native_fixture_sandbox import check_guards, guarded
 from stopped_go_state import COMPAT, daemon, disk, fixture_env, listed, owner, refused
 
@@ -61,7 +62,7 @@ def wait_for(check, label):
     raise AssertionError(f"timed out waiting for {label}")
 
 
-def rehearse(go, rust, hermes, root):
+def rehearse(go, rust, hermes, root, gateway_backed=False):
     home, work, tools, state, hermes_home = (root / n for n in ("home", "work", "bin", "state", "hermes"))
     for path in (home, work, tools, state, hermes_home):
         path.mkdir(mode=0o700)
@@ -83,9 +84,11 @@ def rehearse(go, rust, hermes, root):
     }
     rust_env = go_env | {COMPAT: "1", LIVE: "1"}
 
+    ports = [port]
+
     def wrapper(target, name, pid_file=None):
         path = tools / name
-        command = guarded([str(target)], root, [port]) if name != "hermes" else [str(target)]
+        command = guarded([str(target)], root, ports) if name != "hermes" else [str(target)]
         prefix = ("printf '%s\\n' \"$$\" > " + shlex.quote(str(pid_file)) + "\n") if pid_file else ""
         if pid_file:
             prefix += "".join("export " + key + "=" + shlex.quote(go_env[key]) + "\n"
@@ -94,8 +97,11 @@ def rehearse(go, rust, hermes, root):
         path.chmod(0o700)
         return path
 
-    assert b"Hermes Agent v0.20.6 " in subprocess.check_output(
-        guarded([str(hermes), "--version"], root, [port]), env=go_env, cwd=work, timeout=20)
+    version = b"0.22.5" if gateway_backed else b"0.20.6"
+    assert b"Hermes Agent v" + version + b" " in subprocess.check_output(
+        guarded([str(hermes), "--version"], root, ports), env=go_env, cwd=work, timeout=20)
+    gateway = None
+    gateway_socket = hermes_home / "gateway.sock"
     pid_file = root / "worker"
     wrapper(hermes, "hermes", pid_file)
     go, rust = wrapper(go, "go"), wrapper(rust, "rust")
@@ -104,7 +110,12 @@ def rehearse(go, rust, hermes, root):
     def send(env, text, completed):
         with connect(env) as connection:
             attach(connection, active)
-            connection[0](3, text.encode() + b"\r")
+            payload = text.encode()
+            connection[0](3, b"\x1b[200~" + payload + b"\x1b[201~")
+            read_content(connection, payload)
+            # Classic Hermes treats Enter within its rapid-input window as pasted multiline text.
+            time.sleep(.2)
+            connection[0](3, b"\r")
             return completed()
 
     def turns():
@@ -126,6 +137,24 @@ def rehearse(go, rust, hermes, root):
             return first[0] if len(first) == 1 else None
         return wait_for(matching, marker)
 
+    def gateway_identity():
+        if not gateway_backed:
+            assert not gateway_socket.exists()
+            return None
+        try:
+            with socket.socket(socket.AF_UNIX) as peer:
+                peer.settimeout(2)
+                peer.connect(str(gateway_socket))
+                peer.sendall(b'{"protocol":1,"id":1,"verb":"identify","params":{}}\n')
+                with peer.makefile("rb") as stream:
+                    descriptor = json.loads(stream.readline(65537)).get("result", {})
+        except (OSError, ValueError):
+            return None
+        if descriptor.get("state") != "ready":
+            return None
+        assert descriptor["pid"] == gateway.pid
+        return gateway_socket.stat().st_ino, descriptor
+
     def identity():
         shim = disk(session / "meta.json")["shim_pid"]
         pid = int(pid_file.read_text())
@@ -135,10 +164,21 @@ def rehearse(go, rust, hermes, root):
         assert set(entries) == {shim, pid} and entries[pid][:2] == [str(shim), str(pid)], entries
         sockets = [(p.stat().st_dev, p.stat().st_ino) for p in
                    [session / "shim.sock", session / "hook.sock", database]]
-        return shim, pid, entries[shim][1:], entries[pid], sockets
+        return shim, pid, entries[shim][1:], entries[pid], sockets, gateway_identity()
 
     database = hermes_home / "state.db"
     try:
+        if gateway_backed:
+            gateway_config = hermes_home / "config.yaml"
+            gateway_config.write_text(json.dumps(json.loads(gateway_config.read_text()) | {"_config_version": 12}))
+            with (root / "gateway.log").open("wb") as log:
+                gateway = subprocess.Popen(guarded(
+                    [str(hermes), "gateway", "run", "--no-supervise", "--force"], root, ports),
+                    env=go_env | {"HERMES_ALLOW_ROOT_GATEWAY": "1"}, cwd=work,
+                    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+            _, descriptor = wait_for(gateway_identity, "private Hermes gateway")
+            ports.append(int(descriptor["api_origin"].rsplit(":", 1)[1]))
+            check_guards(root, ports)
         with daemon(go, go_env, root / "go.log"):
             request = {"agent": "hermes", "cwd": str(work), "name": "Go classic Hermes",
                        "rows": 40, "cols": 120, "env": [f"{key}={value}" for key, value in go_env.items()]}
@@ -149,7 +189,8 @@ def rehearse(go, rust, hermes, root):
             wait_for(lambda: any("❯" in line for line in snapshot(go_env, active)["lines"]), "classic Hermes prompt")
             thread = send(go_env, PROMPTS[0], lambda: response(PROMPTS[0]))
             baseline = identity()
-            assert disk(session / "meta.json")["conversation_id"] in ("", thread)
+            meta = disk(session / "meta.json")
+            assert not meta.get("cli_identity") and not meta.get("hermes_native") and meta["conversation_id"] in ("", thread)
 
         launch = session / "shim-launch.json"
         original = launch.read_bytes()
@@ -181,25 +222,45 @@ def rehearse(go, rust, hermes, root):
                 assert [m["content"] for m in messages if m["role"] == "user"][-index-1:] == list(PROMPTS[:index+1])
             send(go_env, "/exit", lambda: wait_for(
                 lambda: (session / "exit.json").exists(), "classic Hermes graceful exit"))
-            wait_for(lambda: disk(session / "meta.json")["status"]["Process"] == "exited"
-                     and disk(session / "meta.json")["conversation_id"] == thread, "Go-captured terminal identity")
-        assert not (hermes_home / "gateway.sock").exists()
+            wait_for(lambda: disk(session / "meta.json")["status"]["Process"] == "exited", "Go-captured terminal exit")
+            if not gateway_backed:
+                assert disk(session / "meta.json")["conversation_id"] == thread
+        assert gateway_identity() == baseline[-1]
         with daemon(rust, rust_env, root / "rust-stopped.log"):
-            assert listed(rust_env)[0]["status"]["Process"] == "exited"
+            row = listed(rust_env)[0]
+            assert row["group"] == "needs_input" and row["status"]["NativeWorkUnknown"]
+            assert "use the original Go supervisor" in row["resume_error"]
+            rename = owner(rust_env, {"op": "rename", "session_id": active, "name": "must remain Go-owned"})
+            assert rename["op"] == "error" and "use the original Go supervisor" in rename["error"], rename
+        exported = subprocess.run([rust, "daemon", "export-stopped-go"], env=rust_env,
+                                  capture_output=True, text=True, timeout=15)
+        assert exported.returncode and "use the original Go supervisor" in exported.stderr, exported.stderr
+        assert gateway_identity() == baseline[-1]
         print("Pinned Go → Rust → pinned Go retained the Hermes classic PTY and completed three turns in one native conversation.")
     finally:
-        if active and not (session / "exit.json").exists():
-            with daemon(go, go_env, root / "cleanup.log"):
-                assert owner(go_env, {"op": "kill", "session_id": active})["op"] == "ok"
-                wait_for(lambda: (session / "exit.json").exists(), "fixture cleanup")
-        model.shutdown()
-        model.server_close()
+        try:
+            if active and not (session / "exit.json").exists():
+                with daemon(go, go_env, root / "cleanup.log"):
+                    assert owner(go_env, {"op": "kill", "session_id": active})["op"] == "ok"
+                    wait_for(lambda: (session / "exit.json").exists(), "fixture cleanup")
+        finally:
+            if gateway and gateway.poll() is None:
+                gateway.terminate()
+                try:
+                    gateway.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    gateway.kill()
+                    gateway.wait(timeout=5)
+            model.shutdown()
+            model.server_close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("go", "rust", "hermes", "root"):
         parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument("--gateway-backed", action="store_true")
     args = parser.parse_args()
     os.umask(0o077)
-    rehearse(*(p.resolve(strict=True) for p in (args.go, args.rust, args.hermes, args.root)))
+    rehearse(*(p.resolve(strict=True) for p in (args.go, args.rust, args.hermes, args.root)),
+             gateway_backed=args.gateway_backed)
