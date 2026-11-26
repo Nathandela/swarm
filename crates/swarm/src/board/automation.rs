@@ -1,11 +1,12 @@
 use super::launch::{ACCENT, PLAIN, spans};
 use super::navigation::truncation;
-use super::{Action, Editor, Key, Mouse, MouseAction, form_header, line, usable};
+use super::{Action, Editor, Key, Mouse, MouseAction, form_header, line, terminal_char, usable};
 use crate::schedule::catalog::{Change, Manual, Read, Records, RunState, State};
 use crate::schedule::{
     Calendar, Job, Occurrence, Spec, automation_duration, automation_invocation,
 };
-use std::{io, path::Path, sync::mpsc};
+use std::{fmt::Write as _, io, path::Path, sync::mpsc};
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Default)]
@@ -694,18 +695,11 @@ impl Automation {
         let start = (self.selected + 1).saturating_sub(capacity);
         for (index, text) in items.iter().enumerate().skip(start).take(capacity) {
             let selected = index == self.selected;
-            let marker = if selected { "▌" } else { " " };
             let row = (index - start) as u16 + 2;
             if matches!(&self.records, Some(Records::List(_))) {
-                let style = if selected { ACCENT } else { PLAIN };
-                let text = truncation(text, cols.saturating_sub(2));
-                spans(
-                    output,
-                    row,
-                    cols,
-                    &[(style, marker.into()), (PLAIN, format!(" {text}"))],
-                );
+                write_list_row(output, row, cols, text, selected);
             } else {
+                let marker = if selected { "▌" } else { " " };
                 line(output, row, cols, "", &format!("{marker} {text}"));
             }
         }
@@ -730,6 +724,38 @@ impl Automation {
         }
         self.footer(output, cols, rows);
     }
+}
+
+fn write_list_row(output: &mut String, row: u16, cols: u16, text: &str, selected: bool) {
+    let (style, marker) = if selected {
+        (ACCENT, "▌")
+    } else {
+        (PLAIN, " ")
+    };
+    let label = list_label(text, usize::from(cols.saturating_sub(2)));
+    // The bounded label goes straight to the terminal to preserve whole graphemes.
+    let _ = write!(output, "\x1b[{row};1H{style}{marker}{PLAIN} {label}");
+}
+
+fn list_label(text: &str, columns: usize) -> String {
+    if columns == 0 {
+        return String::new();
+    }
+    let mut text: String = text.chars().map(terminal_char).collect();
+    let mut width = 0;
+    let mut ellipsis_at = 0;
+    for (start, cluster) in text.grapheme_indices(true) {
+        width += cluster.width();
+        if width > columns {
+            text.truncate(ellipsis_at);
+            text.push('…');
+            break;
+        }
+        if width < columns {
+            ellipsis_at = start + cluster.len();
+        }
+    }
+    text
 }
 
 fn list_cadence(calendar: &Calendar) -> String {
@@ -951,6 +977,21 @@ fn default_spec() -> Spec {
 #[cfg(test)]
 mod pointer_tests {
     use super::*;
+
+    #[test]
+    fn list_paint_keeps_graphemes_whole_at_the_visible_boundary() {
+        for (text, expected) in [
+            ("👩‍💻👩‍💻x", "👩‍💻…"),
+            ("🇺🇳🇺🇳x", "🇺🇳…"),
+            ("e\u{301}e\u{301}xy", "e\u{301}e\u{301}…"),
+            ("👩‍💻x", "👩‍💻x"),
+            ("a\u{1b}\u{2067}", "a  "),
+        ] {
+            let mut output = String::new();
+            write_list_row(&mut output, 2, 5, text, true);
+            assert_eq!(output, format!("\x1b[2;1H{ACCENT}▌{PLAIN} {expected}"));
+        }
+    }
 
     #[test]
     fn footer_activation_requires_the_same_position_and_viewport() {

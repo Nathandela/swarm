@@ -1943,18 +1943,21 @@ fn line(output: &mut String, row: u16, cols: u16, style: &str, text: &str) {
     );
 }
 
+fn terminal_char(ch: char) -> char {
+    if ch.is_control()
+        || matches!(ch, '\u{061c}' | '\u{200e}'..='\u{200f}' |
+        '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    {
+        ' '
+    } else {
+        ch
+    }
+}
+
 fn clip(text: &str, columns: u16) -> String {
     let mut width = 0;
     let mut clipped = String::new();
-    for ch in text.chars() {
-        let ch = if ch.is_control()
-            || matches!(ch, '\u{061c}' | '\u{200e}'..='\u{200f}' |
-            '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-        {
-            ' '
-        } else {
-            ch
-        };
+    for ch in text.chars().map(terminal_char) {
         let cells = ch.width().unwrap_or(0);
         width += cells;
         if width > usize::from(columns) {

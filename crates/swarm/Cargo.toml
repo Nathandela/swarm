@@ -15,6 +15,7 @@ libc = "0.2"
 vt100 = "0.18.1"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 hmac = "0.12"
+unicode-segmentation = "1.13.2"
 unicode-width = "0.2"
 ureq = { version = "3", features = ["json"] }
 tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
