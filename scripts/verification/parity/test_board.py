@@ -261,8 +261,11 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             edited = json.loads(cli("schedule", "show", created_id).stdout)
             assert edited["spec"]["name"] == "Revised from board"
             assert edited["revision_id"] != created["revision_id"]
-            step(b"p", b"Status")
-            assert json.loads(cli("schedule", "show", created_id).stdout)["state"] == "active"
+            step(b"p", b"Edit automation")
+            assert shown(created_id) == edited
+            step(b"\x1b[27u", b"Status")
+            resumed = cli("schedule", "resume", created_id)
+            assert resumed.returncode == 0 and shown(created_id)["state"] == "active"
             manual = {"op":"schedule_board_manual", "schedule_id":created_id,
                       "intent":{"kind":"run", "previous":None}}
             owner_request(owner_socket, "schedule-board-manual-v1", manual, discard=True)
@@ -271,9 +274,8 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
                 if not runs:
                     return None
                 single, = runs
-                if single["state"] == "queued" or any(a["state"] == "unknown" for a in single.get("attempts", [])):
-                    return None
-                return single
+                rejected = [attempt["state"] for attempt in single.get("attempts", [])]
+                return single if single["state"] == "exhausted" and rejected == ["rejected"] else None
             first = p.wait_for(recorded_without_ack, "durable outcome without manual run ACK")
             assert first["manual"] is True
             quit_board(board)
@@ -287,11 +289,7 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             step(b"a", b"Revised from board")
             offset = len(board.capture)
             step(b"\x1b[F\r", b"Status")
-            def restored_run():
-                board.drain()
-                frame = board.capture[offset:]
-                return b"Run pending" in frame or b"Run recorded" in frame
-            p.wait_for(restored_run, "durable run receipt after restart")
+            board.wait_bytes(f"Run recorded · {first['id']} · exhausted".encode(), offset)
             step(b"r", b"Run recorded")
             assert [run["id"] for run in history_for(created_id)] == [first["id"]]
             step(b"R", b"Run recorded")
@@ -323,6 +321,10 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             board.send(b"u")
             board.wait_bytes(b"daemon disconnected")
             quit_board(board)
+        except Exception:
+            board.drain()
+            print("automation fixture terminal tail:", repr(bytes(board.capture[-3200:])))
+            raise
         finally:
             board.close()
         return

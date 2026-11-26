@@ -32,11 +32,16 @@ Both tests removed their private registrations, including the Linux persistence 
 | --- | --- | --- |
 | macOS arm64 | `7d85efedc2fde7a86b25cebb3f1544c015ac4283ee6642b21e5774ff7c4e6eb1` | `4d381c3b24c09872d73e948619d4577608f9a83be561a0fcd7c16acccece34d9` |
 | Linux x86_64 | `8c447594bfbea5d52c0350398d753a35e04036c996a9f40df1c2f4065e8895d5` | `0d93dd6658fc3d7f5b1b25ee023ca873a3b7ab8b9035d8308dfbff52e64158df` |
+
 ## Enable a paused automation from the board
 
 On a paused job, `p` opens the saved definition. Escape leaves its state and revision untouched. `Ctrl+S` checks the proposed definition, provider and workspace against the current owner. If the timer is already active, the owner saves the edited revision and active state in one catalog transaction. Otherwise the board offers a separate timer confirmation. `Ctrl+D` saves the draft while paused. The CLI's explicit `schedule resume JOB` remains available.
 
 The isolated PTY witness compares the paused editor and cancel against the released Go v0.29.24 binary. The Rust arm also checks unavailable and held preflight, timer confirmation and cancel, a stale revision, and successful activation under an already armed fixture timer. An older dashboard’s direct paused-to-active owner request is refused. The affirmative confirmation arms the fixture timer, and a second installation changes the job revision during timer startup to verify the board reports that the timer is active and the save failed. No job launches in these tests. The fixture uses a disposable `launchctl` or `systemctl` and a version-only Claude stub.
+
+The macOS Rust log SHA-256 is `ca11ded5d4e31f9cf3a31c247a62945ea04e1de037341c8339694b50d3de10e8`. The paired native Linux log SHA-256 is `10a0e95e0acc068e991bda93598571cad00d7c737f57689a38ec675855ffd2c3`.
+
+The broader board fixture initially restarted the owner after it could see a row that still had work to commit. Both the prior and current binary could reopen that row as `queued` with a rejected attempt. The fixture now waits for the exact `exhausted` receipt and verifies that the same ID appears after restart. Three fresh runs passed on macOS arm64 and three on Linux x86_64, with no survivors. The raw failed reproduction SHA-256 is `85f8e3598d128f782798fcffdd1b5802c54804c3d59c28f1052e9e4e66514ee7`. The corrected log SHA-256 is `60c80c873583c2f853cb1d7ea34db6c88782feb6dfba623297dd5cf69efbf99f` on macOS and `150c7abc26a040683a56e39f795df4bbde066339473e90286e67f423aeba859b` on Linux.
 
 ```sh
 python3 -Bu scripts/verification/parity/automation_enable.py GO_V0_29_24 --reference-go
