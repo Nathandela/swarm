@@ -46,6 +46,10 @@ impl Inbox {
             || !data["outbox"].is_object()
             || !valid_boundary(&data["consent_floor"])
             || !valid_boundary(&data["history_cursor"])
+            || !valid_boundary(&data["team_history_cursor"])
+            || !valid_boundary(&data["team_consent_floor"])
+            || data["team_history_cursor"].is_null() != data["team_consent_floor"].is_null()
+            || boundary(&data["team_consent_floor"]) > boundary(&data["team_history_cursor"])
             || data["consent_floor"].is_null() != data["history_cursor"].is_null()
             || boundary(&data["consent_floor"]) > boundary(&data["history_cursor"])
         {
@@ -132,7 +136,23 @@ impl Inbox {
         route: &super::team_thread::Route,
         source: &Value,
     ) -> io::Result<Option<Value>> {
-        if !route.matches(source) || self.data["team_discussion"] != route.identity() {
+        if !source["source_channel_id"].is_null()
+            && !route.starter.as_ref().is_some_and(|(parent, _)| {
+                source["id"] == route.thread && source["source_channel_id"] == *parent
+            })
+        {
+            return Ok(None);
+        }
+        if !route.matches(source)
+            || self.data["team_discussion"] != route.identity()
+            || source["id"].as_str().is_some_and(|id| {
+                !self.has_team_source(id)
+                    && !(route.starter.is_some() && id == route.thread)
+                    && id
+                        .parse::<u64>()
+                        .is_ok_and(|id| id <= boundary(&self.data["team_consent_floor"]))
+            })
+        {
             return Ok(None);
         }
         self.admit_scoped(source, &route.guild, &route.thread, "", None, true)
@@ -165,7 +185,7 @@ impl Inbox {
         }
         let Some(body) = source["content"]
             .as_str()
-            .filter(|body| !body.trim().is_empty() && body.len() <= 16384)
+            .filter(|body| body.len() <= 16384)
         else {
             return Ok(None);
         };
@@ -195,7 +215,7 @@ impl Inbox {
             || source["author"]
                 .get("system")
                 .is_some_and(|value| value != false)
-            || !source["attachments"].as_array().is_some_and(Vec::is_empty)
+            || !source["attachments"].is_array()
             || source["message_snapshots"]
                 .as_array()
                 .is_some_and(|snapshots| !snapshots.is_empty())
@@ -207,7 +227,55 @@ impl Inbox {
         if !edited.is_null() && !edited.as_str().is_some_and(|stamp| stamp.len() <= 64) {
             return Ok(None);
         }
-        let revision = hash(&json!([actor, body, channel, guild, id, edited, "", null]))?;
+        if !self.data["messages"][id].is_null() && self.data["messages"][id]["state"] == "withdrawn"
+        {
+            return Ok(None);
+        }
+        let empty = source["attachments"].as_array().unwrap().is_empty();
+        let (body, files) = if empty {
+            if body.trim().is_empty() {
+                return Ok(None);
+            }
+            (body.to_owned(), Value::Null)
+        } else {
+            if address.is_some()
+                || super::worker::target_text(body).is_some()
+                || !guild.is_empty() && !team
+            {
+                return Ok(None);
+            }
+            let place = self
+                .file
+                .parent()
+                .ok_or_else(|| invalid("missing attachment custody directory"))?;
+            let source_channel = source["source_channel_id"]
+                .as_str()
+                .filter(|_| team)
+                .unwrap_or(channel);
+            let header = super::received_files::PROMPT_HEADER;
+            let Some(budget) = 4096_usize.checked_sub(body.len() + header.len()) else {
+                return Ok(None);
+            };
+            let old = &self.data["messages"][id];
+            let existing_revision = matches!(old["state"].as_str(), Some("accepted" | "sending"))
+                || !old.is_null() && old["edited_at"] == *edited;
+            if existing_revision
+                && (!old["received_files"].is_array()
+                    || old["text"] != format!("{body}{header}{}", old["received_files"])
+                    || !same_received_metadata(&old["received_files"], &source["attachments"]))
+            {
+                return Ok(None);
+            }
+            let captured =
+                match super::received_files::capture(place, source, source_channel, budget) {
+                    Ok(files) => files,
+                    Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Ok(None),
+                    Err(err) => return Err(err),
+                };
+            let body = format!("{body}{header}{}", json!(captured));
+            (body, json!(captured))
+        };
+        let revision = hash(&json!([actor, body, channel, guild, id, edited, "", files]))?;
         let operation = format!("da_{}", &hash(&json!([installation, id]))?[..32]);
         let mut receipt = json!({
             "operation_id": operation, "revision": revision, "text": body,
@@ -215,6 +283,9 @@ impl Inbox {
             "author": {"id": actor}, "authority": if team {"team_participant"} else {"owner_direct"},
             "supervisor_socket": supervisor, "state": "prepared", "edited_at": edited
         });
+        if !files.is_null() {
+            receipt["received_files"] = files;
+        }
         if let Some(address) = address {
             let verified = source["audience_verified_at_ms"].as_u64().ok_or_else(|| {
                 invalid("guild worker source lacks its scoped permission observation")
@@ -450,6 +521,93 @@ impl Inbox {
         Ok(())
     }
 
+    pub(super) fn thread_creation(&self) -> Option<&Value> {
+        self.data["thread_creation"]
+            .is_object()
+            .then(|| &self.data["thread_creation"])
+    }
+
+    pub(super) fn reserve_thread(&mut self, plan: Value) -> io::Result<()> {
+        if self.thread_creation().is_some() || !self.data["team_discussion"].is_null() {
+            return Err(invalid(
+                "connector already has its thread creation boundary",
+            ));
+        }
+        let mut next = self.data.clone();
+        next["thread_creation"] = plan;
+        next["thread_create_attempts"] = json!(1);
+        self.save(next)
+    }
+
+    pub(super) fn thread_retry_due(&self, now: u64) -> bool {
+        self.thread_creation().is_some()
+            && self.data["thread_create_attempts"]
+                .as_u64()
+                .is_some_and(|attempts| (1..3).contains(&attempts))
+            && self.data["thread_create_retry_at"]
+                .as_u64()
+                .is_some_and(|due| due <= now)
+    }
+
+    pub(super) fn start_thread_retry(&mut self, now: u64) -> io::Result<()> {
+        if !self.thread_retry_due(now) {
+            return Err(invalid("thread creation retry has no definitive refusal"));
+        }
+        let mut next = self.data.clone();
+        next["thread_create_attempts"] =
+            json!(self.data["thread_create_attempts"].as_u64().unwrap() + 1);
+        next["thread_create_retry_at"] = Value::Null;
+        self.save(next)
+    }
+
+    pub(super) fn thread_retry_at(&mut self, at: Option<u64>) -> io::Result<()> {
+        let mut next = self.data.clone();
+        next["thread_create_retry_at"] = json!(at);
+        self.save(next)
+    }
+
+    pub(super) fn team_gap_epoch(&self) -> u64 {
+        self.data["team_gap_epoch"].as_u64().unwrap_or_default()
+    }
+
+    pub(super) fn mark_team_gap(&mut self) -> io::Result<()> {
+        let epoch = self
+            .team_gap_epoch()
+            .checked_add(1)
+            .ok_or_else(|| invalid("guild gap epoch exhausted"))?;
+        let mut next = self.data.clone();
+        next["team_gap_epoch"] = json!(epoch);
+        self.save(next)
+    }
+
+    pub(super) fn team_cursor(&self) -> Option<&str> {
+        self.data["team_history_cursor"].as_str()
+    }
+
+    pub(super) fn checkpoint_team(&mut self, id: &str) -> io::Result<()> {
+        if !id.is_empty() && !snowflake(id) || self.data["team_discussion"].is_null() {
+            return Err(invalid("invalid linked team checkpoint"));
+        }
+        if self.team_cursor().is_none()
+            || boundary(&json!(id)) > boundary(&self.data["team_history_cursor"])
+        {
+            let mut next = self.data.clone();
+            if self.team_cursor().is_none() {
+                next["team_consent_floor"] = json!(id);
+            }
+            next["team_history_cursor"] = json!(id);
+            self.save(next)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn pending_team(&self) -> std::collections::BTreeSet<u64> {
+        self.pending_ids()
+            .into_iter()
+            .filter(|id| self.has_team_source(&id.to_string()))
+            .collect()
+    }
+
     pub(super) fn pending_ids(&self) -> Vec<u64> {
         self.data["messages"]
             .as_object()
@@ -468,6 +626,18 @@ impl Inbox {
             .filter(|row| matches!(row["state"].as_str(), Some("prepared" | "sending")))
             .count()
     }
+}
+
+fn same_received_metadata(saved: &Value, source: &Value) -> bool {
+    let (Some(saved), Some(source)) = (saved.as_array(), source.as_array()) else {
+        return false;
+    };
+    saved.len() == source.len()
+        && saved.iter().zip(source).all(|(a, b)| {
+            ["id", "filename", "size"]
+                .into_iter()
+                .all(|field| a[field] == b[field])
+        })
 }
 
 pub(super) fn valid_boundary(value: &Value) -> bool {

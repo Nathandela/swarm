@@ -179,6 +179,28 @@ impl Discord {
         Ok(Some(message))
     }
 
+    pub(super) fn create_public_thread(&self, parent: &str, message: &str, name: &str) -> Post {
+        if !snowflake(parent) || !snowflake(message) {
+            return Post::Unconfirmed;
+        }
+        self.post_json(
+            &format!("{API}/channels/{parent}/messages/{message}/threads"),
+            &json!({"name":name}),
+        )
+    }
+
+    fn post_json(&self, url: &str, body: &Value) -> Post {
+        let response = self
+            .agent
+            .post(url)
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .header("Authorization", &self.authorization)
+            .send_json(body);
+        post_outcome(response)
+    }
+
     pub(super) fn post_publication(
         &self,
         cfg: &Config,
@@ -221,33 +243,7 @@ impl Discord {
                 )
                 .send(data.as_slice())
         };
-        let mut response = match response {
-            Ok(response) => response,
-            Err(_) => return Post::Unconfirmed,
-        };
-        if response.status().as_u16() == 429 {
-            let millis = response
-                .headers()
-                .get("retry-after")
-                .and_then(|header| header.to_str().ok())
-                .and_then(|value| value.parse::<f64>().ok())
-                .filter(|secs| secs.is_finite() && *secs > 0.0)
-                .map(|secs| (secs * 1000.0).ceil() as u64)
-                .unwrap_or(60_000);
-            return Post::RateLimited(millis);
-        }
-        if !response.status().is_success() {
-            return Post::Unconfirmed;
-        }
-        match response
-            .body_mut()
-            .with_config()
-            .limit(MAX_RESPONSE)
-            .read_json::<Value>()
-        {
-            Ok(message) => Post::Acknowledged(message),
-            Err(_) => Post::Unconfirmed,
-        }
+        post_outcome(response)
     }
 
     pub(super) fn verify_dm(
@@ -315,6 +311,50 @@ fn file_multipart(
     Ok((boundary, body))
 }
 
+fn post_outcome(response: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Post {
+    let mut response = match response {
+        Ok(response) => response,
+        Err(_) => return Post::Unconfirmed,
+    };
+    if response.status().as_u16() == 429 {
+        let header = response
+            .headers()
+            .get("retry-after")
+            .and_then(|header| header.to_str().ok())
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|secs| secs.is_finite() && *secs > 0.0)
+            .map(|secs| (secs * 1000.0).ceil() as u64)
+            .unwrap_or_default();
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(MAX_RESPONSE)
+            .read_json::<Value>()
+            .ok()
+            .and_then(|body| body["retry_after"].as_f64())
+            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+            .map(|seconds| (seconds * 1000.0).ceil() as u64)
+            .unwrap_or_default();
+        return Post::RateLimited(if header.max(body) > 0 {
+            header.max(body)
+        } else {
+            60_000
+        });
+    }
+    if !response.status().is_success() {
+        return Post::Unconfirmed;
+    }
+    match response
+        .body_mut()
+        .with_config()
+        .limit(MAX_RESPONSE)
+        .read_json::<Value>()
+    {
+        Ok(message) => Post::Acknowledged(message),
+        Err(_) => Post::Unconfirmed,
+    }
+}
+
 fn personal_channel<'a>(dm: &'a Value, owner: &str) -> Option<&'a str> {
     let id = dm["id"].as_str().filter(|id| snowflake(id))?;
     let recipients = dm["recipients"].as_array()?;
@@ -335,6 +375,109 @@ fn personal_channel<'a>(dm: &'a Value, owner: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires local openssl and Node; uses only loopback TLS"]
+    fn loopback_tls_distinguishes_definitive_throttle_from_lost_response() {
+        use std::io::{BufRead, BufReader};
+        use std::process::{Child, Command, Stdio};
+        use ureq::tls::{Certificate, RootCerts, TlsConfig};
+        struct Stop(Child);
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "swarm-rate-tls-{}",
+            crate::supervisor::runtime::random_id().unwrap()
+        ));
+        crate::supervisor::runtime::private_dir(&dir).unwrap();
+        let status = Command::new("openssl")
+            .current_dir(&dir)
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-days",
+                "1",
+                "-subj",
+                "/CN=127.0.0.1",
+                "-addext",
+                "subjectAltName=IP:127.0.0.1",
+                "-addext",
+                "basicConstraints=critical,CA:FALSE",
+                "-keyout",
+                "key.pem",
+                "-out",
+                "cert.pem",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let js = r#"const https=require('node:https'),fs=require('node:fs'); let n=0;
+const server=https.createServer({key:fs.readFileSync('key.pem'),cert:fs.readFileSync('cert.pem')},(req,res)=>{
+  if(req.method==='GET'&&req.url==='/attachments/2/22/data.csv'&&req.headers.authorization===undefined) {
+    res.writeHead(200,{'content-length':'4'}).end('a,b\n'); return;
+  }
+  if(req.method!=='POST'||req.url!=='/channels/2/messages/9/threads'||req.headers.authorization!=='Bot fixture') {
+    res.writeHead(400).end();return;
+  }
+  req.resume();
+  req.on('end',()=>{ if(++n===1){
+    res.writeHead(429,{'retry-after':'0.05','content-type':'application/json'}).end('{"retry_after":0.2}');
+  }else req.socket.destroy(); });
+});
+server.listen(0,'127.0.0.1',()=>console.log(server.address().port));"#;
+        let child = Command::new("node")
+            .current_dir(&dir)
+            .args(["-e", js])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut child = Stop(child);
+        let mut port = String::new();
+        BufReader::new(child.0.stdout.take().unwrap())
+            .read_line(&mut port)
+            .unwrap();
+        let port = port.trim().parse::<u16>().unwrap();
+        let certificate = std::fs::read(dir.join("cert.pem")).unwrap();
+        let roots = RootCerts::new_with_certs(&[Certificate::from_pem(&certificate).unwrap()]);
+        let tls = TlsConfig::builder().root_certs(roots).build();
+        let api = Discord {
+            authorization: "Bot fixture".into(),
+            agent: ureq::Agent::config_builder()
+                .https_only(true)
+                .proxy(None)
+                .max_redirects(0)
+                .tls_config(tls)
+                .timeout_global(Some(Duration::from_secs(2)))
+                .build()
+                .new_agent(),
+        };
+        let url = format!("https://127.0.0.1:{port}/channels/2/messages/9/threads");
+        assert!(matches!(
+            api.post_json(&url, &json!({"name":"fixture"})),
+            Post::RateLimited(200)
+        ));
+        assert!(matches!(
+            api.post_json(&url, &json!({"name":"fixture"})),
+            Post::Unconfirmed
+        ));
+        let attachment = format!("https://127.0.0.1:{port}/attachments/2/22/data.csv");
+        assert_eq!(
+            super::super::received_files::fetch(&api.agent, &attachment, 4).unwrap(),
+            b"a,b\n"
+        );
+        drop(child);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn attachments_form_uses_one_correlated_payload_and_exact_parts() {

@@ -8,9 +8,18 @@ use serde_json::{Value, json};
 use std::path::Path;
 use std::{fs::File, io};
 
-fn owned(supervisor: &Path, socket: &str) -> io::Result<(Place, Config)> {
-    let place = Place::for_supervisor(supervisor)?;
-    let config = place.load()?;
+fn owned(
+    supervisor: &Path,
+    socket: &str,
+    installation: Option<&str>,
+) -> io::Result<(Place, Config)> {
+    let (place, config) = if let Some(installation) = installation {
+        Place::for_installation(supervisor, installation)?
+    } else {
+        let place = Place::for_supervisor(supervisor)?;
+        let config = place.load()?;
+        (place, config)
+    };
     place.ensure_owned(&config)?;
     if !config.enabled()
         || config.text("mode") != "personal" && !super::guild::enabled(&config)
@@ -22,12 +31,34 @@ fn owned(supervisor: &Path, socket: &str) -> io::Result<(Place, Config)> {
 }
 
 pub(crate) fn worker_input_installation(supervisor: &Path, socket: &str) -> Option<String> {
-    let (_, config) = owned(supervisor, socket).ok()?;
+    let (_, config) = owned(supervisor, socket, None).ok()?;
     Some(config.text("installation_id").into())
 }
 
+pub(crate) fn worker_input_available(supervisor: &Path, socket: &str) -> bool {
+    Place::enrolled(supervisor).is_ok_and(|places| {
+        places.into_iter().any(|(_, cfg)| {
+            cfg.enabled()
+                && cfg.text("daemon_socket") == socket
+                && (cfg.text("mode") == "personal" || super::guild::enabled(&cfg))
+        })
+    })
+}
+
+pub(crate) fn worker_installation_enrolled(
+    supervisor: &Path,
+    socket: &str,
+    installation: &str,
+) -> bool {
+    owned(supervisor, socket, Some(installation)).is_ok()
+}
+
 pub(crate) fn worker_input_guild_available(supervisor: &Path, socket: &str) -> bool {
-    owned(supervisor, socket).is_ok_and(|(_, cfg)| super::guild::enabled(&cfg))
+    Place::enrolled(supervisor).is_ok_and(|places| {
+        places.into_iter().any(|(_, cfg)| {
+            cfg.enabled() && cfg.text("daemon_socket") == socket && super::guild::enabled(&cfg)
+        })
+    })
 }
 
 /// Called both at admission and immediately before the provider effect.
@@ -39,7 +70,7 @@ pub(crate) fn verify_connector_worker_input(
     operation: &str,
     composer: &Value,
 ) -> io::Result<()> {
-    let (place, config) = owned(supervisor, socket)?;
+    let (place, config) = owned(supervisor, socket, Some(installation))?;
     verify(
         &place,
         &config,
@@ -59,7 +90,7 @@ pub(crate) fn lock_connector_worker_input(
     operation: &str,
     composer: &Value,
 ) -> io::Result<(File, File, File)> {
-    let place = Place::for_supervisor(supervisor)?;
+    let (place, _) = owned(supervisor, socket, Some(installation))?;
     // Match configure/disconnect order, then serialize worker ledger changes.
     let (supervisor_lock, connector_lock) = place.lock()?;
     let ledger_lock = lock_ledger(&place.dir)?;

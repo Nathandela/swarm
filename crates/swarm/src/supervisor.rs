@@ -852,13 +852,10 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         );
     }
     let manager_available = state.stopped_go.is_none()
-        && crate::discord::native_manager_enrollment().is_ok_and(|scope| {
-            scope["supervisor_socket"] == state.socket.to_string_lossy().as_ref()
-        });
+        && crate::discord::native_manager_available(state.socket.to_string_lossy().as_ref());
     let worker_origin_available = state.stopped_go.is_none()
         && state.root.parent().is_some_and(|root| {
-            crate::discord::worker_input_installation(root, state.socket.to_string_lossy().as_ref())
-                .is_some()
+            crate::discord::worker_input_available(root, state.socket.to_string_lossy().as_ref())
         });
     let guild_worker_available = state.stopped_go.is_none()
         && state.root.parent().is_some_and(|root| {

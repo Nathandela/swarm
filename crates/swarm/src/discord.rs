@@ -1,7 +1,7 @@
 mod worker_input;
 pub(crate) use worker_input::{
-    lock_connector_worker_input, verify_connector_worker_input, worker_input_guild_available,
-    worker_input_installation,
+    lock_connector_worker_input, verify_connector_worker_input, worker_input_available,
+    worker_input_guild_available, worker_input_installation, worker_installation_enrolled,
 };
 mod call_live;
 
@@ -25,9 +25,13 @@ mod mail_wake;
 mod manager;
 pub(crate) mod provenance;
 mod receipt;
+mod received_files;
+
 mod rest;
 mod service;
+mod team_history;
 mod team_thread;
+mod thread_creation;
 mod worker;
 mod worker_proof;
 
@@ -69,12 +73,33 @@ pub(crate) fn manager_nonce(
 }
 
 /// Re-read the active, owned personal enrollment at the supervisor admission boundary.
-pub(crate) fn native_manager_enrollment() -> io::Result<Value> {
-    let place = Place::resolve(None)?;
-    let cfg = place.load()?;
-    place.ensure_owned(&cfg)?;
+pub(crate) fn native_manager_enrollment(launch: &Value) -> io::Result<Value> {
+    let auth = Path::new(ipc::field(&launch["manager"], "auth_file"));
+    let directory = auth
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| invalid("missing enrolled manager directory"))?;
+    let supervisor = ipc::state_path()?;
+    let (place, cfg) = Place::enrolled(&supervisor)?
+        .into_iter()
+        .find(|(place, _)| std::fs::canonicalize(&place.dir).ok().as_deref() == Some(directory))
+        .ok_or_else(|| invalid("manager launch is outside enrolled Discord directories"))?;
+    manager_scope(&place, &cfg)
+}
+
+pub(crate) fn native_manager_available(socket: &str) -> bool {
+    ipc::state_path()
+        .and_then(|root| Place::enrolled(&root))
+        .is_ok_and(|places| {
+            places.into_iter().any(|(place, cfg)| {
+                cfg.text("daemon_socket") == socket && manager_scope(&place, &cfg).is_ok()
+            })
+        })
+}
+
+fn manager_scope(place: &Place, cfg: &Config) -> io::Result<Value> {
     if !cfg.enabled()
-        || cfg.text("mode") != "personal" && team_thread::Route::configured(&cfg)?.is_none()
+        || cfg.text("mode") != "personal" && team_thread::Route::configured(cfg)?.is_none()
         || cfg.text("project_access") == "vm"
         || cfg.text("manager_cli") != "codex"
     {
@@ -82,7 +107,7 @@ pub(crate) fn native_manager_enrollment() -> io::Result<Value> {
             "qualified Rust manager requires an active enrolled Codex discussion",
         ));
     }
-    let owner = manager::Manager::new(&cfg)?;
+    let owner = manager::Manager::new(cfg)?;
     let bridge = std::fs::canonicalize(&place.dir)?.join("manager-v1");
     let mut scope = json!({"launch":owner.launch_request(&bridge.join("bridge.sock"), &bridge.join("bridge.auth")),
         "installation_id":cfg.text("installation_id"),"application_id":cfg.text("application_id"),
@@ -196,6 +221,13 @@ pub(crate) fn verify_connector_input(
         return Err(invalid(
             "semantic request does not match the exact connector cutover",
         ));
+    }
+    if !source["received_files"].is_null() {
+        let place = Path::new(ipc::field(&scope["launch"]["manager"], "auth_file"))
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| invalid("missing received attachment custody"))?;
+        received_files::verify_receipt(place, &source["received_files"])?;
     }
     if voice {
         let place = Path::new(

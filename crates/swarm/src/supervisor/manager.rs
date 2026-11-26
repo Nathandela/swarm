@@ -45,7 +45,7 @@ pub(crate) fn retirement_id(request: &Value) -> io::Result<String> {
 }
 
 pub(super) fn launch_scope(state: &State, launch: &Value) -> io::Result<Value> {
-    let mut scope = crate::discord::native_manager_enrollment()?;
+    let mut scope = crate::discord::native_manager_enrollment(launch)?;
     if scope["launch"] != *launch
         || scope["supervisor_socket"] != state.socket.to_string_lossy().as_ref()
     {

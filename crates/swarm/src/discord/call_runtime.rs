@@ -156,6 +156,7 @@ impl Driver {
                                         Some(
                                             "CHANNEL_UPDATE"
                                                 | "CHANNEL_DELETE"
+                                                | "THREAD_CREATE"
                                                 | "THREAD_UPDATE"
                                                 | "THREAD_DELETE"
                                                 | "THREAD_MEMBERS_UPDATE"

@@ -9,7 +9,7 @@ impl Session {
         if self.manager.is_null() || !self.is_live() {
             return Err(refuse("session is not an active enrolled manager"));
         }
-        let current = crate::discord::native_manager_enrollment()?;
+        let current = crate::discord::native_manager_enrollment(&self.manager["launch"])?;
         for key in [
             "launch",
             "installation_id",

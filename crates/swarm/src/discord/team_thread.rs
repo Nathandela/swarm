@@ -13,6 +13,7 @@ use std::io;
 pub(super) struct Route {
     pub(super) guild: String,
     pub(super) thread: String,
+    pub(super) starter: Option<(String, String)>,
 }
 
 impl Route {
@@ -28,7 +29,9 @@ impl Route {
         };
         if cfg.text("mode") != "teammate"
             || guild == thread
-            || !route.as_object().is_some_and(|fields| fields.len() == 2)
+            || !route
+                .as_object()
+                .is_some_and(|fields| matches!(fields.len(), 2 | 4))
             || !cfg.0["guild_ids"]
                 .as_array()
                 .is_some_and(|ids| ids.iter().any(|id| id == guild))
@@ -37,9 +40,25 @@ impl Route {
                 "linked team discussion is outside the installation",
             ));
         }
+        let starter = match (
+            route["starter_channel_id"].as_str(),
+            route["starter_revision"].as_str(),
+        ) {
+            (None, None) if route.as_object().is_some_and(|fields| fields.len() == 2) => None,
+            (Some(parent), Some(revision))
+                if snowflake(parent)
+                    && parent != thread
+                    && revision.len() == 64
+                    && revision.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+            {
+                Some((parent.into(), revision.into()))
+            }
+            _ => return Err(invalid("invalid linked team starter")),
+        };
         Ok(Some(Self {
             guild: guild.into(),
             thread: thread.into(),
+            starter,
         }))
     }
 
@@ -69,6 +88,10 @@ impl Route {
         if thread["id"] != self.thread
             || thread["guild_id"] != self.guild
             || !matches!(thread["type"].as_u64(), Some(10..=12))
+            || self
+                .starter
+                .as_ref()
+                .is_some_and(|(expected, _)| expected != parent)
             || thread["thread_metadata"]["archived"] != false
             || thread["thread_metadata"]["locked"] != false
             || cfg.0["channel_ids"].as_array().is_some_and(|ids| {
@@ -130,6 +153,37 @@ pub(super) struct ThreadAudience<'a> {
     pub(super) api: &'a Discord,
 }
 
+impl ThreadAudience<'_> {
+    pub(super) fn history(&self, cfg: &Config, before: &str) -> io::Result<Vec<Value>> {
+        self.verify(cfg)?;
+        let suffix = if before.is_empty() {
+            String::new()
+        } else if snowflake(before) {
+            format!("&before={before}")
+        } else {
+            return Err(invalid("invalid thread history cursor"));
+        };
+        let data = self.api.request(
+            &format!("/channels/{}/messages?limit=100{suffix}", self.route.thread),
+            None,
+        )?;
+        let mut rows = data
+            .as_array()
+            .ok_or_else(|| invalid("invalid thread history page"))?
+            .clone();
+        for row in &mut rows {
+            if row["channel_id"] != self.route.thread
+                || !row["guild_id"].is_null() && row["guild_id"] != self.route.guild
+                || !row["id"].as_str().is_some_and(snowflake)
+            {
+                return Err(invalid("thread history returned another audience"));
+            }
+            row["guild_id"] = json!(self.route.guild);
+        }
+        Ok(rows)
+    }
+}
+
 impl Audience for ThreadAudience<'_> {
     fn current(&self, cfg: &Config, id: &str) -> io::Result<Option<Value>> {
         if !snowflake(id) {
@@ -139,15 +193,27 @@ impl Audience for ThreadAudience<'_> {
         if !self.route.verify(cfg, lookup, &[])? {
             return Ok(None);
         }
-        let Some(mut value) = lookup(&format!("/channels/{}/messages/{id}", self.route.thread))?
-        else {
+        let starter = self
+            .route
+            .starter
+            .as_ref()
+            .filter(|_| id == self.route.thread);
+        let source = starter.map_or(self.route.thread.as_str(), |(parent, _)| parent);
+        let Some(mut value) = lookup(&format!("/channels/{source}/messages/{id}"))? else {
             return Ok(None);
         };
         if value["id"] != id
-            || value["channel_id"] != self.route.thread
+            || value["channel_id"] != source
             || !value["guild_id"].is_null() && value["guild_id"] != self.route.guild
+            || starter.is_some_and(|(_, expected)| {
+                super::thread_creation::revision(&value).ok().as_ref() != Some(expected)
+            })
         {
             return Ok(None);
+        }
+        if starter.is_some() {
+            value["source_channel_id"] = json!(source);
+            value["channel_id"] = json!(self.route.thread);
         }
         let Some(actor) = value["author"]["id"]
             .as_str()
@@ -193,7 +259,10 @@ pub(super) fn explicit(cfg: &Config, source: &Value) -> bool {
                 .iter()
                 .any(|prefix| {
                     text.trim_start().strip_prefix(prefix).is_some_and(|tail| {
-                        !tail.trim().is_empty()
+                        (!tail.trim().is_empty()
+                            || source["attachments"]
+                                .as_array()
+                                .is_some_and(|files| !files.is_empty()))
                             && !matches!(
                                 tail.trim(),
                                 "voice join" | "voice consent" | "voice leave"
