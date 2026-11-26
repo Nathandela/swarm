@@ -226,3 +226,26 @@ func (s *Store) FixtureOutputPhases(d TeammateDiscussion) ([]string, error) {
 	})
 	return phases, err
 }
+
+// FixtureVerifyQueuedOwner checks the original connector's final source guard.
+func (s *Store) FixtureVerifyQueuedOwner(cfg Config, d TeammateDiscussion, origin schema.MessageOrigin) error {
+	if origin.Kind != "owner_direct" || origin.InstallationID != cfg.InstallationID ||
+		origin.DiscussionID != d.ID || origin.ChannelID != cfg.DMChannelID || origin.GuildID != "" ||
+		origin.ActorID != cfg.OwnerID || origin.RequesterID != origin.ActorID {
+		return ErrConflict
+	}
+	return s.db.View(func(tx *bolt.Tx) error {
+		var guard teammateIngressGuard
+		if err := teammateGet(tx.Bucket([]byte(teammateIngressGuardBucket)),
+			teammateKey(cfg.InstallationID, origin.MessageID), &guard); err != nil {
+			return err
+		}
+		if guard.Disposition != StateSent || guard.ActorID != origin.ActorID || guard.OperationID != origin.RequestID ||
+			guard.Revision != origin.Revision || guard.DiscussionID != origin.DiscussionID ||
+			guard.Route.ChannelID != origin.ChannelID || guard.Route.MessageID != origin.MessageID ||
+			guard.Route.GuildID != "" || guard.LastChange != "" {
+			return ErrConflict
+		}
+		return nil
+	})
+}

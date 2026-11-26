@@ -5,13 +5,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/workermail"
+	bolt "go.etcd.io/bbolt"
 )
 
 func FixturePersonalIngress(dir, conversation, session string, origin schema.MessageOrigin, phase, project string) error {
@@ -252,4 +255,61 @@ func FixtureValidateStagedFileWake(dir, settings string) ([][]byte, error) {
 		return nil, err
 	}
 	return d.ReadPublicationFiles(ctx, output)
+}
+
+// FixtureQueuedFileWitness reads an actual daemon-authenticated worker note before
+// the original Go voice scheduler ingests it.
+func FixtureQueuedFileWitness(dir, settings, message string) (schema.MessageOrigin, workermail.Note, [][]byte, error) {
+	var none schema.MessageOrigin
+	db, err := bolt.Open(filepath.Join(dir, "voice.db"), 0, &bolt.Options{
+		ReadOnly: true, Timeout: time.Second, OpenFile: openInventoryLedger,
+	})
+	if err != nil {
+		return none, workermail.Note{}, nil, err
+	}
+	defer db.Close()
+	var st State
+	if err := db.View(func(tx *bolt.Tx) error {
+		var err error
+		st, err = readState(tx)
+		return err
+	}); err != nil {
+		return none, workermail.Note{}, nil, err
+	}
+	conversation := st.CurrentConversation
+	binding := st.Conversations[conversation].Binding
+	_, manager, found := strings.Cut(binding.SessionID, "/")
+	if !binding.NativeCLI || !found || manager == "" {
+		return none, workermail.Note{}, nil, ErrStale
+	}
+	notes, err := workermail.Pending(settings, conversation)
+	if err != nil || len(notes) != 1 {
+		return none, workermail.Note{}, nil, errors.Join(ErrNotFound, err)
+	}
+	note := notes[0]
+	if note.Kind != "complete" || note.State != "queued" || len(note.Files) != 1 || note.Parent != manager ||
+		note.Instance == "" || !strings.HasPrefix(note.Attempt, "vm-child-") || note.ParentInputHash == "" {
+		return none, note, nil, ErrStale
+	}
+	var origin *schema.MessageOrigin
+	for _, parent := range st.Admissions {
+		if parent.ConversationID == conversation && parent.Origin != nil &&
+			parent.Origin.MessageID == message && parent.Origin.Kind == "owner_direct" &&
+			parent.SourceCutover && parent.Project == note.Project &&
+			parent.NativeInputID != "" && hashBytes([]byte(parent.NativeInputID)) == note.ParentInputHash {
+			if origin != nil {
+				return none, note, nil, ErrConflict
+			}
+			origin = parent.Origin
+		}
+	}
+	if origin == nil {
+		return none, note, nil, ErrNotFound
+	}
+	wantEvent := "worker-message-" + hashValue([]string{note.Session, note.Instance, note.Attempt, note.ID})
+	if _, exists := st.Events[key(conversation, wantEvent)]; exists {
+		return none, note, nil, ErrConflict
+	}
+	data, err := workermail.ReadFile(settings, note.Binding, note.ID, note.Files[0].ID)
+	return *origin, note, [][]byte{data}, err
 }

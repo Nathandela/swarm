@@ -233,6 +233,9 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
     worker_file = project / "completion.csv"
     worker_file.write_bytes(original_bytes)
     stop = base / "stop-original-controller"
+    parent_fence = base / "original-parent-admitted"
+    pending_ready = threading.Event()
+    allow_pending = threading.Event()
     waiting = threading.Event()
     release = threading.Event()
     worker_release = threading.Event()
@@ -304,6 +307,9 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
             if is_worker:
                 worker_release.wait(timeout=90)
             return None
+        if mode == "pending-file" and is_worker:
+            pending_ready.set()
+            assert allow_pending.wait(timeout=90)
         field = "cmd" if shell == "exec_command" else "command"
         return None, shell, {field: command}
 
@@ -320,19 +326,42 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
             try:
                 initial = activate_original(fixture, env, place)
                 assert initial["native_cli"] is True
-                ctl = subprocess.Popen([fixture, "vm-controller-run", place, "original-room", "701", stop],
+                ctl = subprocess.Popen([fixture, "vm-controller-run", place, "original-room", "701", stop, parent_fence],
                                        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 try:
+                    started = pending_ready if mode == "pending-file" else waiting
                     deadline = time.monotonic() + 80
-                    while not waiting.wait(0.2) and ctl.poll() is None:
+                    while not started.wait(0.2) and ctl.poll() is None:
                         if time.monotonic() > deadline:
                             break
-                    assert waiting.is_set(), (selected, model.history, listed(env),
+                    assert started.is_set(), (selected, model.history, listed(env),
                                               tool_outputs[-4:],
                                               ctl.stderr.read() if ctl.poll() is not None else "running")
+                    await_value(lambda: parent_fence.exists() or ctl.poll() is not None)
+                    assert ctl.poll() is None, ctl.communicate()
                     stop.touch()
                     _stdout, stderr = ctl.communicate(timeout=15)
                     assert ctl.returncode == 0, stderr
+                    if mode == "pending-file":
+                        ledger, = (place / "discussions").glob("*/voice.db")
+                        original_ledgers = ((place / "discord.db").read_bytes(),ledger.read_bytes())
+                        allow_pending.set()
+                        await_value(lambda: any('"state":"queued"' in str(item) for item in tool_outputs))
+                        worker_file.write_bytes(b"fixture,value\nchanged,2\n")
+                        witness = json.loads(run(fixture,env,"vm-verify-queued-file",place,"original-room",ledger.parent,"701"))
+                        note = witness["Note"]
+                        assert note["State"] == "queued" and note["Kind"] == "complete"
+                        assert note["Discussion"] == initial["conversation_id"] and note["Project"] == str(project)
+                        row, = [row for row in listed(env) if row["id"] == note["Session"]]
+                        assert row["worker_instance"] == note["Instance"]
+                        assert row["worker_discussion"] == note["Discussion"]
+                        assert row["worker_attempt"] == note["Attempt"]
+                        assert row["worker_parent_input_hash"] == note["ParentInputHash"]
+                        assert row["spawned_from"] == note["Parent"]
+                        assert list(map(base64.b64decode,witness["Files"])) == [original_bytes]
+                        assert ((place / "discord.db").read_bytes(),ledger.read_bytes()) == original_ledgers
+                        assert posts == []
+                        return
                     assert "completion.csv" in capture[0]
                     assert len([row for row in listed(env) if row.get("role") == "manager"]) == 1
                     worker_file.write_bytes(b"fixture,value\nchanged,2\n")
@@ -437,6 +466,7 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                 finally:
                     release.set()
                     worker_release.set()
+                    allow_pending.set()
                     if ctl.poll() is None:
                         ctl.terminate()
                         _stdout, stderr = ctl.communicate(timeout=10)
@@ -456,10 +486,13 @@ if __name__ == "__main__":
     go, fixture, codex, rust_test = (str(Path(arg).resolve(strict=True)) for arg in sys.argv[1:])
     if modes := os.environ.get("SWARM_DISCORD_ADMITTED_WAKE"):
         for mode in ("prepared", "sent", "uncertain", "revoked") if modes == "1" else modes.split(","):
-            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed", "ordinary-replace")
+            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed", "ordinary-replace", "pending-file")
             with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
                 admit_vm_worker_wake(go, fixture, codex, rust_test, Path(directory), mode)
-            print(f"PASS original Go admitted native worker wake fixture ({mode})")
+            if mode == "pending-file":
+                print("PASS original Go queued native file and exact owner actor fixture")
+            else:
+                print(f"PASS original Go admitted native worker wake fixture ({mode})")
         sys.exit(0)
     if os.environ.get("SWARM_DISCORD_CONTINUED_VM_TEXT"):
         with tempfile.TemporaryDirectory(prefix="dn-vm-text-", dir="/tmp") as directory:

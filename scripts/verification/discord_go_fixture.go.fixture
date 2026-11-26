@@ -167,7 +167,7 @@ func main() {
 		return
 	}
 	open := discord.OpenStore
-	if action == "route" || action == "read" || action == "traffic-read" || action == "audience-read" || action == "publication-read" || action == "publication-phases" || action == "publication-payload" {
+	if action == "route" || action == "read" || action == "traffic-read" || action == "audience-read" || action == "publication-read" || action == "publication-phases" || action == "publication-payload" || action == "vm-verify-queued-file" {
 		open = discord.FixtureOpenRead
 	}
 	store, err := open(dir)
@@ -266,6 +266,9 @@ func main() {
 		settledParent := false
 		for ctx.Err() == nil {
 			if _, err := os.Stat(os.Args[5]); err == nil {
+				if !settledParent {
+					panic("the original owner admission did not settle before handoff")
+				}
 				return
 			}
 			err = manager.Sync(ctx, row, reader, func(output discord.TeammatePublication) error {
@@ -280,11 +283,31 @@ func main() {
 				if phase == discord.TeammateAdmissionCutover {
 					check(store.FixtureSettleAdmittedParent(row, source))
 					settledParent = true
+					if len(os.Args) > 6 {
+						check(os.WriteFile(os.Args[6], []byte("ready"), 0600))
+					}
 				}
 			}
 			time.Sleep(40 * time.Millisecond)
 		}
 		check(ctx.Err())
+	case "vm-verify-queued-file":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
+		check(err)
+		origin, note, payload, err := voice.FixtureQueuedFileWitness(os.Args[4], cfg.Supervisor.StateDir, os.Args[5])
+		check(err)
+		check(store.FixtureVerifyQueuedOwner(cfg, row, origin))
+		forged := origin
+		forged.ActorID = "300"
+		if err := store.FixtureVerifyQueuedOwner(cfg, row, forged); err == nil {
+			panic("foreign actor qualified for the queued file")
+		}
+		check(json.NewEncoder(os.Stdout).Encode(struct {
+			Note  workermail.Note
+			Files [][]byte
+		}{note, payload}))
 	case "vm-resume-publication":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)
