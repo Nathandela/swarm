@@ -300,6 +300,18 @@ def inspect_archive(data, match):
     return files, compat
 
 
+def install_members(prefix, files):
+    for name, content in files.items():
+        parent = prefix
+        for component in PurePosixPath(name).parts[:-1]:
+            parent = parent / component
+            parent.mkdir(mode=0o700, exist_ok=True)
+        path = prefix / name
+        with path.open("xb") as handle:
+            handle.write(content)
+        path.chmod(member_mode(name))
+
+
 def verify(args):
     checksums, entries = artifact_set(args.dist)
     sig = base64.b64decode((args.dist / "checksums.txt.sig").read_bytes().strip(), validate=True)
@@ -323,12 +335,7 @@ def verify(args):
         require(args.prefix.parent.is_dir(), "create the install destination's parent first")
         args.prefix.mkdir(mode=0o700)
         try:
-            for name, content in files.items():
-                path = args.prefix / name
-                path.parent.mkdir(exist_ok=True, parents=True)
-                with path.open("xb") as handle:
-                    handle.write(content)
-                path.chmod(member_mode(name))
+            install_members(args.prefix, files)
             exe = args.prefix / "swarm"
             require(json.loads(output(exe, "release-info")) == compat, "installed CLI differs from its compatibility card")
             if args.check_media:
