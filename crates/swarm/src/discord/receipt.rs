@@ -539,14 +539,19 @@ impl Inbox {
         self.save(next)
     }
 
-    pub(super) fn thread_retry_due(&self, now: u64) -> bool {
+    pub(super) fn thread_throttle_due(&self, now: u64) -> bool {
         self.thread_creation().is_some()
-            && self.data["thread_create_attempts"]
-                .as_u64()
-                .is_some_and(|attempts| (1..3).contains(&attempts))
             && self.data["thread_create_retry_at"]
                 .as_u64()
                 .is_some_and(|due| due <= now)
+    }
+
+    pub(super) fn thread_retry_due(&self, now: u64) -> bool {
+        self.thread_throttle_due(now)
+            && self.data["thread_create_retry_allowed"] != false
+            && self.data["thread_create_attempts"]
+                .as_u64()
+                .is_some_and(|attempts| (1..3).contains(&attempts))
     }
 
     pub(super) fn start_thread_retry(&mut self, now: u64) -> io::Result<()> {
@@ -557,6 +562,32 @@ impl Inbox {
         next["thread_create_attempts"] =
             json!(self.data["thread_create_attempts"].as_u64().unwrap() + 1);
         next["thread_create_retry_at"] = Value::Null;
+        next["thread_create_retry_allowed"] = Value::Null;
+        self.save(next)
+    }
+
+    pub(super) fn retire_throttled_thread(&mut self, plan: &Value, now: u64) -> io::Result<()> {
+        if self.thread_creation() != Some(plan) || !self.thread_throttle_due(now) {
+            return Err(invalid(
+                "cannot retire a thread creation with an unresolved effect",
+            ));
+        }
+        let mut next = self.data.clone();
+        next["thread_creation"] = Value::Null;
+        next["thread_create_attempts"] = Value::Null;
+        next["thread_create_retry_at"] = Value::Null;
+        next["thread_create_retry_allowed"] = Value::Null;
+        self.save(next)
+    }
+
+    pub(super) fn record_thread_throttle(
+        &mut self,
+        at: u64,
+        retry_allowed: bool,
+    ) -> io::Result<()> {
+        let mut next = self.data.clone();
+        next["thread_create_retry_at"] = json!(at);
+        next["thread_create_retry_allowed"] = json!(retry_allowed);
         self.save(next)
     }
 
