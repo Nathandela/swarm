@@ -297,9 +297,17 @@ func main() {
 				if phase == discord.TeammateAdmissionCutover {
 					check(store.FixtureSettleAdmittedParent(row, source))
 					settledParent = true
-					if len(os.Args) > 6 {
+					if len(os.Args) == 7 {
 						check(os.WriteFile(os.Args[6], []byte("ready"), 0600))
 					}
+				}
+			}
+			if settledParent && len(os.Args) > 7 && os.Args[7] == "completed-parent" {
+				done, err := manager.FixtureNativeParentSettled(row, source)
+				check(err)
+				if done {
+					check(os.WriteFile(os.Args[6], []byte("ready"), 0600))
+					return
 				}
 			}
 			time.Sleep(40 * time.Millisecond)

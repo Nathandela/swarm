@@ -511,6 +511,46 @@ fn open_original_writer(root: &Path, identity: (u64, u64)) -> io::Result<(File, 
     Ok((pin, db))
 }
 
+pub(crate) fn verify_original_ingested_file(
+    root: &Path,
+    queued: &Value,
+    expected_identity: (u64, u64),
+) -> io::Result<()> {
+    let path = open_path(root, false)?;
+    let (pin, db) = crate::checkout::state::receipts::open_bolt(&path, 256 << 20)?;
+    let metadata = pin.metadata()?;
+    if (metadata.dev(), metadata.ino()) != expected_identity {
+        return Err(io_error(
+            "the original worker mailbox changed before native input",
+        ));
+    }
+    let id = queued["ID"].as_str().ok_or_else(absent)?;
+    let key = key(queued, id)?;
+    let tx = db.begin().map_err(io_error)?;
+    let raw: Value = serde_json::from_slice(
+        tx.bucket(b"notes")
+            .ok_or_else(absent)?
+            .get(&key)
+            .ok_or_else(absent)?,
+    )?;
+    let actual = with_files(&tx, &key, raw.clone())?;
+    let mut expected = queued.clone();
+    expected["State"] = json!("ingested");
+    if actual != expected {
+        return Err(io_error(
+            "the original ingested worker file changed before native input",
+        ));
+    }
+    publication_files(&tx, &key, &raw, id, &expected["Files"], "ingested")?;
+    let current = std::fs::symlink_metadata(path)?;
+    if (current.dev(), current.ino()) != expected_identity {
+        return Err(io_error(
+            "the original worker mailbox changed before native input",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn acknowledge_original_file(
     root: &Path,
     expected: &Value,

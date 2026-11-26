@@ -307,7 +307,7 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
             if is_worker:
                 worker_release.wait(timeout=90)
             return None
-        if mode in ("pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged") and is_worker:
+        if mode in ("pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged", "ordinary-fresh") and is_worker:
             pending_ready.set()
             assert allow_pending.wait(timeout=90)
         field = "cmd" if shell == "exec_command" else "command"
@@ -326,23 +326,30 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
             try:
                 initial = activate_original(fixture, env, place)
                 assert initial["native_cli"] is True
-                ctl = subprocess.Popen([fixture, "vm-controller-run", place, "original-room", "701", stop, parent_fence],
-                                       env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                go_args = [fixture,"vm-controller-run",place,"original-room","701",stop,parent_fence]
+                if mode == "ordinary-fresh":
+                    go_args.append("completed-parent")
+                ctl = subprocess.Popen(go_args,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
                 try:
-                    started = pending_ready if mode in ("pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged") else waiting
+                    started = pending_ready if mode in ("pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged", "ordinary-fresh") else waiting
                     deadline = time.monotonic() + 80
-                    while not started.wait(0.2) and ctl.poll() is None:
-                        if time.monotonic() > deadline:
+                    while not started.wait(0.2):
+                        if time.monotonic() > deadline or (
+                            ctl.poll() is not None and not (mode == "ordinary-fresh" and parent_fence.exists())
+                        ):
                             break
                     assert started.is_set(), (selected, model.history, listed(env),
                                               tool_outputs[-4:],
                                               ctl.stderr.read() if ctl.poll() is not None else "running")
                     await_value(lambda: parent_fence.exists() or ctl.poll() is not None)
-                    assert ctl.poll() is None, ctl.communicate()
-                    stop.touch()
+                    if mode == "ordinary-fresh":
+                        assert parent_fence.exists()
+                    else:
+                        assert ctl.poll() is None, ctl.communicate()
+                        stop.touch()
                     _stdout, stderr = ctl.communicate(timeout=15)
                     assert ctl.returncode == 0, stderr
-                    if mode in ("pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged"):
+                    if mode in ("pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged", "ordinary-fresh"):
                         ledger, = (place / "discussions").glob("*/voice.db")
                         original_ledgers = ((place / "discord.db").read_bytes(),ledger.read_bytes())
                         allow_pending.set()
@@ -363,7 +370,26 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                         run(rust_test,queued_env,"native_go_queued_file_owner_inspection_is_read_only","--nocapture")
                         assert ((place / "discord.db").read_bytes(),ledger.read_bytes()) == original_ledgers
                         assert posts == []
-                        if mode != "pending-file":
+                        if mode == "ordinary-fresh":
+                            rust_env = env | {"SWARM_TEST_DISCORD_ADMITTED_FILE_WAKE_ROOT":str(base / "state"),
+                                "SWARM_TEST_DISCORD_REST_PORT":str(discord.server_port), "SWARM_TEST_DISCORD_WAKE_DELIVERY":mode}
+                            release.set()
+                            try:
+                                run(rust_test,rust_env,"retained_original_go_stages_native_vm_file_call","--nocapture")
+                            except AssertionError as error:
+                                raise AssertionError((error.args,file_calls,model.history,tool_outputs[-5:])) from error
+                            states = json.loads(run(fixture,env,"publication-phases",place,"original-room"))
+                            assert len(file_calls) == 3 and len(states) == 1 and states[0].startswith("sent true ")
+                            assert posts == [states[0].split()[-1]]
+                            payload, = json.loads(run(fixture,env,"vm-validate-staged-wake",ledger.parent,base/"state"))
+                            assert base64.b64decode(payload) == original_bytes
+                            reopened = activate_original(fixture,env,place)
+                            assert reopened.pop("generation") > initial.pop("generation")
+                            assert reopened == initial
+                            run(fixture,env,"vm-resume-publication",place,"original-room","sent")
+                            assert json.loads(run(fixture,env,"publication-phases",place,"original-room")) == states
+                            assert posts == [states[0].split()[-1]]
+                        elif mode != "pending-file":
                             queued_env["SWARM_TEST_DISCORD_REST_PORT"] = str(discord.server_port)
                             rust_args = [rust_test, "native_go_queued_file_prepares_old_scheduler_receipt", "--nocapture"]
                             verify_args = ("vm-read-prepared-queued-wake",ledger.parent,base/"state",
@@ -522,7 +548,7 @@ if __name__ == "__main__":
     go, fixture, codex, rust_test = (str(Path(arg).resolve(strict=True)) for arg in sys.argv[1:])
     if modes := os.environ.get("SWARM_DISCORD_ADMITTED_WAKE"):
         for mode in ("prepared", "sent", "uncertain", "revoked") if modes == "1" else modes.split(","):
-            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed", "ordinary-replace", "pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged")
+            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed", "ordinary-replace", "pending-file", "prepare-queued", "prepare-queued-crash", "prepare-malformed", "prepare-aged", "ordinary-fresh")
             with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
                 admit_vm_worker_wake(go, fixture, codex, rust_test, Path(directory), mode)
             if mode == "pending-file":

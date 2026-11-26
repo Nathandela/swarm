@@ -382,6 +382,7 @@ pub(super) fn with_vm_wake(
         binding: &binding,
         room,
         authority: VmAuthority::Explicit,
+        prepared: None,
     }
     .run(&mut lease, deliver, opened, || Ok(false))
     .map(|_| true)
@@ -393,11 +394,12 @@ struct VmRelay<'a, R> {
     binding: &'a Value,
     room: &'a R,
     authority: VmAuthority,
+    prepared: Option<queue::Prepared>,
 }
 
 impl<R: Room> VmRelay<'_, R> {
     fn run(
-        &self,
+        mut self,
         lease: &mut ConnectorLease,
         deliver: bool,
         opened: impl FnOnce(),
@@ -405,6 +407,12 @@ impl<R: Room> VmRelay<'_, R> {
     ) -> io::Result<Option<Value>> {
         let bridge = Bridge::open(self.place, self.cfg, self.binding)?;
         opened();
+        if let Some(prepared) = self.prepared.take() {
+            if stopped()? {
+                return Ok(None);
+            }
+            queue::dispatch(self.place, self.cfg, lease, prepared, self.room)?;
+        }
         let until = Instant::now() + Duration::from_secs(30);
         while Instant::now() < until {
             if stopped()? {
@@ -519,20 +527,23 @@ where
     let mut event = open(&cfg)?;
     let mut pending = history_backlog(room, &cfg, boundary)?;
     status.online(true);
-    if matches!(readiness, activation::Ready::QueuedFile) {
-        queue::prepare(place, &cfg, &lease, room)?;
-        return Err(io::Error::other(
-            "the original queued file wake was prepared and remains for the Go scheduler",
-        ));
-    }
+    let wake = match readiness {
+        activation::Ready::Idle => None,
+        activation::Ready::AdmittedFile { parent_message } => Some((parent_message, None)),
+        activation::Ready::QueuedFile => {
+            let prepared = queue::prepare(place, &cfg, &lease, room)?;
+            Some((prepared.parent_message.clone(), Some(prepared)))
+        }
+    };
     let mut handled = 0;
-    if let activation::Ready::AdmittedFile { parent_message } = readiness {
+    if let Some((parent_message, prepared)) = wake {
         let result = VmRelay {
             place,
             cfg: &cfg,
             binding: &binding,
             room,
             authority: VmAuthority::Activated,
+            prepared,
         }
         .run(
             &mut lease,

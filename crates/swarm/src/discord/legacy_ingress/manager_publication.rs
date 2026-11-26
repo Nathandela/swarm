@@ -220,6 +220,8 @@ fn stage_records<'tx>(
                     .is_ok_and(|row| row["admission"] != seq && row["exported"] == true)
         })
         || original.admission["settled_at"] != EMPTY_TIME
+        || (!field(&original.admission, "native_turn_id").is_empty()
+            && original.admission["native_turn_id"] != turn)
         || original.admission["native_binding_retired"] == true
         || original.admission["recovery_only"] == true
         || !matches!(field(&original.admission, "phase"), "executing" | "running")
@@ -511,7 +513,9 @@ pub(super) fn accept_wake(
     let tx = db.begin_rw().map_err(io::Error::other)?;
     let proof = {
         let conn = lease.db.begin().map_err(io::Error::other)?;
-        wake::inspect(place, cfg, &conn, &tx, binding, &id, &endpoint)?
+        wake::inspect(place, cfg, &conn, &tx, binding, &id, &endpoint).map_err(|error| {
+            io::Error::other(format!("original admitted VM wake proof: {error}"))
+        })?
     };
     let origin = &proof.origin;
     let parent = current(field(origin, "message_id"))?;
@@ -529,7 +533,9 @@ pub(super) fn accept_wake(
         return Err(invalid());
     }
     authority.verify(place, cfg)?;
-    let turn = native_proof(place, cfg, &proof.receipt, args, &call["meta"])?;
+    let turn = native_proof(place, cfg, &proof.receipt, args, &call["meta"]).map_err(|error| {
+        io::Error::other(format!("original VM native file call proof: {error}"))
+    })?;
     let sequence = proof.receipt.admission["sequence"]
         .as_u64()
         .ok_or_else(invalid)?;
@@ -588,7 +594,8 @@ pub(super) fn accept_wake(
         files: &captures,
         checkout: checkout.to_str(),
     };
-    let mut output = stage_records(tx, proof.receipt, &turn, &speech)?;
+    let mut output = stage_records(tx, proof.receipt, &turn, &speech)
+        .map_err(|error| io::Error::other(format!("original VM file Voice stage: {error}")))?;
     wake_fault("after-voice");
     queue(cfg, lease, binding, &output, &speech)?;
     if output["exported"] != true {

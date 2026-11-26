@@ -304,12 +304,25 @@ pub(super) fn semantic_issued_at(operation: &str) -> Option<u64> {
     (issued > 0 && issued.to_string() == millis).then_some(issued)
 }
 
+pub(super) struct Prepared {
+    pub(super) parent_message: String,
+    path: PathBuf,
+    voice_identity: (u64, u64),
+    mailbox_identity: (u64, u64),
+    note: Value,
+    conversation: String,
+    event: String,
+    request: Value,
+    operation: String,
+    parent: Value,
+}
+
 pub(super) fn prepare(
     place: &Place,
     cfg: &Config,
     lease: &ConnectorLease,
     room: &impl service::Room,
-) -> io::Result<()> {
+) -> io::Result<Prepared> {
     current_turn_enrollment(place, cfg)?;
     let first = inspect(place, cfg, &lease.db)?;
     let origin = &first.input["origin"];
@@ -359,7 +372,7 @@ pub(super) fn prepare(
     let mut random = [0u8; 16];
     fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
     let nonce: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
-    let operation = format!("semantic:{}:{nonce}", crate::ipc::spawn::now_ms());
+    let mut operation = format!("semantic:{}:{nonce}", crate::ipc::spawn::now_ms());
     let wake = json!({"id":event_id,"conversation_id":conversation,"event_id":event_id,
         "operation_id":operation,"request":request,"request_hash":request_hash,"state":"prepared"});
     let tx = db.begin_rw().map_err(io::Error::other)?;
@@ -405,6 +418,7 @@ pub(super) fn prepare(
         {
             return Err(invalid());
         }
+        operation = field(&saved, "operation_id").to_owned();
         drop(tx);
     } else {
         if records.get(&wake_key).is_some() {
@@ -428,7 +442,18 @@ pub(super) fn prepare(
         note,
         proof.mailbox_identity,
     )?;
-    Ok(())
+    Ok(Prepared {
+        parent_message: field(&proof.input["origin"], "message_id").to_owned(),
+        path: proof.path,
+        voice_identity: proof.voice_identity,
+        mailbox_identity: proof.mailbox_identity,
+        note: proof.note,
+        conversation: proof.conversation,
+        event: proof.event,
+        request,
+        operation,
+        parent: proof.input,
+    })
 }
 
 fn wake_request(event: &Value) -> io::Result<Value> {
@@ -441,6 +466,333 @@ fn wake_request(event: &Value) -> io::Result<Value> {
         return Err(invalid());
     }
     Ok(json!({"text":text}))
+}
+
+pub(super) fn dispatch(
+    place: &Place,
+    cfg: &Config,
+    lease: &ConnectorLease,
+    prepared: Prepared,
+    room: &impl service::Room,
+) -> io::Result<()> {
+    let issued = semantic_issued_at(&prepared.operation).ok_or_else(invalid)?;
+    let fresh_operation = || {
+        let now = crate::ipc::spawn::now_ms();
+        issued <= now.saturating_add(30_000) && now.saturating_sub(issued) <= 3_600_000
+    };
+    if !fresh_operation() {
+        return Err(io::Error::other(
+            "the original prepared semantic operation is outside its replay window",
+        ));
+    }
+    let origin = &prepared.parent["origin"];
+    room.verify(cfg)?;
+    let current = room.message(cfg, &prepared.parent_message)?;
+    if !current["message_snapshots"].is_null()
+        || original_revision(&current, origin)? != origin["revision"]
+    {
+        return Err(invalid());
+    }
+    current_turn_enrollment(place, cfg)?;
+    supervisor::mail_store::verify_original_ingested_file(
+        place.supervisor_root(),
+        &prepared.note,
+        prepared.mailbox_identity,
+    )?;
+    let (pin, mut db) = bounded_writer(writable_pin(&prepared.path)?)?;
+    let identity_of = pin.metadata()?;
+    if (identity_of.dev(), identity_of.ino()) != prepared.voice_identity
+        || !identity(&pin, &prepared.path)?
+        || !lease.source_unchanged()?
+    {
+        return Err(invalid());
+    }
+    let conn = lease.db.begin().map_err(io::Error::other)?;
+    publication::verify_guard(&conn, cfg, origin)?;
+    let source_guard = format!(
+        "{}\0{}",
+        cfg.text("installation_id"),
+        prepared.parent_message
+    );
+    if value(&conn, "teammate_ingress_guard", source_guard.as_bytes())?
+        .is_none_or(|guard| guard["LastChange"] != "")
+    {
+        return Err(invalid());
+    }
+    prepare::no_pending_output(&conn, cfg)?;
+    let tx = db.begin_rw().map_err(io::Error::other)?;
+    let root = tx.bucket(b"controller").ok_or_else(invalid)?;
+    let bytes = root
+        .get(b"state")
+        .filter(|bytes| bytes.len() <= 4096)
+        .ok_or_else(invalid)?;
+    let header: Value = serde_json::from_slice(bytes)?;
+    if root.get(b"digest") != Some(format!("{:x}", Sha256::digest(bytes)).as_bytes())
+        || header["version"] != 4
+        || header["current_conversation"] != prepared.conversation
+    {
+        return Err(invalid());
+    }
+    let records = root.bucket(b"records").ok_or_else(invalid)?;
+    if records.iter_buckets().next().is_some() {
+        return Err(invalid());
+    }
+    let conversation = &prepared.conversation;
+    let conv_key = format!("conversations\0{conversation}").into_bytes();
+    let mut state: Value = serde_json::from_slice(records.get(&conv_key).ok_or_else(invalid)?)?;
+    let binding = &state["binding"];
+    let mut wake = wake::record(&records, "wakes", &[conversation, &prepared.event])?;
+    let parent_n = prepared.parent["sequence"]
+        .as_u64()
+        .filter(|value| *value > 0)
+        .ok_or_else(invalid)?;
+    let parent = wake::record(
+        &records,
+        "admissions",
+        &[conversation, &parent_n.to_string()],
+    )?;
+    if parent != prepared.parent
+        || parent["phase"] != "completed"
+        || field(&parent, "settled_at").is_empty()
+        || parent["settled_at"] == "0001-01-01T00:00:00Z"
+        || wake["state"] != "prepared"
+        || wake["request"] != prepared.request
+        || wake["request_hash"] != digest(&prepared.request)?
+        || wake["operation_id"] != prepared.operation
+        || !field(&wake, "native_input_id").is_empty()
+        || wake["admission"].as_u64().unwrap_or_default() != 0
+        || wake["id"] != prepared.event
+        || wake["conversation_id"] != *conversation
+        || binding["native_cli"] != true
+        || binding["provider"] != cfg.text("manager_cli")
+        || binding["conversation_id"] != *conversation
+        || !matches!(state["custody_lost"], Value::Null | Value::Bool(false))
+        || !matches!(state["scheduler_paused"], Value::Null | Value::Bool(false))
+        || !matches!(state["parked"], Value::Null | Value::Bool(false))
+        || !state["retirement"].is_null()
+        || state["external_observed"] != true
+        || !(state["external_input"].is_null() || state["external_input"] == 0)
+    {
+        return Err(invalid());
+    }
+    let last = state["last_admission"].as_u64().ok_or_else(invalid)?;
+    if state["retired_through"].as_u64() != Some(last) {
+        return Err(io::Error::other(format!(
+            "an earlier original Go admission remains unsettled (retired through {}, last admission {last})",
+            state["retired_through"]
+        )));
+    }
+    let mut count = 0;
+    let mut checksum = [0u8; 32];
+    for (key, raw) in records.iter_entries() {
+        count += 1;
+        if count > 4096 || raw.len() > 1 << 20 {
+            return Err(invalid());
+        }
+        for (left, right) in checksum.iter_mut().zip(record_hash(key, raw)) {
+            *left ^= right;
+        }
+        if key.starts_with(b"wakes\0")
+            && key != record_key("wakes", conversation, &prepared.event)?
+            && !serde_json::from_slice::<Value>(raw).is_ok_and(|row| row["state"] == "settled")
+        {
+            return Err(io::Error::other(
+                "another original Go wake remains for its scheduler",
+            ));
+        }
+        if key.starts_with(b"requests\0")
+            || key.starts_with(b"actions\0")
+            || key.starts_with(b"admissions\0")
+                && !serde_json::from_slice::<Value>(raw).is_ok_and(|row| {
+                    row["settled_at"]
+                        .as_str()
+                        .is_some_and(|time| !time.is_empty() && !time.starts_with("0001-01-01"))
+                        && matches!(
+                            row["reply_delivery_unknown"],
+                            Value::Null | Value::Bool(false)
+                        )
+                        && (row["sequence"] == parent_n
+                            || row["reply_check_after"].is_null()
+                            || row["reply_check_after"] == 0)
+                })
+        {
+            return Err(io::Error::other(
+                "an earlier original Go effect still needs its scheduler",
+            ));
+        }
+    }
+    if header["records"] != count || header["record_hash"] != json!(checksum) {
+        return Err(invalid());
+    }
+    let caps = ["semantic-send", "manager-provenance", "message-origin"];
+    let (mut owner, rows) = super::super::migrate_supervisor::verified_owner(
+        place.supervisor_root(),
+        Path::new(cfg.text("daemon_socket")),
+        Path::new(field(&cfg.0["supervisor"], "lock")),
+        &caps,
+    )?;
+    cfg.check_supervisor(&owner, &caps)?;
+    let session = field(binding, "session_id");
+    let instance = field(binding, "session_instance");
+    if rows
+        .iter()
+        .filter(|row| {
+            row["id"] == session
+                && row["role"] == "manager"
+                && row["manager_conversation_id"] == *conversation
+                && row["cwd"] == cfg.text("work_dir")
+                && row["capabilities"]["session_instance"] == instance
+        })
+        .count()
+        != 1
+    {
+        return Err(invalid());
+    }
+    let mut native = binding.clone();
+    let fields = native.as_object_mut().ok_or_else(invalid)?;
+    let controller_session = fields.remove("session_id").ok_or_else(invalid)?;
+    fields.insert("session".into(), controller_session);
+    fields.remove("generation");
+    fields.remove("native_cli");
+    let runtime = owner.request_body(
+        json!({"op":"manager_runtime","session_id":session,"body_version":1,
+        "manager_runtime_request":{"session_instance":instance}}),
+        "manager_runtime",
+    )?;
+    let current = &runtime["manager_runtime"];
+    if current["binding"] != native
+        || current["native_cli"] != true
+        || current["ready_for_input"] != true
+        || !matches!(
+            current["provider_exhausted"],
+            Value::Null | Value::Bool(false)
+        )
+        || current["turn"]["external_input"] != 0
+        || !matches!(
+            current["turn"]["externally_steered"],
+            Value::Null | Value::Bool(false)
+        )
+        || !matches!(field(&current["turn"], "state"), "idle" | "completed")
+    {
+        return Err(io::Error::other("original Go native manager is still busy"));
+    }
+    let old_dir = prepared.path.parent().ok_or_else(invalid)?;
+    let auth = old_dir.join("bridge.auth");
+    let ledger = old_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(invalid)?;
+    let bridge = fs::canonicalize("/tmp")?
+        .join(format!("swarm-dm-{}", unsafe { libc::getuid() }))
+        .join(&ledger[..32])
+        .join("bridge.sock");
+    if current["auth_file"] != json!(auth) || current["bridge_socket"] != json!(bridge) {
+        return Err(invalid());
+    }
+    open_owner_file(&auth)?;
+    current_turn_enrollment(place, cfg)?;
+    let seq = last.checked_add(1).ok_or_else(invalid)?;
+    let mut nonce_bytes = [0u8; 32];
+    fs::File::open("/dev/urandom")?.read_exact(&mut nonce_bytes)?;
+    let nonce: String = nonce_bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let text = field(&prepared.request, "text");
+    if text.is_empty() || text.len() > 4096 {
+        return Err(invalid());
+    }
+    let req = json!({"session":session,"session_instance":instance,"text":text,
+        "manager_admission":{"binding":native,"nonce":nonce,"expected_external_input":0}});
+    let admission_key = record_key("admissions", conversation, &seq.to_string())?;
+    let wake_key = record_key("wakes", conversation, &prepared.event)?;
+    if records.get(admission_key.as_slice()).is_some() {
+        return Err(invalid());
+    }
+    let mut admission = json!({
+        "operation_id":prepared.operation,"request":req,"phase":"executing",
+        "input_text":text,"conversation_id":conversation,"sequence":seq,
+        "source_id":format!("wake:{}",prepared.event),"native_input_id":nonce,"settled_at":"0001-01-01T00:00:00Z"
+    });
+    state["last_admission"] = json!(seq);
+    wake["admission"] = json!(seq);
+    wake["state"] = json!("admitted");
+    wake["native_input_id"] = json!(nonce);
+    manager_publication::apply_voice(
+        tx,
+        header,
+        &[
+            (conv_key, state),
+            (admission_key.clone(), admission.clone()),
+            (wake_key.clone(), wake.clone()),
+        ],
+    )?;
+    current_turn_enrollment(place, cfg)?;
+    if !fresh_operation() {
+        return Err(io::Error::other(
+            "the original prepared semantic operation is outside its replay window",
+        ));
+    }
+    supervisor::mail_store::verify_original_ingested_file(
+        place.supervisor_root(),
+        &prepared.note,
+        prepared.mailbox_identity,
+    )?;
+    current_turn_enrollment(place, cfg)?;
+    let reply = owner.exchange(
+        json!({"op":"semantic_send","session_id":req["session"],"body_version":1,
+        "operation_id":prepared.operation,"composer_send":req}),
+        "ok",
+        std::time::Duration::from_secs(35),
+    );
+    let reply = reply.map_err(|error| io::Error::other(format!(
+        "original Go worker-wake native input remains uncertain under its saved operation: {error}"
+    )))?;
+    if reply["op"] != "ok" || reply["operation_id"] != prepared.operation {
+        return Err(io::Error::other(
+            "original Go worker-wake operation was not acknowledged",
+        ));
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let observed = loop {
+        let response = owner.request_body(
+            json!({"op":"manager_input_status","session_id":req["session"],
+            "body_version":1,"manager_input_status_request":req["manager_admission"]}),
+            "manager_input_status",
+        )?;
+        let observed = &response["manager_input_status"];
+        if response["session_id"] == req["session"]
+            && response["endpoint_id"] == owner.endpoint()
+            && observed["native_input_id"] == nonce
+            && observed["external_input"] == 0
+            && matches!(
+                observed["externally_steered"],
+                Value::Null | Value::Bool(false)
+            )
+            && observed["state"] == "running"
+            && !field(observed, "native_turn_id").is_empty()
+        {
+            break observed.clone();
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(io::Error::other(
+                "the original Go worker-wake input has no exact live native observation",
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    };
+    let tx = db.begin_rw().map_err(io::Error::other)?;
+    let root = tx.bucket(b"controller").ok_or_else(invalid)?;
+    let header: Value = serde_json::from_slice(root.get(b"state").ok_or_else(invalid)?)?;
+    admission["phase"] = json!(field(&observed, "state"));
+    if let Some(turn) = observed["native_turn_id"]
+        .as_str()
+        .filter(|turn| !turn.is_empty())
+    {
+        admission["native_turn_id"] = json!(turn);
+    }
+    wake["state"] = json!("native_input");
+    manager_publication::apply_voice(tx, header, &[(admission_key, admission), (wake_key, wake)])
 }
 
 #[cfg(test)]

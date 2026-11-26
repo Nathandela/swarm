@@ -23,3 +23,12 @@ func (r *Runtime) FixtureActivate(ctx context.Context, bound discord.TeammateDis
 	defer r.release(entry)
 	return entry.voice.FixtureActivate(ctx)
 }
+
+func (r *Runtime) FixtureNativeParentSettled(bound discord.TeammateDiscussion, message string) (bool, error) {
+	entry, err := r.discussion(bound, nil, false)
+	if err != nil {
+		return false, err
+	}
+	defer r.release(entry)
+	return entry.voice.FixtureNativeParentSettled(message)
+}

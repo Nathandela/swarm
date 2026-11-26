@@ -1358,7 +1358,7 @@ mod tests {
         let deliver = std::env::var("SWARM_TEST_DISCORD_WAKE_DELIVERY").unwrap_or_default();
         if matches!(
             deliver.as_str(),
-            "ordinary-sent" | "ordinary-mixed" | "ordinary-replace"
+            "ordinary-sent" | "ordinary-mixed" | "ordinary-replace" | "ordinary-fresh"
         ) {
             let mixed = deliver == "ordinary-mixed";
             let command = |args: &[&str]| {
@@ -1580,12 +1580,15 @@ mod tests {
         if !activation::selected(&place).unwrap() {
             assert!(activation::migrate(&place, false, false, true).unwrap());
         }
-        let run = service::with(&place, &api, None, |_| Ok(|| Ok(None)));
-        let error = run.unwrap_err();
-        if std::env::var_os("SWARM_TEST_DISCORD_INVALID_QUEUED_OPERATION").is_some() {
-            assert!(error.to_string().contains("unqualified"));
-        } else {
-            assert!(error.to_string().contains("remains for the Go scheduler"));
+        {
+            let source = fs::symlink_metadata(place.dir.join("discord.db")).unwrap();
+            let lease = ConnectorLease::acquire(&place, &cfg, &source, true).unwrap();
+            let result = queue::prepare(&place, &cfg, &lease, &api);
+            if std::env::var_os("SWARM_TEST_DISCORD_INVALID_QUEUED_OPERATION").is_some() {
+                assert!(result.err().unwrap().to_string().contains("unqualified"));
+            } else {
+                assert!(result.is_ok());
+            }
         }
         assert!(activation::migrate(&place, false, true, true).unwrap());
         assert!(!activation::selected(&place).unwrap());

@@ -407,3 +407,31 @@ func validFixtureSemanticSyntax(value string) bool {
 	_, ok := protocol.SemanticOperationIssuedAt(value)
 	return ok
 }
+
+// FixtureNativeParentSettled observes the original Go scheduler after it closes
+// the genuine parent turn, without manufacturing an admission receipt.
+func (d *DiscussionController) FixtureNativeParentSettled(message string) (bool, error) {
+	st, err := d.store.Snapshot()
+	if err != nil {
+		return false, err
+	}
+	found := false
+	for _, a := range st.Admissions {
+		if a.ConversationID != d.cfg.ConversationID {
+			continue
+		}
+		if a.SettledAt.IsZero() {
+			return false, nil
+		}
+		if a.Origin != nil && a.Origin.MessageID == message {
+			found = a.SourceCutover && a.Phase == "completed"
+		}
+	}
+	for _, wake := range st.Wakes {
+		if wake.ConversationID == d.cfg.ConversationID && wake.State != "settled" {
+			return false, nil
+		}
+	}
+	conversation := st.Conversations[d.cfg.ConversationID]
+	return found && conversation.RetiredThrough == conversation.LastAdmission, nil
+}
