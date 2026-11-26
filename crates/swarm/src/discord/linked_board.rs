@@ -38,6 +38,33 @@ fn endpoint(path: &Path) -> String {
     supervisor::endpoint(&fs::canonicalize(path).unwrap_or_else(|_| path.to_owned()))
 }
 
+fn legacy_endpoint(place: &Path, socket: &Path) -> io::Result<String> {
+    let mut selected = None;
+    for candidate in [place.parent(), socket.parent()].into_iter().flatten() {
+        let parent = fs::metadata(candidate)?;
+        if !parent.is_dir()
+            || parent.uid() != supervisor::runtime::uid()
+            || parent.mode() & 0o022 != 0
+        {
+            continue;
+        }
+        let recorded = match Place::read_selection(candidate) {
+            Ok(path) => path,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        if recorded.canonicalize()? != place.canonicalize()? {
+            continue;
+        }
+        let id = endpoint(candidate);
+        if selected.as_ref().is_some_and(|prior| *prior != id) {
+            return Err(invalid("ambiguous original dispatcher supervisor"));
+        }
+        selected = Some(id);
+    }
+    selected.ok_or_else(|| invalid("installed dispatcher has no verified supervisor state"))
+}
+
 pub(crate) fn resolve(
     local: &Path,
     local_endpoint: &str,
@@ -80,12 +107,13 @@ fn resolve_slot(
         return Ok(None);
     }
     let mut socket = PathBuf::from(cfg.text("daemon_socket"));
-    let mut expected = cfg.0["supervisor"]["state_dir"]
-        .as_str()
-        .map(|s| endpoint(Path::new(s)));
+    let mut expected = match cfg.0["supervisor"]["state_dir"].as_str() {
+        Some(state) => endpoint(Path::new(state)),
+        None => legacy_endpoint(&place, &socket)?,
+    };
     let previous = &cfg.0["previous_supervisor"];
     if !previous.is_null() {
-        if expected.as_deref() != Some(local_endpoint) {
+        if expected != local_endpoint {
             return Ok(None);
         }
         socket = PathBuf::from(ipc::field(previous, "socket"));
@@ -93,7 +121,7 @@ fn resolve_slot(
         if previous["endpoint"] != old {
             return Err(invalid("previous dispatcher supervisor identity changed"));
         }
-        expected = Some(old);
+        expected = old;
     }
     if socket == local {
         return Ok(None);
@@ -107,10 +135,7 @@ fn resolve_slot(
         return Ok(None);
     }
     let client = ipc::Client::dial_before(&socket, caps, Instant::now() + Duration::from_secs(2))?;
-    if expected
-        .as_deref()
-        .is_some_and(|id| id != client.endpoint())
-    {
+    if expected != client.endpoint() {
         return Err(invalid("dispatcher supervisor identity changed"));
     }
     if client.endpoint() == local_endpoint {
@@ -183,6 +208,30 @@ mod tests {
         assert_eq!(route.endpoint, endpoint(&current));
         server.join().unwrap();
 
+        let complete = cfg.clone();
+        cfg.as_object_mut().unwrap().shift_remove("supervisor");
+        runtime::write_json(&place.join("config.json"), &cfg).unwrap();
+        assert!(resolve_slot(&slot, &local, "different", &[]).is_err());
+        runtime::write_json(
+            &current.join(super::super::config::SELECTION),
+            &json!(place),
+        )
+        .unwrap();
+        let legacy = handshake(&listener, &endpoint(&current));
+        assert_eq!(
+            resolve_slot(&slot, &local, "different", &[])
+                .unwrap()
+                .unwrap()
+                .0
+                .endpoint,
+            endpoint(&current)
+        );
+        legacy.join().unwrap();
+        let wrong_legacy = handshake(&listener, "wrong-legacy-owner");
+        assert!(resolve_slot(&slot, &local, "different", &[]).is_err());
+        wrong_legacy.join().unwrap();
+        cfg = complete;
+        runtime::write_json(&place.join("config.json"), &cfg).unwrap();
         let liar = handshake(&listener, "wrong-owner");
         assert!(resolve_slot(&slot, &local, "different", &[]).is_err());
         liar.join().unwrap();
