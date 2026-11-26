@@ -1267,10 +1267,13 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             }),
             "manager_runtime" | "manager_input_status" | "manager_resolve_call"
                 if caps.contains(&"manager-provenance") => state.session(&request).and_then(|session| {
-                    if op == "manager_runtime" && session.dispatcher_runtime_has_draft(&request) {
-                        return reply(&writer,state,json!({"op":"error","error_code":manager_terminal::CODE,"error":manager_terminal::UNRESOLVED}));
-                    }
-                    let body = match session.manager_operation(&request) {
+                    let result = (|| {
+                        if op == "manager_runtime" && session.dispatcher_runtime_has_draft(&request)? {
+                            return Ok(json!({"op":"error","error_code":manager_terminal::CODE,"error":manager_terminal::UNRESOLVED}));
+                        }
+                        session.manager_operation(&request)
+                    })();
+                    let body = match result {
                         Err(error) if op == "manager_runtime" && matches!(error.kind(),io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
                             json!({"op":"error","error_code":"temporarily_unavailable","error":"manager runtime snapshot is busy"}),
                         result => result?,
@@ -1423,9 +1426,16 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         let _operation = state.operation_locks
                             [usize::from(digest[0]) % state.operation_locks.len()]
                             .lock().unwrap();
-                        crate::providers::codex_receipt::reject_unadmitted(
-                            &state.root, operation, id, instance, body,
-                        )?;
+                        let current = session.semantic_target()?;
+                        match crate::providers::codex_receipt::reject_unadmitted(
+                            &state.root, operation, id, &current, body,
+                        ) {
+                            Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+                                return reply(&writer,state,json!({"op":"error","error_code":"stale_instance","error":error.to_string()}));
+                            }
+                            result => result?,
+                        }
+
                         return reply(&writer,state,json!({"op":"error","error_code":"structured_unsupported","error":format!("composer_send: {DISPATCHER_INPUT_ROUTE}")}));
                     }
                 }

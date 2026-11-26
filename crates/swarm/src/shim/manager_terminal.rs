@@ -10,6 +10,7 @@ const FILE: &str = "direct-input-unresolved.json";
 #[derive(Default)]
 pub(super) struct Input {
     durable_draft: bool,
+    submission_uncertain: bool,
     deletion_uncertain: bool,
 }
 
@@ -18,7 +19,8 @@ pub(super) fn unresolved(state: &State) -> bool {
         return false;
     }
     let input = state.manager_terminal.lock().unwrap();
-    input.deletion_uncertain
+    input.durable_draft
+        || input.deletion_uncertain
         || !matches!(fs::symlink_metadata(state.dir.join(FILE)), Err(err) if err.kind() == io::ErrorKind::NotFound)
 }
 
@@ -30,49 +32,70 @@ pub(super) fn write(state: &State, bytes: &[u8]) -> io::Result<()> {
     let mut input = state.manager_terminal.lock().unwrap();
     let path = state.dir.join(FILE);
     // Persist before the PTY write, whose failure may still mean bytes arrived.
-    if !input.durable_draft {
+    if !input.durable_draft || input.submission_uncertain {
         runtime::write_json(&path, &json!({"version":1,"class":"draft"}))?;
         input.durable_draft = true;
+        input.submission_uncertain = false;
     }
     pty::input(&state.master, bytes)?;
     if bytes == b"\r" {
         let observation =
             runtime::read_json(&state.dir.join("observation.json")).unwrap_or(Value::Null);
-        let baseline = if observation["token"] == state.token {
-            &observation["status"]
-        } else {
-            &Value::Null
-        };
-        let _ = runtime::write_json(
-            &path,
-            &json!({"version":1,"class":"submitted",
-                "baseline_turn":baseline["Turn"].as_str().unwrap_or("unknown"),
-                "baseline_interaction":baseline["Interaction"].as_str().unwrap_or("unknown")}),
-        );
-        input.durable_draft = false;
+        if let Some(record) = submitted_record(&observation, &state.token) {
+            if runtime::write_json(&path, &record).is_ok() {
+                input.durable_draft = false;
+            } else {
+                // Rename may have reached disk before the directory sync failed.
+                input.submission_uncertain = true;
+            }
+        }
     }
     Ok(())
+}
+
+fn known_turn(turn: &str) -> bool {
+    matches!(turn, "active" | "idle")
+}
+
+fn known_interaction(interaction: &str) -> bool {
+    matches!(interaction, "none" | "prompt" | "permission" | "error")
+}
+
+fn known_status(status: &Value) -> bool {
+    status["Process"] == "running"
+        && known_turn(field(status, "Turn"))
+        && known_interaction(field(status, "Interaction"))
+}
+
+fn submitted_record(observation: &Value, token: &str) -> Option<Value> {
+    let status = &observation["status"];
+    (observation["token"] == token && known_status(status)).then(|| {
+        json!({"version":1,"class":"submitted","baseline_turn":status["Turn"],
+            "baseline_interaction":status["Interaction"]})
+    })
 }
 
 fn resolved(record: &Value, status: &Value) -> bool {
     record["version"] == 1
         && record["class"] == "submitted"
-        && matches!(
-            field(record, "baseline_turn"),
-            "active" | "idle" | "unknown"
-        )
-        && matches!(
-            field(record, "baseline_interaction"),
-            "none" | "prompt" | "permission" | "error" | "unknown"
-        )
-        && status["Process"] == "running"
-        && matches!(field(status, "Turn"), "active" | "idle")
-        && matches!(
-            field(status, "Interaction"),
-            "none" | "prompt" | "permission" | "error"
-        )
+        && known_turn(field(record, "baseline_turn"))
+        && known_interaction(field(record, "baseline_interaction"))
+        && known_status(status)
         && (record["baseline_turn"] != status["Turn"]
             || record["baseline_interaction"] != status["Interaction"])
+}
+
+pub(crate) fn decode_probe(response: io::Result<Value>) -> io::Result<bool> {
+    response
+        .ok()
+        .filter(|response| response["type"] == "ok")
+        .and_then(|response| response["unresolved"].as_bool())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "manager terminal input state is unavailable",
+            )
+        })
 }
 
 pub(super) fn observe(state: &State, observation: &Value) -> io::Result<()> {
@@ -84,7 +107,9 @@ pub(super) fn observe(state: &State, observation: &Value) -> io::Result<()> {
         && !input.durable_draft
     {
         let path = state.dir.join(FILE);
-        if runtime::read_json(&path).is_ok_and(|record| resolved(&record, &observation["status"]))
+        if observation["token"] == state.token
+            && runtime::read_json(&path)
+                .is_ok_and(|record| resolved(&record, &observation["status"]))
             && fs::remove_file(path).is_ok()
         {
             input.deletion_uncertain = true;
@@ -101,6 +126,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn submitted_record_requires_a_current_authoritative_baseline() {
+        let mut observation = json!({"token":"current","status":{"Process":"running","Turn":"idle","Interaction":"none"}});
+        assert!(submitted_record(&observation, "current").is_some());
+        assert!(submitted_record(&observation, "replaced").is_none());
+        assert!(submitted_record(&Value::Null, "current").is_none());
+        for field in ["Turn", "Interaction"] {
+            let old = std::mem::replace(&mut observation["status"][field], json!("unknown"));
+            assert!(submitted_record(&observation, "current").is_none());
+            observation["status"][field] = old;
+        }
+    }
+
+    #[test]
+    fn unavailable_or_malformed_probe_never_proves_no_draft() {
+        for result in [
+            Err(io::Error::from(io::ErrorKind::UnexpectedEof)),
+            Ok(json!({"type":"error","unresolved":false})),
+            Ok(json!({"type":"ok","unresolved":"false"})),
+            Ok(json!({"type":"ok"})),
+        ] {
+            assert_eq!(
+                decode_probe(result).unwrap_err().kind(),
+                io::ErrorKind::WouldBlock
+            );
+        }
+        for unresolved in [true, false] {
+            assert_eq!(
+                decode_probe(Ok(json!({"type":"ok","unresolved":unresolved}))).unwrap(),
+                unresolved
+            );
+        }
+    }
+
+    #[test]
     fn only_submitted_input_with_proven_status_change_clears() {
         let mut record = json!({"version":1,"class":"draft","baseline_turn":"idle","baseline_interaction":"none"});
         let mut status = json!({"Process":"running","Turn":"active","Interaction":"none"});
@@ -112,6 +171,11 @@ mod tests {
             assert!(!resolved(&record, &status));
         }
         status["Turn"] = json!("active");
+        for field in ["baseline_turn", "baseline_interaction"] {
+            let old = std::mem::replace(&mut record[field], json!("unknown"));
+            assert!(!resolved(&record, &status));
+            record[field] = old;
+        }
         status["Process"] = json!("lost");
         assert!(!resolved(&record, &status));
     }

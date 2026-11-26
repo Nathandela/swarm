@@ -112,23 +112,24 @@ pub(crate) fn bind_intent(
     incarnation: &str,
     intent: &str,
 ) -> io::Result<()> {
-    bind_operation(root, operation, target, incarnation, intent, false)
+    bind_operation(root, operation, target, incarnation, intent, None)
 }
 
 pub(crate) fn reject_unadmitted(
     root: &Path,
     operation: &str,
     session: &str,
-    instance: &str,
+    current_instance: &str,
     body: &Value,
 ) -> io::Result<()> {
+    let instance = body["session_instance"].as_str().unwrap_or_default();
     bind_operation(
         root,
         operation,
         session,
         instance,
         &hash(&serde_json::to_string(body)?),
-        true,
+        Some(current_instance),
     )
 }
 
@@ -167,7 +168,7 @@ fn bind_operation(
     target: &str,
     incarnation: &str,
     intent: &str,
-    unadmitted_dispatcher: bool,
+    current_dispatcher_instance: Option<&str>,
 ) -> io::Result<()> {
     if !timely(operation) {
         return Err(io::Error::other("invalid semantic operation ID"));
@@ -178,7 +179,7 @@ fn bind_operation(
     let path = operation_path(root, operation);
     let mut binding =
         json!({"operation":operation,"session":target,"instance":incarnation,"intent":intent});
-    if unadmitted_dispatcher {
+    if current_dispatcher_instance.is_some() {
         binding["unadmitted_dispatcher"] = json!(true);
     }
     match runtime::read_json(&path) {
@@ -186,7 +187,15 @@ fn bind_operation(
         Ok(_) => Err(io::Error::other(
             "semantic operation is already bound to another request",
         )),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => runtime::write_json(&path, &binding),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            if current_dispatcher_instance.is_some_and(|current| current != incarnation) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "dispatcher session incarnation changed; refresh before sending",
+                ));
+            }
+            runtime::write_json(&path, &binding)
+        }
         Err(err) => Err(err),
     }
 }
@@ -344,6 +353,36 @@ pub(crate) fn load_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_dispatcher_refusal_leaves_a_fresh_operation_available() {
+        let root = crate::test_temp::root().join(format!(
+            "dispatcher-refusal-{}",
+            runtime::random_id().unwrap()
+        ));
+        let operation = operation().unwrap();
+        let session = "ep/dispatcher";
+        let mut body = json!({"session":session,"session_instance":"stale","text":"note"});
+        let error = reject_unadmitted(&root, &operation, session, "current", &body).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(
+            unadmitted_rejection(&root, &operation, session)
+                .unwrap()
+                .is_none()
+        );
+
+        body["session_instance"] = json!("current");
+        reject_unadmitted(&root, &operation, session, "current", &body).unwrap();
+        reject_unadmitted(&root, &operation, session, "replacement", &body).unwrap();
+        assert_eq!(
+            unadmitted_rejection(&root, &operation, session)
+                .unwrap()
+                .unwrap()["session_instance"],
+            "current"
+        );
+        body["text"] = json!("different");
+        assert!(reject_unadmitted(&root, &operation, session, "replacement", &body).is_err());
+    }
 
     #[test]
     fn accepted_receipt_requires_all_authority_fields_and_native_turn() {
