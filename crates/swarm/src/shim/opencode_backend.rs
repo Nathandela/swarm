@@ -158,6 +158,11 @@ impl Backend {
         let created = ready["nativeCreatedAtMS"].as_u64().unwrap_or_default();
         let mut ack = self.envelope();
         ack["nativeCreatedAtMS"] = json!(created);
+        let database = runtime::read_json(&self.dir.join("session.json"))
+            .and_then(|meta| {
+                crate::providers::opencode_handoff::database_identity(&meta["opencode_profile"])
+            })
+            .unwrap_or(Value::Null);
         runtime::write_json(
             &self.dir.join("opencode-native.json"),
             &json!({
@@ -165,7 +170,7 @@ impl Backend {
             "workerID":self.binding["workerID"],
                 "sessionInstance":self.binding["sessionInstance"],
                 "backendGeneration":self.binding["backendGeneration"],
-                "directory":self.binding["directory"],
+                "directory":self.binding["directory"],"nativeDatabase":database,
             }),
         )?;
         let ready = self.http("/ack", Some(&ack))?;
