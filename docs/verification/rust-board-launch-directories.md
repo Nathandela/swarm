@@ -18,3 +18,16 @@ scripts/verification/parity/test_board.py --compare-forms "$evidence/go.json" "$
 ```
 
 Rust standard launch, attach and post-daemon-death reattach passed on both hosts. Native Antigravity relocation also passed on macOS after changing the shared prefix selector.
+
+## Reopening the launch form
+
+The same paired command now captures 17 frames. On both hosts every frame matched the pinned Go reference, including the Claude credential-source disclosure and OpenCode's busy-only status at 80×24 and after resizing to 40×8.
+
+The fixture records each synthetic provider version process by PID. It verifies a version check started before opening the first form. It then reopens the form with a fresh probe blocked and checks the full cached Claude frame appears while that process is still waiting. The indicator names the credential source and billing behavior, and the test checks the fixture credential value never appears in any captured note. The OpenCode fixture supplies only a version banner. Neither provider is contacted over the network.
+
+| Native host | tmux | Rust SHA-256 |
+|---|---|---|
+| macOS arm64 | 3.6a | `7deb02afcfec0b06589c92ffa90454378f023b12d7d299e01b01db4daeec902d` |
+| Linux x86_64 | 3.2a | `3b4d86d80c36fb7dbba696c1a06ed4c431d39fcdbd7756d99adcfe743fadc6a0` |
+
+The original Go binaries have the same digests as above. The native supervised and hands-off Handoff fixture also passed on both hosts with the shared adapter probe. A refresh regression checks that provider selection, option focus and entered option values survive an updated availability result.

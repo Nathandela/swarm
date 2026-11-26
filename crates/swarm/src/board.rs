@@ -24,7 +24,7 @@ use crate::schedule::catalog::{
 use automation::Automation;
 use handoff::Handoff;
 use keys::{Key, Keys, Mouse, MouseAction};
-use launch::Launch;
+use launch::{Availability, Launch};
 use navigation::{Focus, Row, usable};
 use preferences::Layout;
 use serde_json::{Value, json};
@@ -79,6 +79,7 @@ fn board(path: &Path) -> io::Result<()> {
         Err(error) => board.notice = format!("board layout: {error}"),
     }
     board.refresh(&mut client)?;
+    board.availability.refresh();
     let mut upgrade;
     let _terminal = term::Terminal::raw()?;
     let mut output = io::stdout().lock();
@@ -134,15 +135,20 @@ fn board(path: &Path) -> io::Result<()> {
         {
             needs_paint |= board.update_linked(snapshot, dimensions.1);
         }
+        if let Some(snapshot) = board.availability.poll() {
+            match &mut board.modal {
+                Some(Modal::Launch(form)) => {
+                    form.apply_detection(snapshot);
+                    needs_paint = true;
+                }
+                Some(Modal::Handoff(form)) => {
+                    form.apply_detection(snapshot);
+                    needs_paint = true;
+                }
+                _ => {}
+            }
+        }
         let saved_layout = match &mut board.modal {
-            Some(Modal::Launch(form)) => {
-                needs_paint |= form.update_detection();
-                None
-            }
-            Some(Modal::Handoff(form)) => {
-                needs_paint |= form.update_detection();
-                None
-            }
             Some(Modal::Options(form)) => match form.poll() {
                 context_settings::Update::Pending => None,
                 context_settings::Update::Changed => {
@@ -495,6 +501,7 @@ struct Board {
     columns: u16,
     spinner: usize,
     hands_off: bool,
+    availability: Availability,
     can_relocate: bool,
     context_owner: Option<context_settings::Owner>,
     second: u64,
@@ -817,7 +824,10 @@ impl Board {
         match key {
             Key::Text('q') => return Action::Quit,
             Key::Text('n') if online => {
-                self.modal = Some(Modal::Launch(Box::new(Launch::new())));
+                self.modal = Some(Modal::Launch(Box::new(Launch::new(
+                    self.availability.cached.as_ref(),
+                ))));
+                self.availability.refresh();
                 self.notice.clear();
             }
             Key::Text('o') => {
@@ -883,7 +893,11 @@ impl Board {
             }
             Key::Text('h') => {
                 if let Some(source) = self.by_id(id).filter(|_| self.linked_binding(id).is_none()) {
-                    self.modal = Some(Modal::Handoff(Box::new(Handoff::new(source))));
+                    self.modal = Some(Modal::Handoff(Box::new(Handoff::new(
+                        source,
+                        self.availability.cached.as_ref(),
+                    ))));
+                    self.availability.refresh();
                     self.notice.clear();
                 }
             }

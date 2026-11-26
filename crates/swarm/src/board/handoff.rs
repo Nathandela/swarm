@@ -1,4 +1,6 @@
-use super::launch::{DIM, Launch, PLAIN, TITLE, block_cursor, field, label_layout, spans};
+use super::launch::{
+    DIM, Detected, Launch, PLAIN, TITLE, block_cursor, field, label_layout, spans,
+};
 use super::{Action, Editor, FormViewport, Key, caller_launch_environment, field as wire_field};
 use serde_json::{Value, json};
 use std::io;
@@ -28,13 +30,13 @@ struct Selection {
 }
 
 impl Handoff {
-    pub(super) fn new(source: &Value) -> Self {
+    pub(super) fn new(source: &Value, cached: Option<&Detected>) -> Self {
         Self {
             source_id: wire_field(source, "id").into(),
             source_agent: wire_field(source, "agent").into(),
             cwd: wire_field(source, "cwd").into(),
             was_running: super::running(source),
-            target: Launch::new(),
+            target: Launch::new(cached),
             model: Editor::new(""),
             mode: 0,
             hands_off: eligible(source).is_err(),
@@ -44,8 +46,8 @@ impl Handoff {
         }
     }
 
-    pub(super) fn update_detection(&mut self) -> bool {
-        self.target.update_detection()
+    pub(super) fn apply_detection(&mut self, snapshot: &Detected) {
+        self.target.apply_detection(snapshot)
     }
 
     pub(super) fn update(

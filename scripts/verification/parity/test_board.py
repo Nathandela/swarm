@@ -80,7 +80,18 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
         with (root / "daemon-capture").open("ab") as log:
             result = subprocess.Popen([binary, "daemon"], cwd=cwd, env=env,
                                       stdin=subprocess.DEVNULL, stdout=log, stderr=log)
-        p.wait_for(roster, "public owner socket")
+        def hello():
+            if result.poll() is not None:
+                raise RuntimeError((root / "daemon-capture").read_text(errors="replace"))
+            try:
+                return owner_request(env["SWARM_DAEMON_SOCK"], "subscribe", None)
+            except OSError:
+                return None
+
+        # The CLI can itself try to bring up an owner before the test daemon
+        # has claimed its socket. Wait on the wire before running any CLI.
+        p.wait_for(hello, "public owner hello")
+        p.wait_for(roster, "public owner roster")
         return result
 
     if handoff:
@@ -102,6 +113,7 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
         transcript.write_text(json.dumps({"sessionId":conversation, "cwd":str(cwd),
                                           "timestamp":source_row["created_at"]}) + "\n")
         transcript.chmod(0o600)
+        p.wait_for(lambda: (root / "effects/size").exists(), "fixture worker raw terminal")
 
         def hook(text, group):
             assert cli("send", source, "--text", text).returncode == 0
@@ -1308,6 +1320,50 @@ def launch_grid_witness(root, roster, start, tmux):
                 result["workspace_action"] = {"selected": "point", "confirmed": "brand-new"}
         frames.append(result)
         run("kill-session", "-t", "form")
+    opencode = root / "bin/opencode"
+    opencode.write_text("#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nexec /bin/echo 1.19.3\n")
+    opencode.chmod(0o700)
+    effects = root / "effects"
+    (effects / "cache-probe").touch()
+    probes = effects / "cache-probes"
+
+    def probe_ids(event):
+        if not probes.exists():
+            return set()
+        return {line.removeprefix(event + " ") for line in probes.read_text().splitlines()
+                if line.startswith(event + " ")}
+
+    run("new-session", "-d", "-s", "form", "-x", "80", "-y", "24",
+        "-e", "ANTHROPIC_API_KEY=synthetic-form-key", "-c", root / "work", root / "bin/board")
+    landmark(("more (m)",), 80, 24)
+    p.wait_for(lambda: probe_ids("start"), "board prefetched adapter discovery before opening a form")
+    run("send-keys", "-t", "form:0.0", "n")
+    billing = landmark(("auth: anthropic_api_key from env (api billing)",), 80, 24, settled=True)
+
+    run("send-keys", "-t", "form:0.0", "Escape")
+    landmark(("more (m)",), 80, 24)
+    baseline = probe_ids("start")
+    barrier = effects / "form-cold"
+    barrier.touch()
+    try:
+        run("send-keys", "-t", "form:0.0", "n")
+        fresh = p.wait_for(lambda: probe_ids("start") - baseline, "reopened form refreshed provider detection")
+        reopen = landmark(("auth: anthropic_api_key from env (api billing)",), 80, 24, settled=True)
+        assert billing["cells"] == reopen["cells"]
+        assert fresh - probe_ids("finish"), "cached frame must precede the fresh version result"
+        run("send-keys", "-t", "form:0.0", "Down", "Down", "Down", "Left", "Left")
+        busy = landmark(("status: busy-only (no idle signal)",), 80, 24)
+        run("resize-window", "-t", "form:0", "-x", "40", "-y", "8")
+        narrow_busy = landmark(("status: busy-only (no idle signal)",), 40, 8)
+        run("send-keys", "-t", "form:0.0", "Right", "Right")
+        narrow_billing = landmark(("anthropic_api_key from env",), 40, 8, settled=True)
+        for capture in (billing, reopen, busy, narrow_busy, narrow_billing):
+            assert b"synthetic-form-key" not in base64.b64decode(capture["ansi_base64"])
+    finally:
+        barrier.unlink()
+        run("kill-session", "-t", "form")
+    frames[-1].update(claude_billing=billing, reopened_cached=reopen, opencode_status=busy)
+    frames[0].update(claude_billing=narrow_billing, opencode_status=narrow_busy)
     frames.sort(key=lambda frame: -frame["cols"])
     daemon.terminate()
     daemon.wait(timeout=5)

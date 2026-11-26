@@ -15,9 +15,16 @@ import fcntl
 effects = Path(sys.argv[0]).parent.parent / "effects"
 if "--version" in sys.argv:
     barrier = effects / "form-cold"
+    record_probe = (effects / "cache-probe").exists()
+    if record_probe:
+        with (effects / "cache-probes").open("a") as log:
+            log.write(f"start {os.getpid()}\n")
     deadline = time.monotonic() + 3
     while barrier.exists() and time.monotonic() < deadline:
         time.sleep(0.01)
+    if record_probe:
+        with (effects / "cache-probes").open("a") as log:
+            log.write(f"finish {os.getpid()}\n")
     print("2.1.100 (Claude Code)")
     sys.exit(0)
 
