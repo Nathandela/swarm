@@ -5,6 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import http from "node:http"
 import crypto from "node:crypto"
+import { pathToFileURL } from "node:url"
 import plugin from "./tui.mjs"
 
 const rootID = "ses_0123456789abcdef0123456789abcdef"
@@ -13,7 +14,7 @@ const tuple = { agent: "plan", model: { providerID: "opencode", modelID: "deepse
 const identity = { version: 1, workerID: "worker-A", sessionInstance: "a".repeat(32), rootID, directory: "/project", backendGeneration: "b".repeat(32) }
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 
-async function fixture(t, change = () => {}) {
+async function fixture(t, change = () => {}, bridge = plugin) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ocb-")))
   fs.chmodSync(dir, 0o700)
   const binding = { ...identity, mode: "create", nativeCreatedAtMS: 0, initialPrompt: false, socketPath: path.join(dir, "bridge.sock"), token: crypto.randomBytes(24).toString("hex") }
@@ -66,7 +67,7 @@ async function fixture(t, change = () => {}) {
   fs.writeFileSync(path.join(dir, "binding.json"), state.bindingRaw?.(binding) ?? JSON.stringify(binding), { mode: 0o600 })
   if (state.hardlinkBinding) fs.linkSync(path.join(dir, "binding.json"), path.join(dir, "linked.json"))
   t.after(async () => { for (const dispose of state.disposers.reverse()) await dispose(); fs.rmSync(dir, { recursive: true, force: true }) })
-  await plugin.tui(api, { bindingFile: path.join(dir, "binding.json") }, { id: plugin.id })
+  await bridge.tui(api, { bindingFile: path.join(dir, "binding.json") }, { id: bridge.id })
   async function call(method, route, value, token = binding.token) {
     const body = value === undefined ? undefined : JSON.stringify(value)
     return new Promise((resolve, reject) => {
@@ -917,4 +918,139 @@ test("prompt admission requires one exact genuine text part on both native route
     else assert.notEqual(refreshed.status, "admitted")
     assert.equal(f.state.calls.filter(call => call.name === (route === "initial" ? "nativeSubmit" : "prompt")).length, 1)
   }))))
+})
+
+
+const admissionBridge = process.env.SWARM_TEST_EMBEDDED_OPENCODE_BRIDGE
+const admissionOptions = { skip: !admissionBridge, timeout: 9000 }
+
+async function admissionFixture(t) {
+  const bridge = (await import(pathToFileURL(admissionBridge).href)).default
+  const f = await fixture(t, undefined, bridge)
+  const body = {
+    version: 1, sessionInstance: f.binding.sessionInstance, backendGeneration: f.binding.backendGeneration,
+    rootID, operationID: "admission_boundary", kind: "prompt", targetID: rootID,
+    messageID: "msg_" + "f".repeat(32), text: "Offline admission boundary fixture",
+  }
+  const exactMessage = f.api.client.session.message
+  f.api.client.session.message = (...args) => {
+    f.state.calls.push({ name: "exact-message" })
+    return exactMessage(...args)
+  }
+  const initialCalls = f.state.calls.length
+  let dispatchPosts = 0
+  const report = () => {
+    const rows = f.state.messages.filter(row => row.info.id === body.messageID)
+    return {
+      dispatch_posts: dispatchPosts,
+      sdk_reads: f.state.calls.slice(initialCalls).filter(call => call.name !== "prompt").length,
+      sdk_prompt_calls: f.state.calls.filter(call => call.name === "prompt").length,
+      exact_user_rows: rows.filter(row => row.info.role === "user").length,
+      exact_text_parts: rows.flatMap(row => row.parts).filter(part => part.type === "text" && part.text === body.text).length,
+      assistant_rows: f.state.messages.filter(row => row.info.role === "assistant").length,
+    }
+  }
+  return { ...f, body, report,
+    digest: () => f.call("POST", "/dispatchDigest", body),
+    dispatchOnce: () => { assert.equal(dispatchPosts++, 0); return f.call("POST", "/dispatch", body) },
+    receipt: async () => (await f.call("GET", "/receipt?operationID=" + body.operationID)).body,
+  }
+}
+
+function assertDigest(result, body) {
+  assert.equal(result.code, 200)
+  assert.equal(result.body.operationID, body.operationID)
+  assert.equal(result.body.rootID, rootID)
+  assert.match(result.body.requestHash, /^[0-9a-f]{64}$/)
+  return result.body.requestHash
+}
+
+test("admission boundary: digest binding failure is read-only", admissionOptions, async t => {
+  const f = await admissionFixture(t)
+  f.state.route = { name: "home" }
+  const rejected = await f.digest()
+  assert.equal(rejected.code, 422)
+  assert.equal(rejected.body.status, "rejected")
+  assert.equal(rejected.body.reason, "route_mismatch")
+  assert.equal(await f.receipt(), null)
+  assert.deepEqual(f.report(), { dispatch_posts: 0, sdk_reads: 0, sdk_prompt_calls: 0,
+                                 exact_user_rows: 0, exact_text_parts: 0, assistant_rows: 0 })
+  t.diagnostic(JSON.stringify({ digest_http: rejected.code, digest_reason: rejected.body.reason, ...f.report() }))
+})
+
+test("admission boundary: digest succeeds but stalled SDK status read prevents native POST", admissionOptions, async t => {
+  const f = await admissionFixture(t)
+  const hash = assertDigest(await f.digest(), f.body)
+  assert.equal(f.report().sdk_reads, 0)
+  let releaseStatus, readAttempts = 0, aborts = 0
+  f.api.client.session.status = (_input, { signal }) => {
+    readAttempts++
+    f.state.calls.push({ name: "latched-status" })
+    return new Promise(resolve => {
+      releaseStatus = () => resolve({ data: {}, response: { status: 200 } })
+      signal.addEventListener("abort", () => aborts++, { once: true })
+    })
+  }
+  const response = await f.dispatchOnce()
+  assert.equal(response.code, 200)
+  assert.equal(response.body.requestHash, hash)
+  assert.equal(response.body.status, "rejected")
+  assert.equal(response.body.reason, "native_deadline")
+  assert.equal(readAttempts, 1)
+  assert.equal(aborts, 1)
+  releaseStatus()
+  assert.equal(await f.receipt(), null)
+  const counts = f.report()
+  assert.equal(counts.dispatch_posts, 1)
+  assert.equal(counts.sdk_reads, 4)
+  assert.equal(counts.sdk_prompt_calls, 0)
+  assert.equal(counts.exact_user_rows, 0)
+  assert.equal(counts.exact_text_parts, 0)
+  assert.equal(counts.assistant_rows, 0)
+  t.diagnostic(JSON.stringify({ digest_http: 200, dispatch_reason: response.body.reason, stalled_reads: readAttempts,
+                                read_aborts: aborts, late_status_released: true, ...counts }))
+})
+
+test("admission boundary: delayed exact user part recovers admission without replay or assistant claim", admissionOptions, async t => {
+  const f = await admissionFixture(t)
+  const hash = assertDigest(await f.digest(), f.body)
+  let release, input, aborts = 0
+  f.api.client.session.promptAsync = (request, { signal }) => {
+    input = request
+    f.state.calls.push({ name: "prompt" })
+    signal.addEventListener("abort", () => aborts++, { once: true })
+    // Deliberately ignore cancellation, as a native POST may outlive the owner's wait.
+    return new Promise(resolve => { release = () => resolve({ response: { status: 204 } }) })
+  }
+  try {
+    const first = (await f.dispatchOnce()).body
+    assert.equal(first.status, "uncertain")
+    assert.equal(first.reason, "native_deadline")
+    assert.equal(first.requestHash, hash)
+    assert.equal(aborts, 1)
+    assert.equal(f.report().exact_user_rows, 0)
+    assert.equal(f.report().exact_text_parts, 0)
+    assert.equal((await f.receipt()).status, "uncertain")
+
+    const user = { info: { id: input.messageID, sessionID: rootID, role: "user", time: { created: Date.now() },
+                          agent: input.agent, model: { ...input.model, variant: input.variant } }, parts: [] }
+    f.state.messages.push(user)
+    assert.equal(f.report().exact_user_rows, 1)
+    assert.equal(f.report().exact_text_parts, 0)
+    assert.equal((await f.receipt()).status, "uncertain")
+    user.parts.push({ id: "prt_" + "f".repeat(32), sessionID: rootID, messageID: input.messageID,
+                      type: "text", text: input.parts[0].text })
+    const admitted = await f.receipt()
+    assert.equal(admitted.status, "admitted")
+    assert.equal(admitted.messageID, f.body.messageID)
+    assert.equal(admitted.requestHash, hash)
+    const counts = f.report()
+    assert.equal(counts.dispatch_posts, 1)
+    assert.equal(counts.sdk_prompt_calls, 1)
+    assert.equal(counts.exact_user_rows, 1)
+    assert.equal(counts.exact_text_parts, 1)
+    assert.equal(counts.assistant_rows, 0)
+    t.diagnostic(JSON.stringify({ digest_http: 200, statuses: ["uncertain", "uncertain", "admitted"],
+                                  sdk_abort_signals: aborts, ...counts }))
+  } finally { release?.() }
 })

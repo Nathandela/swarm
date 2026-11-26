@@ -394,6 +394,30 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "runs the fixture with Node 22+ and the exact Rust-transformed provider bridge"]
+    fn native_admission_boundary_fixture() {
+        let dir = crate::test_temp::root()
+            .join(format!("oc-admission-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&dir).unwrap();
+        let bridge = dir.join("embedded.mjs");
+        fs::write(&bridge, bridge_source().unwrap()).unwrap();
+        let suite = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/opencode/tui.test.mjs");
+        let result = std::process::Command::new("node")
+            .args(["--test", "--test-name-pattern=^admission boundary:"])
+            .arg(suite)
+            .env("SWARM_TEST_EMBEDDED_OPENCODE_BRIDGE", bridge)
+            .output();
+        fs::remove_dir_all(dir).unwrap();
+        let output = result.unwrap();
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn admits_only_canonical_stable_versions_from_the_native_floor() {
         for input in ["1.19.3\n", "1.20.0", "2.0.0", "12.0.0"] {
             assert!(version(input).is_ok(), "{input}");
