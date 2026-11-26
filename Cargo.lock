@@ -1357,9 +1357,11 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bbolt-rs",
+ "flate2",
  "hmac",
  "jiff",
  "libc",
+ "ring",
  "rustix 1.1.6",
  "serde",
  "serde_json",

@@ -1,9 +1,12 @@
 //! A managed installation holds a shared lease before any command can reach a writer.
+mod archive;
+mod transaction;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
 use std::process::Command;
 
 fn invalid(reason: &str) -> io::Error {
@@ -49,7 +52,7 @@ pub(crate) fn identify() -> io::Result<Option<(PathBuf, PathBuf)>> {
             owner_file(&marker, false)?
                 .take(3)
                 .read_to_end(&mut version)?;
-            if version != b"1\n" {
+            if version != b"2\n" {
                 return Err(invalid("invalid managed installation marker"));
             }
         }
@@ -329,40 +332,17 @@ pub(crate) fn run(args: &[std::ffi::OsString]) -> u8 {
             }
             return Ok(0);
         };
-        let admin = exe.with_file_name("swarm-rust-install.py");
-        let mut command = Command::new("python3");
-        command
-            .arg("-I")
-            .arg(admin)
-            .arg("upgrade")
-            .arg(root)
-            .arg(step)
-            .arg("--caller")
-            .arg(exe.parent().unwrap().file_name().unwrap());
-        if let Some(path) = dist {
-            command.arg("--dist").arg(path);
-        }
-        for flag in ["json", "allow-downgrade", "check-media"] {
-            if set.contains(flag) {
-                command.arg(format!("--{flag}"));
-            }
-        }
-        if matches!(step, "activate" | "rollback" | "unattended") {
-            let state = crate::ipc::state_path()?;
-            for path in [
-                state.join("daemon.lock"),
-                state.join(".rust-state-writer.lock"),
-                crate::ipc::env_path("SWARM_DAEMON_LOCK")
-                    .unwrap_or_else(|| state.join("daemon.lock")),
-            ] {
-                command.arg("--writer-lock").arg(path);
-            }
-        }
-        let status = command.status()?;
-        Ok(status
-            .code()
-            .and_then(|code| u8::try_from(code).ok())
-            .unwrap_or(1))
+        transaction::run(
+            &root,
+            &exe,
+            transaction::Options {
+                step,
+                dist,
+                json: set.contains("json"),
+                allow_downgrade: set.contains("allow-downgrade"),
+                check_media: set.contains("check-media"),
+            },
+        )
     })();
     result.unwrap_or_else(|error| {
         eprintln!("swarm upgrade: {error}");
