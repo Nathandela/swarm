@@ -5,6 +5,9 @@ use crate::json_fields::object_fields;
 
 const MAX_RECORDS: usize = 4096;
 const MAX_BYTES: usize = 64 << 20;
+// Go decodes the full State on writable reopen. Its root and table map
+// surround each stored row and count towards encoding/json's 10,000 levels.
+const MAX_ROW_DEPTH: usize = 9_998;
 
 fn invalid() -> io::Error {
     io::Error::other("the original Voice records cannot reopen in Go")
@@ -77,7 +80,7 @@ pub(super) fn reopen<'tx>(tx: &impl TxApi<'tx>) -> io::Result<Value> {
             return Err(invalid());
         }
         let row = std::str::from_utf8(raw).map_err(io::Error::other)?;
-        if !kind.check(row, false) {
+        if !go_row_depth(row) || !kind.check(row, false) {
             return Err(invalid());
         }
         size += go_bytes(&json!(index))?.len() + 1 + usize::from(table == previous) + raw.len();
@@ -166,6 +169,32 @@ impl Kind {
             }
         }
     }
+}
+
+fn go_row_depth(raw: &str) -> bool {
+    let mut depth: usize = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    for byte in raw.bytes() {
+        if escaped {
+            escaped = false;
+        } else if byte == b'"' {
+            in_string = !in_string;
+        } else if in_string {
+            escaped = byte == b'\\';
+        } else if matches!(byte, b'{' | b'[') {
+            depth += 1;
+            if depth > MAX_ROW_DEPTH {
+                return false;
+            }
+        } else if matches!(byte, b'}' | b']') {
+            let Some(next) = depth.checked_sub(1) else {
+                return false;
+            };
+            depth = next;
+        }
+    }
+    depth == 0 && !in_string
 }
 
 fn go_raw_len(raw: &str) -> usize {
@@ -565,6 +594,20 @@ const TABLES: &[(&str, Kind)] = &[
 mod tests {
     use super::*;
     use bbolt_rs::{Bolt, BucketRwApi, DbRwAPI, TxRwApi, TxRwRefApi};
+
+    #[test]
+    fn row_depth_includes_go_full_state_wrappers_and_ignores_escaped_strings() {
+        let leaf = serde_json::to_string(&"quoted \" with [ brackets { and backslash \\").unwrap();
+        let nested = |depth: usize| {
+            format!(
+                r#"{{"payload":{}{leaf}{}}}"#,
+                "[".repeat(depth),
+                "]".repeat(depth)
+            )
+        };
+        assert!(go_row_depth(&nested(MAX_ROW_DEPTH - 1)));
+        assert!(!go_row_depth(&nested(MAX_ROW_DEPTH)));
+    }
 
     #[test]
     fn go_times_require_the_original_rfc3339_nano_encoding() {

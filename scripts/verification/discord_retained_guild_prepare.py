@@ -674,6 +674,42 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                     checked = subprocess.run(command, env=rust_env(f"publish-{probe}"), capture_output=True, timeout=10)
                     assert checked.returncode == 0 and (voice.read_bytes(), connector.read_bytes()) == original, checked.stdout + checked.stderr
                 print("PASS explicit stage dry-run and wrong message ID made no write", flush=True)
+                copy = base / "voice-size-copy"
+                copy.mkdir(mode=0o700)
+                shutil.copy2(voice.with_name("voice.initialized"), copy / "voice.initialized")
+                copied = copy / "voice.db"
+                for damage, readable, reopenable in (
+                    ("reopen-depth-boundary", True, True),
+                    ("reopen-depth-excess", True, False),
+                    ("row-depth-excess", False, False),
+                ):
+                    with sock.with_name("controller.lock").open("rb") as lock:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        invoke("guild-malform-timestamp", voice.parent, "701", damage)
+                    boundary = voice.read_bytes()
+                    shutil.copy2(voice, copied)
+                    try:
+                        before = len(calls), len(posts), len(tool_output)
+                        go_read = subprocess.run([fixture, "guild-publication", copy], env=env,
+                                                 capture_output=True, timeout=10)
+                        assert (go_read.returncode == 0) == readable, (damage, go_read.stderr)
+                        assert copied.read_bytes() == boundary
+                        go_open = subprocess.run([fixture, "retained-voice-size", copy, "reopen"],
+                                                 env=env, capture_output=True, timeout=10)
+                        assert (go_open.returncode == 0) == reopenable, (damage, go_open.stderr)
+                        if not reopenable:
+                            assert copied.read_bytes() == boundary
+                        for probe in ("dry-run",) if reopenable else ("malformed-dry-run", "malformed"):
+                            rust = subprocess.run(command, env=rust_env(f"publish-{probe}"),
+                                                  capture_output=True, timeout=10)
+                            assert rust.returncode == 0, (damage, rust.stdout, rust.stderr)
+                            if not reopenable:
+                                assert b"cannot reopen in Go" in rust.stderr, rust.stderr
+                            assert (voice.read_bytes(), connector.read_bytes()) == (boundary, original[1])
+                            assert before == (len(calls), len(posts), len(tool_output))
+                    finally:
+                        voice.write_bytes(original[0])
+                    print(f"PASS exact Go/Rust nesting boundary ({damage}) with zero new native sends or POSTs", flush=True)
                 for damage in ("conversation-type", "logical-bytes", "journal-type", "snapshot-type"):
                     with sock.with_name("controller.lock").open("rb") as lock:
                         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

@@ -639,7 +639,7 @@ func FixtureDamageGuildNative(dir, message, change string) error {
 		return ErrInvalid
 	}
 	switch change {
-	case "logical-bytes", "conversation-type", "journal-type", "snapshot-type", "raw-message":
+	case "logical-bytes", "conversation-type", "journal-type", "snapshot-type", "raw-message", "reopen-depth-boundary", "reopen-depth-excess", "row-depth-excess":
 		store, err := OpenStore(dir)
 		if err != nil {
 			return err
@@ -678,6 +678,32 @@ func FixtureDamageGuildNative(dir, message, change string) error {
 				}
 				root := tx.Bucket([]byte("controller"))
 				records := root.Bucket([]byte("records"))
+				switch change {
+				case "reopen-depth-boundary", "reopen-depth-excess", "row-depth-excess":
+					depth := map[string]int{"reopen-depth-boundary": 9997, "reopen-depth-excess": 9998, "row-depth-excess": 10000}[change]
+					snapshot, ok := st.JournalSnapshots[st.CurrentConversation]
+					if !ok {
+						return ErrNotFound
+					}
+					leaf, err := json.Marshal("quoted \" with [ brackets { and backslash \\")
+					if err != nil {
+						return err
+					}
+					snapshot.Metadata = json.RawMessage(strings.Repeat("[", depth) + string(leaf) + strings.Repeat("]", depth))
+					raw, err := json.Marshal(snapshot)
+					if err != nil {
+						return err
+					}
+					k := []byte("journal_snapshots\x00" + st.CurrentConversation)
+					old := records.Get(k)
+					xorRecord(&header.RecordHash, k, old)
+					xorRecord(&header.RecordHash, k, raw)
+					header.LogicalBytes += len(raw) - len(old)
+					if err := records.Put(k, raw); err != nil {
+						return err
+					}
+					return writeHeader(tx, header)
+				}
 				table, field, malformed := "conversations", "last_speech_epoch", `{}`
 				if change == "journal-type" {
 					table, field = "journal", "sequence"
@@ -894,8 +920,17 @@ func FixtureRetainedVoiceSize(dir, action string) error {
 	root := filepath.Dir(dir)
 	if canonical != dir || filepath.Base(dir) != "voice-size-copy" ||
 		filepath.Dir(root) != tmp ||
-		(!strings.HasPrefix(filepath.Base(root), "dn-admit-") && !strings.HasPrefix(filepath.Base(root), "dp-")) {
+		(!strings.HasPrefix(filepath.Base(root), "dn-admit-") &&
+			!strings.HasPrefix(filepath.Base(root), "dp-") &&
+			!(action == "reopen" && strings.HasPrefix(filepath.Base(root), "gp-"))) {
 		return ErrInvalid
+	}
+	if action == "reopen" {
+		store, err := OpenStore(dir)
+		if err != nil {
+			return err
+		}
+		return store.Close()
 	}
 	path := filepath.Join(dir, "voice.db")
 	info, err := os.Lstat(path)
