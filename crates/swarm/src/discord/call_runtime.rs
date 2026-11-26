@@ -107,6 +107,9 @@ impl Driver {
         let runtime = cfg.0["calls"]
             .is_object()
             .then(|| {
+                if cfg.0["calls"]["mode"] == "team" && !cursor.team_membership_events {
+                    return Err(invalid("Discord denied team membership events"));
+                }
                 scope
                     .ok_or_else(|| {
                         invalid("personal calls require the qualified native discussion")
@@ -987,7 +990,7 @@ while read -r line; do :; done
                 &mut socket,
                 json!({"op":10,"d":{"heartbeat_interval":60000}}),
             );
-            assert_eq!(recv(&mut socket)["d"]["intents"], 37505);
+            assert_eq!(recv(&mut socket)["d"]["intents"], 37507);
             send(
                 &mut socket,
                 json!({"op":0,"t":"READY","s":1,"d":{"application":{"id":"3"},"user":{"id":"3","bot":true}}}),

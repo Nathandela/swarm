@@ -21,6 +21,27 @@ pub(super) fn probe(config: &Config) -> io::Result<&'static str> {
 pub(super) type Connection = WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
 
 pub(super) fn open(config: &Config) -> io::Result<(Connection, Cursor)> {
+    with_team_intents(config, |team| open_once(config, team))
+}
+
+fn team_calls(config: &Config) -> bool {
+    config.text("mode") == "teammate" && config.0["calls"]["mode"] == "team"
+}
+
+fn with_team_intents<T>(
+    config: &Config,
+    mut connect: impl FnMut(bool) -> io::Result<T>,
+) -> io::Result<T> {
+    let team = team_calls(config);
+    match connect(team) {
+        Err(error) if team && error.to_string() == "Discord Gateway closed with code 4014" => {
+            connect(false)
+        }
+        result => result,
+    }
+}
+
+fn open_once(config: &Config, team: bool) -> io::Result<(Connection, Cursor)> {
     let token = load_token(Path::new(config.text("token_file")))?;
     let timeout = Instant::now() + TIMEOUT;
     let mut stream = None;
@@ -42,7 +63,7 @@ pub(super) fn open(config: &Config) -> io::Result<(Connection, Cursor)> {
         .max_frame_size(Some(MAX_FRAME));
     let (mut socket, _) = client_tls_with_config(URL, stream, Some(limits), None)
         .map_err(|_| io::Error::other("Discord Gateway TLS or WebSocket handshake failed"))?;
-    let cursor = ready(&mut socket, config, &token)?;
+    let cursor = ready_with(&mut socket, config, &token, team)?;
     if config.0["calls"].is_object() {
         use tungstenite::stream::MaybeTlsStream;
         match socket.get_mut() {
@@ -63,6 +84,7 @@ pub(super) struct Cursor {
     interval: Duration,
     next: Instant,
     awaiting: bool,
+    pub(super) team_membership_events: bool,
 }
 
 impl Cursor {
@@ -118,10 +140,20 @@ impl Cursor {
     }
 }
 
+#[cfg(test)]
 pub(super) fn ready(
     socket: &mut WebSocket<impl Read + Write>,
     config: &Config,
     token: &str,
+) -> io::Result<Cursor> {
+    ready_with(socket, config, token, team_calls(config))
+}
+
+fn ready_with(
+    socket: &mut WebSocket<impl Read + Write>,
+    config: &Config,
+    token: &str,
+    team: bool,
 ) -> io::Result<Cursor> {
     let timeout = Instant::now() + TIMEOUT;
     let hello = next(socket, timeout)?;
@@ -138,14 +170,7 @@ pub(super) fn ready(
     let intents = if config.text("mode") == "personal" {
         1 << 12 | if calls { 1 | 1 << 7 } else { 0 }
     } else {
-        1 | (1 << 9)
-            | (1 << 12)
-            | (1 << 15)
-            | if config.text("mode") == "teammate" && config.0["calls"]["mode"] == "team" {
-                1 << 7
-            } else {
-                0
-            }
+        1 | (1 << 9) | (1 << 12) | (1 << 15) | if team { (1 << 7) | (1 << 1) } else { 0 }
     };
     send(
         socket,
@@ -176,6 +201,7 @@ pub(super) fn ready(
                 interval: Duration::from_millis(interval),
                 next: last_heartbeat + Duration::from_millis(interval),
                 awaiting: false,
+                team_membership_events: team,
             });
         }
         if event["op"] == 7 || event["op"] == 9 {
@@ -240,6 +266,30 @@ pub(super) fn send(socket: &mut WebSocket<impl Read + Write>, event: Value) -> i
 mod tests {
     use super::*;
     use std::os::unix::net::UnixStream;
+
+    #[test]
+    fn denied_team_membership_intent_retries_once_with_team_voice_off() {
+        let cfg = Config(json!({"mode":"teammate","calls":{"mode":"team"}}));
+        let mut attempts = Vec::new();
+        let ready = with_team_intents(&cfg, |team| {
+            attempts.push(team);
+            if team {
+                Err(io::Error::other("Discord Gateway closed with code 4014"))
+            } else {
+                Ok("text")
+            }
+        })
+        .unwrap();
+        assert_eq!(ready, "text");
+        assert_eq!(attempts, [true, false]);
+        let mut attempts = Vec::new();
+        let result = with_team_intents(&cfg, |team| {
+            attempts.push(team);
+            Err::<(), _>(io::Error::other("Discord Gateway closed with code 4004"))
+        });
+        assert!(result.is_err());
+        assert_eq!(attempts, [true]);
+    }
 
     #[test]
     fn synthetic_personal_gateway_verifies_bot_and_only_requests_dm_intent() {
