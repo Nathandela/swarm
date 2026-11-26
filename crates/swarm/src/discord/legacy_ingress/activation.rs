@@ -41,15 +41,12 @@ pub(in crate::discord) fn selected(place: &Place) -> io::Result<bool> {
     Ok(true)
 }
 
-pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<()> {
-    probe(place, cfg, db, true)
+pub(super) enum Ready {
+    Idle,
+    AdmittedFile { parent_message: String },
 }
 
-pub(super) fn idle(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<()> {
-    probe(place, cfg, db, false)
-}
-
-fn probe(place: &Place, cfg: &Config, db: &impl DbApi, admitted_wake: bool) -> io::Result<()> {
+pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<Ready> {
     let tx = db.begin().map_err(io::Error::other)?;
     let install = cfg.text("installation_id");
     let channel = cfg.text("dm_channel_id");
@@ -100,10 +97,13 @@ fn probe(place: &Place, cfg: &Config, db: &impl DbApi, admitted_wake: bool) -> i
     let (_pin, voice) = open_bolt(&path, 64 << 20)?;
     let voice_tx = voice.begin().map_err(io::Error::other)?;
     let state = match prepare::read_voice(&voice_tx, &ledger, cfg, &endpoint) {
-        Err(_) if retained_vm(cfg) && admitted_wake => {
+        Err(_) if retained_vm(cfg) => {
             require_no_pending_vm_mail(place, &format!("discord-teammate-{ledger}"))?;
-            return wake::inspect(place, cfg, &tx, &voice_tx, &binding, &ledger, &endpoint)
-                .map(|_| ());
+            return wake::inspect(place, cfg, &tx, &voice_tx, &binding, &ledger, &endpoint).map(
+                |proof| Ready::AdmittedFile {
+                    parent_message: field(&proof.origin, "message_id").to_owned(),
+                },
+            );
         }
         result => result?,
     };
@@ -161,7 +161,7 @@ fn probe(place: &Place, cfg: &Config, db: &impl DbApi, admitted_wake: bool) -> i
         return Err(invalid());
     }
     open_owner_file(&directory.join("bridge.auth"))?;
-    Ok(())
+    Ok(Ready::Idle)
 }
 
 pub(super) fn require_no_pending_vm_mail(place: &Place, discussion: &str) -> io::Result<()> {
@@ -237,13 +237,13 @@ pub(in crate::discord) fn migrate(
     let record = identity_of(place, &cfg)?;
     if dry_run {
         let (_pin, db) = open_bolt(&source, 64 << 20)?;
-        idle(place, &cfg, &db)?;
+        ready(place, &cfg, &db)?;
         if identity_of(place, &place.load()?)? != record {
             return Err(invalid());
         }
     } else {
         let lease = ConnectorLease::acquire(place, &cfg, &expected, true)?;
-        idle(place, &cfg, &lease.db)?;
+        ready(place, &cfg, &lease.db)?;
         if !lease.source_unchanged()? || identity_of(place, &place.load()?)? != record {
             return Err(invalid());
         }

@@ -645,6 +645,54 @@ pub(super) fn complete(
     {
         return Err(invalid());
     }
+    await_completed(place, cfg, request, &turn)?;
+    let permit_key = key("permits", &conversation, &turn)?;
+    let closed = key("closed_turns", &conversation, &turn)?;
+    let root = tx.bucket(b"controller").ok_or_else(invalid)?;
+    let records = root.bucket(b"records").ok_or_else(invalid)?;
+    let mut permit: Value = serde_json::from_slice(records.get(&permit_key).ok_or_else(invalid)?)?;
+    if permit["conversation_id"] != conversation
+        || permit["admission"] != seq
+        || permit["native_turn_id"] != turn
+        || permit["native_input_id"] != admission["nonce"]
+        || permit["revoked"] != false
+        || records.get(&closed).is_some()
+        || records.iter_entries().any(|(key, raw)| {
+            key.starts_with(b"actions\0")
+                || key.starts_with(b"requests\0")
+                || key.starts_with(b"wakes\0")
+                    && (!retained_vm(cfg)
+                        || !serde_json::from_slice::<Value>(raw)
+                            .is_ok_and(|wake| wake["state"] == "settled"))
+        })
+        || !identity(&pin, &path)?
+        || !lease.source_unchanged()?
+    {
+        return Err(invalid());
+    }
+    permit["revoked"] = json!(true);
+    original.admission["phase"] = json!("completed");
+    original.admission["settled_at"] = json!(Timestamp::now().to_string());
+    original
+        .admission
+        .as_object_mut()
+        .ok_or_else(invalid)?
+        .shift_remove("reply_check_after");
+    original.conversation["retired_through"] = json!(seq);
+    let changes = [
+        (
+            format!("conversations\0{conversation}").into_bytes(),
+            original.conversation,
+        ),
+        (original.key, original.admission),
+        (permit_key, permit),
+        (closed, json!(true)),
+    ];
+    apply_voice(tx, original.header, &changes)
+}
+
+fn await_completed(place: &Place, cfg: &Config, request: &Value, turn: &str) -> io::Result<()> {
+    let admission = &request["manager_admission"];
     let caps = ["manager-provenance"];
     let (mut owner, _) = super::super::migrate_supervisor::verified_owner(
         place.supervisor_root(),
@@ -684,44 +732,292 @@ pub(super) fn complete(
             }
         }
     }
-    let permit_key = key("permits", &conversation, &turn)?;
-    let closed = key("closed_turns", &conversation, &turn)?;
-    let root = tx.bucket(b"controller").ok_or_else(invalid)?;
-    let records = root.bucket(b"records").ok_or_else(invalid)?;
-    let mut permit: Value = serde_json::from_slice(records.get(&permit_key).ok_or_else(invalid)?)?;
-    if permit["conversation_id"] != conversation
-        || permit["admission"] != seq
-        || permit["native_turn_id"] != turn
-        || permit["native_input_id"] != admission["nonce"]
-        || permit["revoked"] != false
-        || records.get(&closed).is_some()
-        || records.iter_entries().any(|(key, _)| {
-            [b"actions\0".as_slice(), b"requests\0", b"wakes\0"]
-                .iter()
-                .any(|prefix| key.starts_with(prefix))
-        })
-        || !identity(&pin, &path)?
-        || !lease.source_unchanged()?
+    Ok(())
+}
+
+pub(super) fn complete_vm_wake(
+    place: &Place,
+    cfg: &Config,
+    lease: &ConnectorLease,
+    binding: &Value,
+    output: &Value,
+) -> io::Result<()> {
+    let (directory, id, endpoint) = voice_location(place, cfg, binding)?;
+    let conversation = format!("discord-teammate-{id}");
+    let turn = field(output, "native_turn_id");
+    let publication = field(output, "id");
+    let sequence = output["admission"]
+        .as_u64()
+        .filter(|n| *n > 0)
+        .ok_or_else(invalid)?;
+    let wake_id = field(&output["discussion_source"], "admission_id");
+    let outbox_key = format!(
+        "{}\0{}\0{publication}",
+        cfg.text("installation_id"),
+        field(binding, "ID")
+    );
+    let conn = lease.db.begin().map_err(io::Error::other)?;
+    let out = value(&conn, "teammate_outbox", outbox_key.as_bytes())?.ok_or_else(invalid)?;
+    if publication.is_empty()
+        || turn.is_empty()
+        || wake_id.is_empty()
+        || out["Publication"]["ID"] != publication
+        || out["Publication"]["AdmissionID"] != wake_id
+        || out["Publication"]["Sequence"] != output["output_sequence"]
+        || out["ExportAck"] != true
+        || out["Chunks"][0]["state"] != "sent"
+        || out["Chunks"][0]["rest_acknowledged"] != true
     {
         return Err(invalid());
     }
+    let path = directory.join("voice.db");
+    let (pin, mut db) = bounded_writer(writable_pin(&path)?)?;
+    let tx = db.begin_rw().map_err(io::Error::other)?;
+    let root = tx.bucket(b"controller").ok_or_else(invalid)?;
+    let raw_header = root
+        .get(b"state")
+        .filter(|raw| raw.len() <= 4096)
+        .ok_or_else(invalid)?;
+    let header: Value = serde_json::from_slice(raw_header)?;
+    if root.get(b"digest") != Some(format!("{:x}", Sha256::digest(raw_header)).as_bytes())
+        || header["version"] != 4
+        || header["current_conversation"] != conversation
+    {
+        return Err(invalid());
+    }
+    let records = root.bucket(b"records").ok_or_else(invalid)?;
+    if records.iter_buckets().next().is_some() {
+        return Err(invalid());
+    }
+    let mut checksum = [0; 32];
+    let mut count = 0;
+    for (key, raw) in records.iter_entries() {
+        count += 1;
+        if count > 4096 || raw.len() > 1 << 20 {
+            return Err(invalid());
+        }
+        for (left, right) in checksum.iter_mut().zip(record_hash(key, raw)) {
+            *left ^= right;
+        }
+        if key.starts_with(b"actions\0") {
+            let action: Value = serde_json::from_slice(raw)?;
+            if action["admission"] == sequence && action["state"] != "settled" {
+                return Err(invalid());
+            }
+        }
+    }
+    if header["records"] != count || header["record_hash"] != json!(checksum) {
+        return Err(invalid());
+    }
+    let read = |value: &[u8]| -> io::Result<Value> {
+        Ok(serde_json::from_slice(
+            records.get(value).ok_or_else(invalid)?,
+        )?)
+    };
+    let conv_key = format!("conversations\0{conversation}").into_bytes();
+    let admission_key = key("admissions", &conversation, &sequence.to_string())?;
+    let permit_key = key("permits", &conversation, turn)?;
+    let wake_key = key("wakes", &conversation, wake_id)?;
+    let closed = key("closed_turns", &conversation, turn)?;
+    let mut state = read(&conv_key)?;
+    let mut admission = read(&admission_key)?;
+    let mut permit = read(&permit_key)?;
+    let mut wake = read(&wake_key)?;
+    let request = &admission["request"];
+    let nonce = &request["manager_admission"]["nonce"];
+    let mut native = state["binding"].clone();
+    let fields = native.as_object_mut().ok_or_else(invalid)?;
+    let session = fields.remove("session_id").ok_or_else(invalid)?;
+    fields.insert("session".into(), session);
+    fields.remove("native_cli");
+    fields.remove("generation");
+    if request["manager_admission"]["binding"] != native
+        || request["manager_admission"]["expected_external_input"] != 0
+        || permit["conversation_id"] != conversation
+        || admission["conversation_id"] != conversation
+        || wake["conversation_id"] != conversation
+        || read(&key("publications", &conversation, publication)?)? != *output
+        || output["exported"] != true
+        || state["binding"]["native_cli"] != true
+        || state["binding"]["session_id"] != request["session"]
+        || !field(&state["binding"], "session_id").starts_with(&format!("{endpoint}/"))
+        || state["binding"]["session_instance"] != request["session_instance"]
+        || permit["revoked"] != false
+        || permit["admission"] != sequence
+        || permit["native_turn_id"] != turn
+        || permit["native_input_id"] != *nonce
+        || records.get(&closed).is_some()
+        || admission["phase"] != "running"
+        || admission["settled_at"] != EMPTY_TIME
+        || admission["native_input_id"] != *nonce
+        || admission["native_turn_id"] != turn
+        || admission["source_id"] != format!("wake:{wake_id}")
+        || wake["id"] != wake_id
+        || wake["state"] != "native_input"
+        || wake["native_input_id"] != *nonce
+        || wake["admission"] != sequence
+    {
+        return Err(invalid());
+    }
+    await_completed(place, cfg, request, turn)?;
+    current_turn_enrollment(place, cfg)?;
+    if !identity(&pin, &path)? || !lease.source_unchanged()? {
+        return Err(invalid());
+    }
+    let old_floor = state["retired_through"].as_u64().unwrap_or_default();
+    let last = state["last_admission"].as_u64().ok_or_else(invalid)?;
+    if sequence <= old_floor || sequence > last || last.saturating_sub(old_floor) > 4096 {
+        return Err(invalid());
+    }
+    let mut floor = old_floor;
+    while floor < last {
+        let next = floor + 1;
+        if next != sequence {
+            let next_key = key("admissions", &conversation, &next.to_string())?;
+            let Some(raw) = records.get(&next_key) else {
+                break;
+            };
+            let next_admission: Value = serde_json::from_slice(raw)?;
+            if next_admission["conversation_id"] != conversation
+                || next_admission["sequence"] != next
+            {
+                return Err(invalid());
+            }
+            if field(&next_admission, "settled_at").is_empty()
+                || next_admission["settled_at"] == EMPTY_TIME
+            {
+                break;
+            }
+        }
+        floor = next;
+    }
+    let owner_reply = settled_vm_owner_reply(&conn, &records, cfg, &conversation, output, &wake)?;
     permit["revoked"] = json!(true);
-    original.admission["phase"] = json!("completed");
-    original.admission["settled_at"] = json!(Timestamp::now().to_string());
-    original
-        .admission
-        .as_object_mut()
-        .ok_or_else(invalid)?
-        .shift_remove("reply_check_after");
-    original.conversation["retired_through"] = json!(seq);
-    let changes = [
-        (
-            format!("conversations\0{conversation}").into_bytes(),
-            original.conversation,
-        ),
-        (original.key, original.admission),
+    admission["phase"] = json!("completed");
+    admission["settled_at"] = json!(Timestamp::now().to_string());
+    wake["state"] = json!("settled");
+    state["retired_through"] = json!(floor);
+    let mut changes = vec![
+        (conv_key, state),
+        (admission_key, admission),
         (permit_key, permit),
+        (wake_key, wake),
         (closed, json!(true)),
     ];
-    apply_voice(tx, original.header, &changes)
+    changes.extend(owner_reply);
+    apply_voice(tx, header, &changes)
+}
+
+fn settled_vm_owner_reply<'conn, 'voice>(
+    connector: &impl TxApi<'conn>,
+    records: &impl BucketApi<'voice>,
+    cfg: &Config,
+    conversation: &str,
+    publication: &Value,
+    active_wake: &Value,
+) -> io::Result<Option<(Vec<u8>, Value)>> {
+    let source = &publication["discussion_source"];
+    let event_id = field(active_wake, "event_id");
+    let event = wake::record(records, "events", &[conversation, event_id])?;
+    let note = &event["metadata"];
+    let session = field(note, "Session");
+    let instance = field(note, "Instance");
+    let target = serde_json::to_string(&[session, instance])?;
+    let worker = wake::record(records, "workers", &[conversation, &target])?;
+    let parent_n = worker["admission"]
+        .as_u64()
+        .filter(|n| *n > 0)
+        .ok_or_else(invalid)?;
+    let parent_key = key("admissions", conversation, &parent_n.to_string())?;
+    let mut parent: Value = serde_json::from_slice(records.get(&parent_key).ok_or_else(invalid)?)?;
+    if parent["reply_check_after"].as_i64().unwrap_or_default() == 0 {
+        return Ok(None);
+    }
+    let origin = &parent["origin"];
+    let project = field(&parent, "project");
+    let attempts = field(publication, "discussion_attempts");
+    let projects: Vec<String> = serde_json::from_str(field(publication, "discussion_projects"))?;
+    if publication["final"] != true
+        || event["worker_message"] != true
+        || event["wake_id"] != active_wake["id"]
+        || event["recovery_only"] == true
+        || event["attempt_id"] != source["attempt_id"]
+        || event["job_id"] != source["job_id"]
+        || source["admission_id"] != active_wake["id"]
+        || note["Kind"] != "complete"
+        || field(note, "NoteID").is_empty()
+        || event_id
+            != format!(
+                "worker-message-{}",
+                digest(&json!([
+                    session,
+                    instance,
+                    source["attempt_id"],
+                    note["NoteID"]
+                ]))?
+            )
+        || !note["Sequence"]
+            .as_u64()
+            .is_some_and(|sequence| sequence > 0)
+        || worker["vm_child"] != true
+        || worker["mailbox"] != true
+        || worker["action_id"] != ""
+        || worker["session"] != session
+        || worker["session_instance"] != instance
+        || worker["attempt_id"] != event["attempt_id"]
+        || worker["job_id"] != event["job_id"]
+        || worker["recovery_required"] == true
+        || worker["reserved"] == true
+        || worker["project"] != project
+        || projects != [project]
+        || !grants::project(cfg, project)
+        || !attempts.is_empty()
+            && serde_json::from_str::<Vec<String>>(attempts)? != [field(source, "attempt_id")]
+        || field(&parent, "native_input_id").len() != 64
+        || worker["parent_input_hash"]
+            != supervisor::mail::parent_hash(field(&parent, "native_input_id"))
+        || parent["phase"] != "completed"
+        || field(&parent, "settled_at").is_empty()
+        || parent["settled_at"] == EMPTY_TIME
+        || parent["source_cutover"] != true
+        || parent["reply_delivery_unknown"] == true
+        || parent["reply_recovery"].as_u64().unwrap_or_default() != 0
+        || origin["kind"] != "owner_direct"
+        || origin["actor_id"] != cfg.text("owner_id")
+        || origin["requester_id"] != origin["actor_id"]
+    {
+        return Ok(None);
+    }
+    publication::verify_guard(connector, cfg, origin)?;
+    // Go requires a final report for every linked attempt. Handle the one
+    // proved attempt here and keep any multi-worker obligation intact.
+    let mut linked = 0;
+    for (entry, raw) in records.iter_entries() {
+        if entry.starts_with(b"workers\0") {
+            let row: Value = serde_json::from_slice(raw)?;
+            if row["conversation_id"] == conversation
+                && row["admission"] == parent_n
+                && !field(&row, "job_id").is_empty()
+            {
+                linked += 1;
+            }
+        }
+        if entry.starts_with(b"actions\0") {
+            let row: Value = serde_json::from_slice(raw)?;
+            if row["conversation_id"] == conversation
+                && row["target"] == target
+                && row["state"] != "settled"
+            {
+                return Ok(None);
+            }
+        }
+    }
+    if linked != 1 {
+        return Ok(None);
+    }
+    let fields = parent.as_object_mut().ok_or_else(invalid)?;
+    fields.shift_remove("reply_check_after");
+    fields.shift_remove("reply_waiting_for_human");
+    parent["reply_stall_since"] = json!(Timestamp::now().as_second());
+    Ok(Some((parent_key, parent)))
 }

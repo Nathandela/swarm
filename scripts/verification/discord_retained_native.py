@@ -51,6 +51,7 @@ def discord_fixture(acknowledge, wake=False, expected_file=None, revoke=False):
     }
 
     if wake:
+        messages["702"]["content"] = "Continue after the retained VM file."
         messages["701"]["content"] = "offline original owner prompt"
         messages["701"]["author"]["username"] = "offline fixture"
 
@@ -76,7 +77,10 @@ def discord_fixture(acknowledge, wake=False, expected_file=None, revoke=False):
                 actor = "300" if revoke and app_reads > 1 else "200"
                 self.payload(dict(id="400", type=1, recipients=[dict(id=actor, bot=False)]))
             elif self.path == "/api/v10/channels/400/messages?limit=100":
-                self.payload([messages["702"], messages["701"]] if posts else [messages["501"]])
+                if wake:
+                    self.payload([messages["701"], messages["501"]])
+                else:
+                    self.payload([messages["702"], messages["701"]] if posts else [messages["501"]])
             elif self.path.startswith("/api/v10/channels/400/messages/"):
                 self.payload(messages[self.path.rsplit("/", 1)[1]])
             else:
@@ -87,7 +91,7 @@ def discord_fixture(acknowledge, wake=False, expected_file=None, revoke=False):
             assert self.headers["Authorization"] == "Bot synthetic-unused-credential"
             raw = self.rfile.read(int(self.headers["Content-Length"]))
             attachments = []
-            if wake:
+            if wake and self.headers.get("Content-Type", "").startswith("multipart/form-data"):
                 content_type = self.headers["Content-Type"].encode()
                 envelope = b"Content-Type: " + content_type + b"\r\nMIME-Version: 1.0\r\n\r\n" + raw
                 multipart = email.parser.BytesParser(policy=email.policy.default).parsebytes(envelope)
@@ -244,6 +248,17 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
         observed = json.dumps(body["input"], ensure_ascii=False)
         tool_outputs.extend(item["output"] for item in body["input"]
                             if item.get("type") == "function_call_output")
+        if mode == "ordinary-mixed" and "Continue after the retained VM file." in observed:
+            names = [(tool.get("name"), child.get("name"))
+                     for tool in body.get("tools", []) for child in tool.get("tools", [])
+                     if child.get("name") == "publish"]
+            with lock:
+                if not names or "text" in selected:
+                    return None
+                selected.add("text")
+            namespace, name = names[0]
+            return namespace, name, dict(output_id="retained-text-after-file",sequence=1,
+                                         text="Verified native final reply.",final=True)
         if "Worker message and identity" in observed:
             names = [(tool.get("name"), child.get("name"))
                      for tool in body.get("tools", []) for child in tool.get("tools", [])
@@ -297,7 +312,7 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                 ctl = subprocess.Popen([fixture, "vm-controller-run", place, "original-room", "701", stop],
                                        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 try:
-                    deadline = time.monotonic() + 45
+                    deadline = time.monotonic() + 80
                     while not waiting.wait(0.2) and ctl.poll() is None:
                         if time.monotonic() > deadline:
                             break
@@ -363,12 +378,18 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                         assert not intent.exists()
                         assert len(file_calls) == 3
                         states = json.loads(run(fixture, env, "publication-phases", place, "original-room"))
-                        phase = "prepared" if mode == "revoked" else mode
-                        assert len(states) == 1 and states[0].startswith(f"{phase} true "), states
-                        nonce = states[0].split()[-1]
-                        assert posts == ([] if phase == "prepared" else [nonce])
+                        phase = {"revoked": "prepared", "ordinary-sent": "sent", "ordinary-mixed": "sent"}.get(mode, mode)
+                        count = 2 if mode == "ordinary-mixed" else 1
+                        assert len(states) == count and all(item.startswith(f"{phase} true ") for item in states), states
+                        nonces = [item.split()[-1] for item in states]
+                        nonce = nonces[0]
+                        if mode == "ordinary-mixed":
+                            assert "text" in selected
+                            assert len(set(posts)) == 2 and set(posts) == set(nonces)
+                        else:
+                            assert posts == ([] if phase == "prepared" else [nonce])
                         staged = json.loads(run(fixture, env, "vm-read-staged-publication", place, "original-room", phase))
-                        if mode == "sent":
+                        if phase == "sent":
                             assert staged is None
                         else:
                             assert len(staged) == 1 and base64.b64decode(staged[0]) == original_bytes
@@ -379,13 +400,17 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                             run(rust_test, replay, "retained_original_go_stages_native_vm_file_call", "--nocapture")
                             assert posts == [nonce]
                             assert json.loads(run(fixture, env, "publication-phases", place, "original-room")) == states
-                        if mode in ("sent", "uncertain"):
+                        if phase in ("sent", "uncertain"):
                             reopened = json.loads(run(fixture, env, "activate", place, "original-room"))
                             assert reopened.pop("generation") >= initial.pop("generation") + 1
                             assert reopened == initial
-                            run(fixture, env, "vm-resume-publication", place, "original-room", mode)
+                            run(fixture, env, "vm-resume-publication", place, "original-room", phase)
                             assert json.loads(run(fixture, env, "publication-phases", place, "original-room")) == states
-                            assert posts == [nonce]
+                            if mode == "ordinary-mixed":
+                                assert len(set(posts)) == 2 and set(posts) == set(nonces)
+                                assert run(fixture, env, "ingress", place, "original-room", "702", "replay").strip() == "0"
+                            else:
+                                assert posts == [nonce]
                     finally:
                         if stager.poll() is None:
                             stager.terminate()
@@ -412,7 +437,7 @@ if __name__ == "__main__":
     go, fixture, codex, rust_test = (str(Path(arg).resolve(strict=True)) for arg in sys.argv[1:])
     if modes := os.environ.get("SWARM_DISCORD_ADMITTED_WAKE"):
         for mode in ("prepared", "sent", "uncertain", "revoked") if modes == "1" else modes.split(","):
-            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox")
+            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox", "ordinary-sent", "ordinary-mixed")
             with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
                 admit_vm_worker_wake(go, fixture, codex, rust_test, Path(directory), mode)
             print(f"PASS original Go admitted native worker wake fixture ({mode})")

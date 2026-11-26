@@ -1,7 +1,7 @@
 //! Read the one already-admitted media wake from its original Go ledger.
 use super::*;
 
-fn record<'a>(
+pub(super) fn record<'a>(
     records: &impl BucketApi<'a>,
     table: &str,
     coordinates: &[&str],

@@ -34,6 +34,103 @@ pub(super) struct Voice {
     admissions: u64,
 }
 
+fn settled_vm_history<'tx>(
+    records: &impl BucketApi<'tx>,
+    row_key: &[u8],
+    row: &Value,
+    conversation: &str,
+) -> io::Result<bool> {
+    if row["conversation_id"] != conversation {
+        return Ok(false);
+    }
+    if row_key.starts_with(b"workers\0") {
+        let session = field(row, "session");
+        let instance = field(row, "session_instance");
+        let worker = serde_json::to_string(&[session, instance])?;
+        return Ok(row["vm_child"] == true
+            && row["mailbox"] == true
+            && row["action_id"] == ""
+            && !session.is_empty()
+            && !instance.is_empty()
+            && field(row, "attempt_id").starts_with("vm-child-")
+            && wake::record(records, "workers", &[conversation, &worker])? == *row);
+    }
+    let saved_wake = if row_key.starts_with(b"events\0") {
+        let id = field(row, "id");
+        if id.is_empty()
+            || !(row["worker_message"] == true
+                || row["worker_proof"] == true
+                || row["vm_worker_status"] == true)
+            || wake::record(records, "events", &[conversation, id])? != *row
+        {
+            return Ok(false);
+        }
+        let saved = wake::record(records, "wakes", &[conversation, field(row, "wake_id")])?;
+        if saved["event_id"] != id {
+            return Ok(false);
+        }
+        saved
+    } else if row_key.starts_with(b"wakes\0") {
+        let id = field(row, "id");
+        if id.is_empty() || wake::record(records, "wakes", &[conversation, id])? != *row {
+            return Ok(false);
+        }
+        row.clone()
+    } else {
+        return Ok(false);
+    };
+    if saved_wake["state"] != "settled"
+        || saved_wake["conversation_id"] != conversation
+        || (!field(&saved_wake, "worker_reply").is_empty()
+            && saved_wake["worker_reply_exported"] != true)
+    {
+        return Ok(false);
+    }
+    let sequence = saved_wake["admission"]
+        .as_u64()
+        .filter(|n| *n > 0)
+        .ok_or_else(invalid)?;
+    let settled = wake::record(
+        records,
+        "admissions",
+        &[conversation, &sequence.to_string()],
+    )?;
+    let time = field(&settled, "settled_at");
+    Ok(settled["conversation_id"] == conversation
+        && settled["sequence"] == sequence
+        && settled["source_id"] == format!("wake:{}", field(&saved_wake, "id"))
+        && !time.is_empty()
+        && !time.starts_with("0001-01-01"))
+}
+
+fn settled_vm_file<'tx>(
+    records: &impl BucketApi<'tx>,
+    publication: &Value,
+    conversation: &str,
+) -> io::Result<bool> {
+    let source = &publication["discussion_source"];
+    let wake_id = field(source, "admission_id");
+    if !field(source, "attempt_id").starts_with("vm-child-") || wake_id.is_empty() {
+        return Ok(false);
+    }
+    let saved = wake::record(records, "wakes", &[conversation, wake_id])?;
+    let event = wake::record(
+        records,
+        "events",
+        &[conversation, field(&saved, "event_id")],
+    )?;
+    let published: Vec<Value> = serde_json::from_str(field(publication, "discussion_files"))?;
+    Ok(saved["state"] == "settled"
+        && saved["admission"] == publication["admission"]
+        && event["worker_message"] == true
+        && event["attempt_id"] == source["attempt_id"]
+        && event["job_id"] == source["job_id"]
+        && !published.is_empty()
+        && event["metadata"]["files"]
+            .as_array()
+            .is_some_and(|original| published.iter().all(|file| original.contains(file))))
+}
+
 pub(super) fn read_voice<'tx>(
     tx: &impl TxApi<'tx>,
     id: &str,
@@ -49,7 +146,8 @@ pub(super) fn read_voice<'tx>(
     }
     let header: Value = serde_json::from_slice(raw)?;
     let conversation = format!("discord-teammate-{id}");
-    if header["version"] != 3
+    let media_history = retained_vm(cfg) && header["version"] == 4;
+    if (header["version"] != 3 && !media_history)
         || header["current_conversation"] != conversation
         || header["reply_wait_consumed"] == true
     {
@@ -95,6 +193,9 @@ pub(super) fn read_voice<'tx>(
                 continue;
             }
         }
+        if media_history && settled_vm_history(&records, key, &value, &conversation)? {
+            continue;
+        }
         let turn = field(&value, "native_turn_id");
         if value["conversation_id"] == conversation && !turn.is_empty() {
             let turn_key = serde_json::to_string(&[conversation.as_str(), turn])?;
@@ -108,9 +209,12 @@ pub(super) fn read_voice<'tx>(
                     && value["final"] == true
                     && !field(&value, "id").is_empty()
                     && grants::settled_project_history(&value["discussion_projects"])
-                    && ["discussion_attempts", "discussion_files", "recipient_id"]
+                    && ["discussion_attempts", "recipient_id"]
                         .iter()
                         .all(|key| value[*key].is_null() || value[*key] == "")
+                    && (value["discussion_files"].is_null()
+                        || value["discussion_files"] == ""
+                        || media_history && settled_vm_file(&records, &value, &conversation)?)
                 {
                     continue;
                 }

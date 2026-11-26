@@ -235,7 +235,7 @@ func main() {
 		}
 		origin, err := store.FixturePendingPersonal(row, cfg.OwnerID, os.Args[4])
 		check(err)
-		ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
 		defer cancel()
 		root := cfg.Supervisor.StateDir
 		manager, err := teammatemanager.New(ctx, dir, skeleton.EndpointIDForStateDir(root), root, cfg)

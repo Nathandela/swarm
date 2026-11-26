@@ -1335,6 +1335,87 @@ mod tests {
         let api = super::super::rest::Discord::loopback_fixture(&cfg, port).unwrap();
         let marker = root.join("rust-wake-ready");
         let deliver = std::env::var("SWARM_TEST_DISCORD_WAKE_DELIVERY").unwrap_or_default();
+        if matches!(deliver.as_str(), "ordinary-sent" | "ordinary-mixed") {
+            let mixed = deliver == "ordinary-mixed";
+            let command = |args: &[&str]| {
+                use super::super::{Request, execute};
+                let args: Vec<_> = args.iter().map(|value| (*value).to_owned()).collect();
+                execute(&Request::parse(&args).unwrap())
+            };
+            assert!(command(&["migrate-state", "--activate-personal-vm"]).unwrap());
+            let (left, right) = std::os::unix::net::UnixStream::pair().unwrap();
+            left.set_read_timeout(Some(std::time::Duration::from_millis(50)))
+                .unwrap();
+            let (finish, stop) = std::sync::mpsc::channel();
+            let gateway = std::thread::spawn(move || {
+                use super::super::gateway;
+                let mut peer = tungstenite::accept(right).unwrap();
+                gateway::send(&mut peer, json!({"op":10,"d":{"heartbeat_interval":45000}}))
+                    .unwrap();
+                let identify: Value =
+                    serde_json::from_str(&peer.read().unwrap().into_text().unwrap()).unwrap();
+                assert_eq!(identify["d"]["intents"], 1 << 12);
+                gateway::send(
+                    &mut peer,
+                    json!({"op":0,"s":1,"t":"READY","d":{
+                        "application":{"id":"100"},"user":{"id":"100","bot":true}
+                    }}),
+                )
+                .unwrap();
+                if mixed {
+                    gateway::send(&mut peer,json!({"op":0,"s":2,"t":"MESSAGE_CREATE","d":{
+                        "id":"702","type":0,"channel_id":"400","author":{"id":"200","username":"synthetic owner"},
+                        "attachments":[],"content":"Continue after the retained VM file."
+                    }})).unwrap();
+                }
+                stop.recv_timeout(std::time::Duration::from_secs(55))
+                    .unwrap();
+            });
+            let directory = fs::read_dir(place.dir.join("discussions"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            let discussion = directory.file_name().into_string().unwrap();
+            let socket = fs::canonicalize("/tmp")
+                .unwrap()
+                .join(format!("swarm-dm-{}", unsafe { libc::getuid() }))
+                .join(&discussion[..32])
+                .join("bridge.sock");
+            let notify = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+                while std::time::Instant::now() < deadline {
+                    if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+                        fs::write(marker, b"ready").unwrap();
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                panic!("ordinary service did not own the old native wake bridge");
+            });
+            let mut left = Some(left);
+            let run = service::with(&place, &api, Some(if mixed { 2 } else { 1 }), |cfg| {
+                use super::super::gateway;
+                let (mut socket, _) =
+                    tungstenite::client("ws://localhost", left.take().unwrap()).unwrap();
+                let mut cursor = gateway::ready(&mut socket, cfg, "synthetic-only").unwrap();
+                Ok(move || cursor.event(&mut socket))
+            });
+            finish.send(()).unwrap();
+            gateway.join().unwrap();
+            notify.join().unwrap();
+            assert!(run.unwrap());
+            if mixed {
+                let (_pin, db) = open_bolt(&place.dir.join("discord.db"), 64 << 20).unwrap();
+                assert!(matches!(
+                    activation::ready(&place, &cfg, &db).unwrap(),
+                    activation::Ready::Idle
+                ));
+            }
+            assert!(command(&["migrate-state", "--activate-personal-vm", "--rollback"]).unwrap());
+            assert!(!activation::selected(&place).unwrap());
+            return;
+        }
         let run = service::with_vm_wake(&place, &api, !deliver.is_empty(), || {
             fs::write(marker, b"ready").unwrap()
         });

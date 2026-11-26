@@ -367,43 +367,82 @@ pub(super) fn with_vm_wake(
     if wake_intent::reconcile(place, &cfg, &binding, &lease)? {
         return Ok(true);
     }
-    activation::ready(place, &cfg, &lease.db)?;
-    room.verify(&cfg)?;
-    let bridge = Bridge::open(place, &cfg, &binding)?;
-    opened();
-    let until = std::time::Instant::now() + Duration::from_secs(30);
-    while std::time::Instant::now() < until {
-        let mut result = Ok(true);
-        if bridge
-            .accept_request(|request| {
-                let output = manager_publication::accept_wake(
-                    place,
-                    &cfg,
-                    &mut lease,
-                    &binding,
-                    &request,
-                    |message| room.message(&cfg, message),
-                )?;
-                if deliver {
-                    result =
-                        publication::deliver_admitted_vm(place, &cfg, &mut lease, &output, room);
-                }
-                Ok(output)
-            })?
-            .is_some()
-        {
-            if !deliver {
-                println!(
-                    "Staged the original Go VM file publication using the original connector nonce format."
-                );
-            }
-            return result;
-        }
-        std::thread::sleep(Duration::from_millis(25));
+    if !matches!(
+        activation::ready(place, &cfg, &lease.db)?,
+        activation::Ready::AdmittedFile { .. }
+    ) {
+        return Err(io::Error::other(
+            "the original connector has no admitted VM file wake",
+        ));
     }
-    Err(io::Error::other(
-        "no authorized original Go VM file publication was staged",
-    ))
+    room.verify(&cfg)?;
+    VmRelay {
+        place,
+        cfg: &cfg,
+        binding: &binding,
+        room,
+    }
+    .run(&mut lease, deliver, opened, || Ok(false))
+    .map(|_| true)
+}
+
+struct VmRelay<'a, R> {
+    place: &'a Place,
+    cfg: &'a Config,
+    binding: &'a Value,
+    room: &'a R,
+}
+
+impl<R: Room> VmRelay<'_, R> {
+    fn run(
+        &self,
+        lease: &mut ConnectorLease,
+        deliver: bool,
+        opened: impl FnOnce(),
+        mut stopped: impl FnMut() -> io::Result<bool>,
+    ) -> io::Result<Option<Value>> {
+        let bridge = Bridge::open(self.place, self.cfg, self.binding)?;
+        opened();
+        let until = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < until {
+            if stopped()? {
+                return Ok(None);
+            }
+            let mut result = Ok(true);
+            let mut accepted = None;
+            if bridge
+                .accept_request(|request| {
+                    let output = manager_publication::accept_wake(
+                        self.place,
+                        self.cfg,
+                        lease,
+                        self.binding,
+                        &request,
+                        |message| self.room.message(self.cfg, message),
+                    )?;
+                    if deliver {
+                        result = publication::deliver_admitted_vm(
+                            self.place, self.cfg, lease, &output, self.room,
+                        );
+                    }
+                    accepted = Some(output.clone());
+                    Ok(output)
+                })?
+                .is_some()
+            {
+                if !deliver {
+                    println!(
+                        "Staged the original Go VM file publication using the original connector nonce format."
+                    );
+                }
+                return result.map(|_| accepted);
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        Err(io::Error::other(
+            "no authorized original Go VM file publication was staged",
+        ))
+    }
 }
 
 pub(in crate::discord) fn run(place: &Place) -> io::Result<bool> {
@@ -431,8 +470,7 @@ where
     if !activation::selected(place)? {
         return Err(invalid());
     }
-    activation::idle(place, &cfg, &lease.db)?;
-    let (boundary, vm_discussion) = {
+    let (binding, boundary, vm_discussion) = {
         let tx = lease.db.begin().map_err(io::Error::other)?;
         let key = format!(
             "{}\0{}",
@@ -451,11 +489,13 @@ where
         } else {
             None
         };
-        (
-            boundary.parse::<u64>().map_err(io::Error::other)?,
-            vm_discussion,
-        )
+        let boundary = boundary.parse::<u64>().map_err(io::Error::other)?;
+        (saved, boundary, vm_discussion)
     };
+    if retained_vm(&cfg) && wake_intent::reconcile(place, &cfg, &binding, &lease)? {
+        return Ok(true);
+    }
+    let readiness = activation::ready(place, &cfg, &lease.db)?;
     let mut next_mail_check = Instant::now();
     let mut check_mail = || {
         if let Some(discussion) = &vm_discussion
@@ -472,6 +512,52 @@ where
     let mut pending = history_backlog(room, &cfg, boundary)?;
     status.online(true);
     let mut handled = 0;
+    if let activation::Ready::AdmittedFile { parent_message } = readiness {
+        let result = VmRelay {
+            place,
+            cfg: &cfg,
+            binding: &binding,
+            room,
+        }
+        .run(
+            &mut lease,
+            true,
+            || {},
+            || {
+                if status.stopping() {
+                    return Ok(true);
+                }
+                // A Gateway gap cannot silently transfer an active native effect.
+                if let Some(frame) = event()? {
+                    if matches!(field(&frame, "t"), "MESSAGE_UPDATE" | "MESSAGE_DELETE")
+                        && frame["d"]["id"] == parent_message
+                    {
+                        return Err(io::Error::other(
+                            "original worker's owner source changed during the native wake",
+                        ));
+                    }
+                    queue_event(&cfg, &frame, boundary, &mut pending)?;
+                }
+                Ok(false)
+            },
+        )?;
+        let Some(output) = result else {
+            return Ok(true);
+        };
+        manager_publication::complete_vm_wake(place, &cfg, &lease, &binding, &output)?;
+        if limit == Some(1) {
+            return Ok(true);
+        }
+        if !matches!(
+            activation::ready(place, &cfg, &lease.db)?,
+            activation::Ready::Idle
+        ) {
+            return Err(io::Error::other(
+                "the original VM scheduler has other active work",
+            ));
+        }
+        handled = 1;
+    }
     let mut through = boundary;
     let mut reconnects = 0;
     loop {
