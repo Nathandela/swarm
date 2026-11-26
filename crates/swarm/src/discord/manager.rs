@@ -1563,7 +1563,17 @@ mod tests {
                     json!({"operation_id":operation,"session":id,"session_instance":instance,
                     "state":"rejected","rejection_code":crate::shim::manager_terminal::CODE})
                 );
-                assert_eq!(manager.input_status(&composer).unwrap()["state"], "unknown");
+                let outcome = manager.input_status(&composer);
+                if rust.is_some() {
+                    assert_eq!(outcome.unwrap()["state"], "unknown");
+                } else {
+                    assert!(
+                        outcome
+                            .unwrap_err()
+                            .to_string()
+                            .contains("manager input outcome unavailable")
+                    );
+                }
                 assert!(manager.send(&operation, &composer).is_err());
                 assert_eq!(manager.semantic_receipt(&operation, id).unwrap(), receipt);
                 if rust.is_some() {
