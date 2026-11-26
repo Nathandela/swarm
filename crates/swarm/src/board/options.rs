@@ -3,7 +3,7 @@ use super::launch::{ACCENT, DIM, PLAIN, TITLE, block_cursor, field, label_layout
 use super::navigation::{GROUPS, ORDERS, truncation};
 use super::preferences::Layout;
 use super::session_form::{footer, word_wrap};
-use super::{Editor, Key};
+use super::{Editor, FormViewport, Key};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use unicode_width::UnicodeWidthStr;
@@ -185,7 +185,8 @@ impl Form {
         update
     }
 
-    pub(super) fn input(&mut self, key: Key, geometry: (u16, u16), online: bool) -> bool {
+    pub(super) fn input(&mut self, key: Key, viewport: FormViewport<'_>, online: bool) -> bool {
+        let geometry = viewport.geometry;
         if matches!(key, Key::Up | Key::Down | Key::Tab) {
             let fields = self.fields();
             let index = fields
@@ -199,7 +200,7 @@ impl Form {
         }
 
         let body = self.context_lines(geometry);
-        let budget = Self::budget(geometry);
+        let budget = Self::budget(viewport);
         if body.len() > budget {
             match key {
                 Key::PageDown => {
@@ -276,8 +277,8 @@ impl Form {
         }
     }
 
-    fn budget((_, rows): (u16, u16)) -> usize {
-        usize::from(rows.saturating_sub(3).max(1))
+    fn budget(viewport: FormViewport<'_>) -> usize {
+        usize::from(viewport.body_rows().saturating_sub(2).max(1))
     }
 
     fn compact((cols, rows): (u16, u16)) -> bool {
@@ -425,14 +426,15 @@ impl Form {
         body
     }
 
-    pub(super) fn frame(&self, geometry: (u16, u16)) -> Frame {
-        let (cols, rows) = geometry;
+    pub(super) fn frame(&self, viewport: FormViewport<'_>) -> Frame {
+        let geometry = viewport.geometry;
+        let (cols, _) = geometry;
         let body = self.rows(cols);
         let selected = body.iter().position(Row::active).unwrap_or(2);
         let text = |message: &str| Row::Text(vec![(PLAIN, message.into())]);
         if !fits(geometry) {
             return Frame::new(
-                geometry,
+                viewport,
                 vec![
                     text("Resize to 32×8"),
                     body[selected].clone(),
@@ -442,9 +444,9 @@ impl Form {
             );
         }
 
-        let budget = usize::from(rows - 1);
+        let budget = usize::from(viewport.body_rows());
         let mut context = self.context_lines(geometry);
-        let reading = Self::budget(geometry);
+        let reading = Self::budget(viewport);
         if context.len() > reading {
             let marker = if self.read_stop >= context.len() {
                 "▌ "
@@ -462,7 +464,7 @@ impl Form {
                     .map(|line| text(line)),
             );
             return Frame::new(
-                geometry,
+                viewport,
                 body_rows,
                 fit_hint("pgup/down read · esc back", cols),
             );
@@ -487,7 +489,7 @@ impl Form {
             let start = (selected + 1).saturating_sub(budget);
             body.into_iter().skip(start).take(budget).collect()
         };
-        Frame::new(geometry, body_rows, fit_hint(self.hint(), cols))
+        Frame::new(viewport, body_rows, fit_hint(self.hint(), cols))
     }
 }
 
@@ -498,8 +500,12 @@ pub(super) struct Frame {
 }
 
 impl Frame {
-    fn new(geometry: (u16, u16), mut body: Vec<Row>, hint: String) -> Self {
-        body.resize(usize::from(geometry.1.saturating_sub(1)), Row::Text(vec![]));
+    fn new(viewport: FormViewport<'_>, mut body: Vec<Row>, hint: String) -> Self {
+        let geometry = viewport.geometry;
+        body.resize(usize::from(viewport.body_rows()), Row::Text(vec![]));
+        if let Some(notice) = viewport.notice {
+            body.push(Row::Text(viewport.notice_spans(notice).into()));
+        }
         Self {
             geometry,
             body,

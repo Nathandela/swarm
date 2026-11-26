@@ -1,4 +1,4 @@
-use super::{Action, Editor, Key, caller_launch_environment, clip};
+use super::{Action, Editor, FormViewport, Key, caller_launch_environment, clip};
 use serde_json::{Map, json};
 use std::collections::HashMap;
 use std::env;
@@ -15,10 +15,65 @@ const ERROR: &str = "\x1b[0;38;5;173m";
 
 const PROVIDERS: [&str; 5] = ["agy", "claude", "codex", "hermes", "opencode"];
 
-enum Detection {
+#[derive(Clone, PartialEq, Eq)]
+pub(super) enum Detection {
     Checking,
     Ready,
     Disabled { reason: String, installed: bool },
+}
+
+pub(super) type Detected = [Detection; PROVIDERS.len()];
+
+#[derive(Default)]
+pub(super) struct Availability {
+    pub(super) cached: Option<Detected>,
+    pending: Option<(Receiver<(usize, Detection)>, Detected)>,
+    refresh_queued: bool,
+}
+
+impl Availability {
+    pub(super) fn refresh(&mut self) {
+        if self.pending.is_some() {
+            self.refresh_queued = true;
+            return;
+        }
+        let cwd = env::current_dir().unwrap_or_default();
+        let (send, receive) = mpsc::channel();
+        for (index, agent) in PROVIDERS.into_iter().enumerate() {
+            let send = send.clone();
+            let cwd = cwd.clone();
+            thread::spawn(move || {
+                let result = match crate::providers::detect_for_board(agent, &cwd) {
+                    Ok(_) => Detection::Ready,
+                    Err(error) => Detection::Disabled {
+                        installed: error.kind() != io::ErrorKind::NotFound,
+                        reason: error.to_string(),
+                    },
+                };
+                let _ = send.send((index, result));
+            });
+        }
+        self.pending = Some((receive, std::array::from_fn(|_| Detection::Checking)));
+    }
+
+    pub(super) fn poll(&mut self) -> Option<&Detected> {
+        let (receive, snapshot) = self.pending.as_mut()?;
+        loop {
+            match receive.try_recv() {
+                Ok((index, state)) => snapshot[index] = state,
+                Err(mpsc::TryRecvError::Empty) => return None,
+                Err(mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        let (_, snapshot) = self.pending.take()?;
+        if std::mem::take(&mut self.refresh_queued) {
+            self.refresh();
+        }
+        if snapshot.contains(&Detection::Checking) || self.cached.as_ref() == Some(&snapshot) {
+            return None;
+        }
+        Some(self.cached.insert(snapshot))
+    }
 }
 
 #[derive(Default)]
@@ -351,26 +406,16 @@ pub(super) struct Launch {
     error_stop: usize,
     detection_complete: bool,
     detected: [Detection; PROVIDERS.len()],
-    detection: Receiver<(usize, io::Result<String>)>,
+    api_key_present: bool,
 }
 
 impl Launch {
-    pub(super) fn new() -> Self {
-        let cwd = env::current_dir().unwrap_or_default();
-        let (send, detection) = mpsc::channel();
-        for (index, agent) in PROVIDERS.into_iter().enumerate() {
-            let send = send.clone();
-            let cwd = cwd.clone();
-            thread::spawn(move || {
-                let _ = send.send((index, crate::providers::detect_for_board(agent, &cwd)));
-            });
-        }
-
-        Self::with_detection(cwd, detection)
+    pub(super) fn new(cached: Option<&Detected>) -> Self {
+        Self::with_detection(env::current_dir().unwrap_or_default(), cached)
     }
 
-    fn with_detection(cwd: PathBuf, detection: Receiver<(usize, io::Result<String>)>) -> Self {
-        Self {
+    fn with_detection(cwd: PathBuf, cached: Option<&Detected>) -> Self {
+        let mut form = Self {
             agent: 0,
             focus: 0,
             cwd: Editor::new(&cwd.to_string_lossy()),
@@ -385,53 +430,56 @@ impl Launch {
             error_stop: 0,
             detection_complete: false,
             detected: std::array::from_fn(|_| Detection::Checking),
-            detection,
+            api_key_present: env::var_os("ANTHROPIC_API_KEY")
+                .is_some_and(|value| !value.is_empty()),
+        };
+        if let Some(snapshot) = cached {
+            form.apply_detection(snapshot);
+        }
+        form
+    }
+
+    pub(super) fn apply_detection(&mut self, snapshot: &Detected) {
+        self.detected.clone_from(snapshot);
+        if self.detection_complete {
+            // A refresh updates availability without reselecting the provider
+            // or rebuilding its in-progress option editors.
+            return;
+        }
+        self.detection_complete = true;
+        self.agent = self
+            .detected
+            .iter()
+            .position(|entry| matches!(entry, Detection::Ready))
+            .unwrap_or(0);
+        self.options = provider_options(PROVIDERS[self.agent]);
+        if self.focus >= 4 {
+            self.focus += self.options.len();
         }
     }
 
-    pub(super) fn update_detection(&mut self) -> bool {
-        let mut changed = false;
-        while let Ok((index, result)) = self.detection.try_recv() {
-            self.detected[index] = match result {
-                Ok(_) => Detection::Ready,
-                Err(error) => Detection::Disabled {
-                    installed: error.kind() != io::ErrorKind::NotFound,
-                    reason: error.to_string(),
-                },
-            };
-            changed = true;
+    fn agent_note(&self) -> Option<&'static str> {
+        if !self.detection_complete {
+            return None;
         }
-        if changed
-            && !self.detection_complete
-            && self
-                .detected
-                .iter()
-                .all(|entry| !matches!(entry, Detection::Checking))
-        {
-            self.detection_complete = true;
-            self.agent = self
-                .detected
-                .iter()
-                .position(|entry| matches!(entry, Detection::Ready))
-                .unwrap_or(0);
-            self.options = provider_options(PROVIDERS[self.agent]);
-            // The prompt and worktree keep focus when the provider options arrive.
-            if self.focus >= 4 {
-                self.focus += self.options.len();
+        match PROVIDERS[self.agent] {
+            "claude" if self.api_key_present => {
+                Some("auth: ANTHROPIC_API_KEY from env (API billing)")
             }
+            "opencode" => Some("status: busy-only (no idle signal)"),
+            _ => None,
         }
-        changed
     }
 
     pub(super) fn readable((cols, rows): (u16, u16)) -> bool {
         cols >= 32 && rows >= 8
     }
 
-    pub(super) fn update(&mut self, key: Key, (cols, rows): (u16, u16)) -> Action {
-        self.update_detection();
+    pub(super) fn update(&mut self, key: Key, viewport: FormViewport<'_>) -> Action {
+        let (cols, rows) = viewport.geometry;
         let extras = self.options.len();
         let count = 6 + extras;
-        let (error_lines, budget) = self.error_context(cols, rows);
+        let (error_lines, budget) = self.form_context(viewport);
         if error_lines.len() > budget {
             match key {
                 Key::PageUp => {
@@ -583,6 +631,7 @@ impl Launch {
         if self.detection_complete {
             let step = if left { PROVIDERS.len() - 1 } else { 1 };
             self.agent = (self.agent + step) % PROVIDERS.len();
+            self.error_stop = 0;
             self.options = provider_options(PROVIDERS[self.agent]);
         }
     }
@@ -655,20 +704,41 @@ impl Launch {
         ]
     }
 
-    fn error_context(&self, cols: u16, rows: u16) -> (Vec<String>, usize) {
+    fn form_context(&self, viewport: FormViewport<'_>) -> (Vec<(&'static str, String)>, usize) {
+        let (cols, rows) = viewport.geometry;
         let compact = cols < 64 && rows <= 10;
         let width = if compact {
             cols
         } else {
             cols.saturating_sub(2)
         };
+        let lines = self
+            .agent_note()
+            .map(|note| (ACCENT, note))
+            .into_iter()
+            .chain((!self.error.is_empty()).then_some((PLAIN, self.error.as_str())))
+            .flat_map(|(style, message)| {
+                wrap_directory_message(message, width)
+                    .into_iter()
+                    .map(move |line| (style, line))
+            })
+            .collect();
         (
-            wrap_directory_message(&self.error, width),
-            usize::from(rows.saturating_sub(3).max(1)),
+            lines,
+            usize::from(viewport.body_rows().saturating_sub(2).max(1)),
         )
     }
 
-    pub(super) fn view(&self, output: &mut String, cols: u16, rows: u16) {
+    pub(super) fn view(&self, output: &mut String, viewport: FormViewport<'_>) {
+        let (cols, rows) = viewport.geometry;
+        let body = viewport.body_rows();
+        let footer = |out: &mut String, hint: &str| {
+            if viewport.notice.is_some() {
+                viewport.footer(out, hint);
+            } else {
+                status(out, rows, cols, hint);
+            }
+        };
         let agent = if self.detection_complete {
             PROVIDERS[self.agent]
         } else {
@@ -754,11 +824,13 @@ impl Launch {
             if let Some((label, value)) = fields.get(self.focus) {
                 field(output, 2, cols, label, value, true);
             }
-            spans(output, 3, cols, &[(PLAIN, "Esc back / n deny".into())]);
-            status(output, rows, cols, "esc back");
+            if body >= 3 {
+                spans(output, 3, cols, &[(PLAIN, "Esc back / n deny".into())]);
+            }
+            footer(output, "esc back");
             return;
         }
-        let (mut error_lines, error_budget) = self.error_context(cols, rows);
+        let (mut error_lines, error_budget) = self.form_context(viewport);
         if error_lines.len() > error_budget {
             spans(
                 output,
@@ -774,17 +846,17 @@ impl Launch {
             } else {
                 "  Confirm · enter"
             };
-            error_lines.push(confirmation.into());
+            error_lines.push((PLAIN, confirmation.into()));
             let first = self.error_stop.min(error_lines.len() - error_budget);
-            for (offset, text) in error_lines
+            for (offset, styled_line) in error_lines
                 .into_iter()
                 .skip(first)
                 .take(error_budget)
                 .enumerate()
             {
-                spans(output, offset as u16 + 3, cols, &[(PLAIN, text)]);
+                spans(output, offset as u16 + 3, cols, &[styled_line]);
             }
-            status(output, rows, cols, "pgup/down read · esc back");
+            footer(output, "pgup/down read · esc back");
             return;
         }
         if compact {
@@ -809,7 +881,7 @@ impl Launch {
             order.insert(0, self.focus);
         }
         for index in order {
-            if row >= rows {
+            if row > body {
                 break;
             }
             let (label, value) = &fields[index];
@@ -817,16 +889,16 @@ impl Launch {
             row += 1;
             if compact && index == self.focus {
                 for text in &error_lines {
-                    if row >= rows {
+                    if row > body {
                         break;
                     }
-                    spans(output, row, cols, &[(PLAIN, text.clone())]);
+                    spans(output, row, cols, std::slice::from_ref(text));
                     row += 1;
                 }
             }
             if index == 0
                 && self.focus == 0
-                && row < rows
+                && row <= body
                 && let Some(completion) = &self.completion
                 && (completion.fuzzy || completion.choices.len() > 1)
             {
@@ -835,10 +907,22 @@ impl Launch {
                 row += 1;
             }
         }
-        if !compact && !self.error.is_empty() {
+        if !compact {
+            if let Some(note) = self.agent_note()
+                && row < body
+            {
+                row += 1;
+                spans(
+                    output,
+                    row,
+                    cols,
+                    &[(PLAIN, "  ".into()), (ACCENT, note.into())],
+                );
+                row += 1;
+            }
             row += 1;
-            for text in error_lines {
-                if row >= rows {
+            for text in wrap_directory_message(&self.error, cols.saturating_sub(2)) {
+                if row > body {
                     break;
                 }
                 spans(output, row, cols, &[(PLAIN, "  ".into()), (ERROR, text)]);
@@ -881,7 +965,7 @@ impl Launch {
         } else if hint.width() > usize::from(cols.saturating_sub(2)) {
             hint = format!("esc cancel · enter launch · {tip} · ↑↓ next");
         }
-        status(output, rows, cols, &hint);
+        footer(output, &hint);
     }
 }
 
@@ -1094,21 +1178,47 @@ mod tests {
 
     #[test]
     fn detection_order_preserves_prompt_focus_and_public_launch_options() {
-        let (probe, detection) = mpsc::channel();
-        let mut form = Launch::with_detection(env::temp_dir(), detection);
+        let (probe, receive) = mpsc::channel();
+        let mut availability = Availability {
+            pending: Some((receive, std::array::from_fn(|_| Detection::Checking))),
+            ..Availability::default()
+        };
+        let mut form = Launch::with_detection(env::temp_dir(), None);
         form.focus = 4;
         for i in (1..PROVIDERS.len()).rev() {
-            probe.send((i, Ok("1.0".into()))).unwrap();
-            form.update_detection();
+            probe.send((i, Detection::Ready)).unwrap();
+            assert!(availability.poll().is_none());
         }
         assert!(form.options.is_empty());
-        probe.send((0, Err(io::Error::other("missing")))).unwrap();
-        form.update(Key::Text('p'), (80, 24));
+        probe
+            .send((
+                0,
+                Detection::Disabled {
+                    reason: "missing".into(),
+                    installed: false,
+                },
+            ))
+            .unwrap();
+        drop(probe);
+        let snapshot = availability.poll().unwrap();
+        form.apply_detection(snapshot);
+        let cached = Launch::with_detection(env::temp_dir(), Some(snapshot));
+        assert_eq!(cached.ready_agent(), Some("claude"));
+        let viewport = FormViewport {
+            geometry: (80, 24),
+            notice: None,
+        };
+        form.update(Key::Text('p'), viewport);
         assert_eq!(PROVIDERS[form.agent], "claude");
         assert_eq!(form.prompt.text, "p");
         form.focus = 4;
-        form.update(Key::Text('x'), (80, 24));
-        form.update(Key::Right, (80, 24));
+        form.update(Key::Text('x'), viewport);
+        form.update(Key::Right, viewport);
+        let mut refreshed = snapshot.clone();
+        refreshed[0] = Detection::Ready;
+        form.apply_detection(&refreshed);
+        assert_eq!(form.ready_agent(), Some("claude"));
+        assert_eq!(form.focus, 4);
         let Action::Request(payload, _) = form.submit(80, 24).unwrap() else {
             panic!("expected launch")
         };
@@ -1117,15 +1227,15 @@ mod tests {
             json!({"model":"sonnet", "dangerously-skip-permissions":"false"})
         );
         form.focus = 3;
-        form.update(Key::Right, (80, 24));
+        form.update(Key::Right, viewport);
         assert_eq!(form.options[1].value.text, "workspace-write");
-        form.update(Key::Right, (80, 24));
+        form.update(Key::Right, viewport);
         assert_eq!(
             form.options.iter().map(|o| o.key).collect::<Vec<_>>(),
             crate::providers::hermes::OPTIONS
         );
         form.focus = 4 + form.options.len() - 1;
-        form.update(Key::Text(' '), (80, 24));
+        form.update(Key::Text(' '), viewport);
         let Action::Request(payload, _) = form.submit(80, 24).unwrap() else {
             panic!("expected launch")
         };

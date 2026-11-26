@@ -1,5 +1,5 @@
 use super::{
-    Editor, Key, clip, field,
+    Editor, FormViewport, Key, clip, field,
     launch::{PLAIN, block_cursor, spans, status},
     menu,
     navigation::truncation,
@@ -20,23 +20,23 @@ pub(super) enum Kind<'a> {
     Confirm { running: bool },
 }
 
-pub(super) struct Sheet {
+pub(super) struct Sheet<'a> {
     cols: u16,
-    rows: u16,
+    viewport: FormViewport<'a>,
     title: String,
     editor: Option<String>,
     context: Vec<String>,
     confirm: bool,
 }
 
-impl Sheet {
+impl<'a> Sheet<'a> {
     pub(super) fn new(
-        geometry: (u16, u16),
+        viewport: FormViewport<'a>,
         target: &str,
         row: Option<&Value>,
         kind: Kind<'_>,
     ) -> Self {
-        let (cols, rows) = geometry;
+        let (cols, _) = viewport.geometry;
         let label = row
             .map(super::name)
             .unwrap_or("session no longer available");
@@ -70,7 +70,7 @@ impl Sheet {
             .collect();
         Self {
             cols,
-            rows,
+            viewport,
             title: format!("{action}: {label}"),
             editor,
             context,
@@ -79,12 +79,12 @@ impl Sheet {
     }
 
     pub(super) fn readable(&self) -> bool {
-        self.cols >= 32 && self.rows >= 8
+        self.cols >= 32 && self.viewport.geometry.1 >= 8
     }
 
     fn budget(&self) -> usize {
-        usize::from(self.rows)
-            .saturating_sub(2 + usize::from(self.editor.is_some()))
+        usize::from(self.viewport.body_rows())
+            .saturating_sub(1 + usize::from(self.editor.is_some()))
             .max(1)
     }
 
@@ -124,8 +124,10 @@ impl Sheet {
                 row(out, y, editor);
                 y += 1;
             }
-            row(out, y, "Esc back / n deny");
-            footer(out, self.rows, self.cols, "esc back");
+            if y <= self.viewport.body_rows() {
+                row(out, y, "Esc back / n deny");
+            }
+            self.viewport.footer(out, "esc back");
             return;
         }
         row(out, 1, &self.title);
@@ -171,12 +173,8 @@ impl Sheet {
             }
             .into();
         }
-        footer(
-            out,
-            self.rows,
-            self.cols,
-            &truncation(&hint, self.cols.saturating_sub(2)),
-        );
+        self.viewport
+            .footer(out, &truncation(&hint, self.cols.saturating_sub(2)));
     }
 }
 

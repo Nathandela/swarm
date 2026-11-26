@@ -1,5 +1,7 @@
-use super::launch::{DIM, Launch, PLAIN, TITLE, block_cursor, field, label_layout, spans, status};
-use super::{Action, Editor, Key, caller_launch_environment, field as wire_field};
+use super::launch::{
+    DIM, Detected, Launch, PLAIN, TITLE, block_cursor, field, label_layout, spans,
+};
+use super::{Action, Editor, FormViewport, Key, caller_launch_environment, field as wire_field};
 use serde_json::{Value, json};
 use std::io;
 use unicode_width::UnicodeWidthStr;
@@ -28,13 +30,13 @@ struct Selection {
 }
 
 impl Handoff {
-    pub(super) fn new(source: &Value) -> Self {
+    pub(super) fn new(source: &Value, cached: Option<&Detected>) -> Self {
         Self {
             source_id: wire_field(source, "id").into(),
             source_agent: wire_field(source, "agent").into(),
             cwd: wire_field(source, "cwd").into(),
             was_running: super::running(source),
-            target: Launch::new(),
+            target: Launch::new(cached),
             model: Editor::new(""),
             mode: 0,
             hands_off: eligible(source).is_err(),
@@ -44,15 +46,15 @@ impl Handoff {
         }
     }
 
-    pub(super) fn update_detection(&mut self) -> bool {
-        self.target.update_detection()
+    pub(super) fn apply_detection(&mut self, snapshot: &Detected) {
+        self.target.apply_detection(snapshot)
     }
 
     pub(super) fn update(
         &mut self,
         key: Key,
         source: Option<&Value>,
-        geometry: (u16, u16),
+        viewport: FormViewport<'_>,
         capable: bool,
         online: bool,
     ) -> Action {
@@ -61,7 +63,7 @@ impl Handoff {
             self.error = "daemon disconnected; reconnect before handoff".into();
             return Action::None;
         }
-        let result = self.act(key, source, geometry, capable);
+        let result = self.act(key, source, viewport, capable);
         match result {
             Ok(action) => action,
             Err(error) => {
@@ -75,13 +77,14 @@ impl Handoff {
         &mut self,
         key: Key,
         source: Option<&Value>,
-        (cols, rows): (u16, u16),
+        viewport: FormViewport<'_>,
         capable: bool,
     ) -> io::Result<Action> {
+        let (cols, rows) = viewport.geometry;
         if let Some(confirmed) = &self.confirmation {
             match key {
                 Key::Text('n') => self.confirmation = None,
-                Key::Text('y') if self.confirmation_fits(cols, rows) => {
+                Key::Text('y') if self.confirmation_fits(viewport) => {
                     if !capable || source.is_none() {
                         return Err(io::Error::other(
                             "Handoff source or owner capability changed",
@@ -174,11 +177,15 @@ impl Handoff {
         wrap(&notice, width)
     }
 
-    fn confirmation_fits(&self, cols: u16, rows: u16) -> bool {
-        Launch::readable((cols, rows)) && self.disclosure(cols).len() <= usize::from(rows - 3)
+    fn confirmation_fits(&self, viewport: FormViewport<'_>) -> bool {
+        Launch::readable(viewport.geometry)
+            && self.disclosure(viewport.geometry.0).len()
+                <= usize::from(viewport.body_rows().saturating_sub(2))
     }
 
-    pub(super) fn view(&self, screen: &mut String, cols: u16, rows: u16) {
+    pub(super) fn view(&self, screen: &mut String, viewport: FormViewport<'_>) {
+        let (cols, _) = viewport.geometry;
+        let body = viewport.body_rows();
         spans(
             screen,
             1,
@@ -189,7 +196,7 @@ impl Handoff {
             for (offset, line) in self
                 .disclosure(cols)
                 .into_iter()
-                .take(usize::from(rows.saturating_sub(3)))
+                .take(usize::from(body.saturating_sub(2)))
                 .enumerate()
             {
                 spans(
@@ -199,12 +206,12 @@ impl Handoff {
                     &[(DIM, format!("  {line}"))],
                 );
             }
-            let hint = if self.confirmation_fits(cols, rows) {
+            let hint = if self.confirmation_fits(viewport) {
                 "y confirm · n / esc cancel"
             } else {
                 "resize to read · n / esc cancel"
             };
-            status(screen, rows, cols, hint);
+            viewport.footer(screen, hint);
             return;
         }
         let model = if self.focus == 1 {
@@ -247,7 +254,7 @@ impl Handoff {
         ];
         for (index, (label, value)) in fields
             .iter()
-            .take(usize::from(rows.saturating_sub(3)))
+            .take(usize::from(body.saturating_sub(2)))
             .enumerate()
         {
             field(
@@ -259,9 +266,9 @@ impl Handoff {
                 self.focus == index,
             );
         }
-        if !self.error.is_empty() && rows >= 8 {
+        if !self.error.is_empty() && body >= 7 {
             spans(screen, 7, cols, &[("\x1b[0;38;5;167m", self.error.clone())]);
-        } else if self.hands_off && self.was_running && rows >= 8 {
+        } else if self.hands_off && self.was_running && body >= 7 {
             spans(
                 screen,
                 7,
@@ -272,10 +279,8 @@ impl Handoff {
                 )],
             );
         }
-        status(
+        viewport.footer(
             screen,
-            rows,
-            cols,
             "arrows change · ↑↓ next · enter continue · esc cancel",
         );
     }
