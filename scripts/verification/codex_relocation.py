@@ -174,6 +174,7 @@ def rehearse(binary, provider, implementation, root):
         env["SWARM_FIXTURE_SESSION_ID"] = IDS[implementation][1]
         with daemon(binary, env, root / "relocated.log"):
             authority_refused = None
+            replacement_refused = None
             if implementation == "rust":
                 auth = home / ".codex/auth.json"
                 saved = auth.read_bytes()
@@ -187,6 +188,26 @@ def rehearse(binary, provider, implementation, root):
                     authority_refused = True
                 finally:
                     auth.write_bytes(saved)
+                observation = state_for(original) / "observation.json"
+                saved_observation = observation.read_bytes()
+                prior = json.loads(saved_observation)
+                assert prior["rollout"]["identity"][1] == identity[1]
+                backup = rollout.with_suffix(".original")
+                rollout.rename(backup)
+                try:
+                    shutil.copy2(backup, rollout)
+                    rejected = request(selected, "read-only", original, True)
+                    assert rejected["op"] == "error" and "observed worker" in rejected["error"], rejected
+                    del prior["rollout"]
+                    observation.write_text(json.dumps(prior))
+                    rejected = request(selected, "read-only", original, True)
+                    assert rejected["op"] == "error" and "original rollout proof" in rejected["error"], rejected
+                    assert [row["id"] for row in listed(env)] == before
+                    assert rollout.read_bytes() == prefix and observed == [PROMPTS[0]]
+                    replacement_refused = True
+                finally:
+                    observation.write_bytes(saved_observation)
+                    backup.replace(rollout)
             moved, moved_thread = launch_turn(selected, 1, original, True)
             assert moved_thread == thread
         contexts_seen.append(verify_context(contexts(rollout)[-1], selected))
@@ -207,7 +228,8 @@ def rehearse(binary, provider, implementation, root):
         return {"implementation": implementation, "platform": sys.platform, "architecture": os.uname().machine,
                 "codex": "0.172.0", "same_native_thread": True, "same_rollout_file": True,
                 "original_rollout_prefix_sha256": hashlib.sha256(prefix).hexdigest(),
-                "changed_authority_refused": authority_refused, "inputs": len(observed),
+                "changed_authority_refused": authority_refused,
+                "replacement_rollout_refused": replacement_refused, "inputs": len(observed),
                 "turn_context_checkout": ["original", "selected", "selected", "selected"],
                 "turn_context_sandbox": contexts_seen}
     finally:

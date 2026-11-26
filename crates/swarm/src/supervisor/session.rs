@@ -925,14 +925,11 @@ impl Session {
         } else {
             codex_continuity::retained_rollout(native_home, &cwd, &thread, previous)?
         };
-        let observed = runtime::read_json(&self.dir.join("observation.json"))?;
-        if !observed["rollout"].is_null()
-            && (observed["token"] != self.token
-                || observed["conversation_id"] != thread
-                || !codex_continuity::matches_rollout(&observed["rollout"], &rollout))
-        {
+        let observed =
+            codex_continuity::verify_observed_rollout(&self.dir, &self.token, &thread, &rollout)?;
+        if relocate && cwd != self.effective && previous.is_null() && !observed {
             return Err(io::Error::other(
-                "original Codex rollout differs from the observed worker",
+                "Codex relocation requires the original rollout proof",
             ));
         }
         if relogin.is_some_and(|proof| proof["rollout"] != rollout) {

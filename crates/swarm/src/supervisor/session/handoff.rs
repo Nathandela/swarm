@@ -119,6 +119,7 @@ impl Session {
             &thread,
             &meta["codex_resume"],
         )?;
+        codex_continuity::verify_observed_rollout(&self.dir, &self.token, &thread, &rollout)?;
         let transcript = PathBuf::from(field(&rollout, "path"));
         let dir = cwd.metadata()?;
         let proof = json!({"kind":"codex","instance":self.incarnation(),"conversation":thread,"transcript":transcript,"identity":rollout["identity"],

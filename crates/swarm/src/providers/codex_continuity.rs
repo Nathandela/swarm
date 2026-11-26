@@ -413,6 +413,24 @@ pub(crate) fn matches_rollout(anchor: &Value, current: &Value) -> bool {
         && (anchor["header"].is_null() || anchor["header"] == current["header"])
 }
 
+pub(crate) fn verify_observed_rollout(
+    session: &Path,
+    token: &str,
+    thread: &str,
+    current: &Value,
+) -> io::Result<bool> {
+    let observed = crate::supervisor::runtime::read_json(&session.join("observation.json"))?;
+    if observed["token"] != token
+        || observed["conversation_id"] != thread
+        || !observed["rollout"].is_null() && !matches_rollout(&observed["rollout"], current)
+    {
+        return Err(io::Error::other(
+            "original Codex rollout differs from the observed worker",
+        ));
+    }
+    Ok(!observed["rollout"].is_null())
+}
+
 pub(crate) fn retained_rollout(
     home: &Path,
     cwd: &Path,
@@ -551,6 +569,7 @@ pub(crate) fn verify_handoff(session_dir: &Path, lineage: &Value) -> io::Result<
         thread,
         &meta["codex_resume"],
     )?;
+    verify_observed_rollout(&source, token, thread, &file)?;
     let dir = cwd.metadata()?;
     if !same_origin(original, &current)
         || !same_origin(admitted, &current)
@@ -733,6 +752,13 @@ pub(crate) fn initial_history(anchor: &Value, thread: &str) -> io::Result<Vec<Va
     let mut turn = String::new();
     let mut reader = BufReader::new(file.take(4 << 20));
     let mut line = Vec::new();
+    if reader.read_until(b'\n', &mut line)? == 0
+        || line.last() != Some(&b'\n')
+        || anchor["header"] != format!("{:x}", Sha256::digest(&line))
+    {
+        return Err(io::Error::other("Codex opening history header changed"));
+    }
+    line.clear();
     while reader.read_until(b'\n', &mut line)? > 0 && line.last() == Some(&b'\n') {
         let row: Value = serde_json::from_slice(&line)?;
         line.clear();
@@ -842,6 +868,7 @@ pub(crate) fn relogin_proof(
         thread,
         &reservation["codex_resume"],
     )?;
+    verify_observed_rollout(session, token, thread, &rollover)?;
     Ok(json!({
         "from":old["account"], "to":current["account"], "thread":thread, "rollout":rollover,
         "profile":current, "cwd_identity":identity,
