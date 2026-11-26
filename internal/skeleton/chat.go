@@ -591,13 +591,13 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 		return protocol.CodeInvalidField, errIsLife5(
 			"composer send names session %q, which is not one this daemon runs; OK here would be a sent message no agent received", req.Session)
 	}
-	if meta.Status.Process != status.ProcessRunning {
-		return protocol.CodeInvalidField, errIsLife5(
-			"composer send names session %q, but that session is not running; nothing was sent", req.Session)
-	}
 	discordManager := schema.IsDiscordManager(meta.Role, meta.ManagerConversationID)
 	if discordManager && req.ManagerAdmission == nil {
 		return protocol.CodeStructuredUnsupported, errors.New("use Discord or a bound worker note (swarm teammate message) to contact this dispatcher, or attach for manual input")
+	}
+	if meta.Status.Process != status.ProcessRunning {
+		return protocol.CodeInvalidField, errIsLife5(
+			"composer send names session %q, but that session is not running; nothing was sent", req.Session)
 	}
 	if req.SessionInstance != "" {
 		currentInstance, ok := d.sessionInstance(local)

@@ -13,6 +13,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/shim"
+	"github.com/Nathandela/swarm/internal/status"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,8 +23,24 @@ import (
 )
 
 func TestDispatcherRejectsUnadmittedSemanticInput(t *testing.T) {
-	sk, binding, _ := newCodexManagerSendRigForConversation(t, schema.DiscussionConversationPrefix+"dispatcher")
-	req := protocol.ComposerSendReq{Session: "machine/" + binding.Session, Text: "worker progress"}
+	dir := t.TempDir()
+	store, err := persist.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := persist.Meta{ID: "dispatcher", AgentType: "codex", Role: "manager",
+		ManagerConversationID: schema.DiscussionConversationPrefix + "discussion",
+		Status:                status.Status{Process: status.ProcessExited}}
+	if err := store.Save(meta); err != nil {
+		t.Fatal(err)
+	}
+	core, err := daemon.Open(daemon.Config{StateDir: dir, SocketPath: filepath.Join(dir, "d.sock"), LockPath: filepath.Join(dir, "d.lock")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = core.Close() })
+	sk := &Daemon{core: core}
+	req := protocol.ComposerSendReq{Session: "machine/" + meta.ID, Text: "worker progress"}
 	code, err := sk.semanticSendTransactional("machine", "fixture", req, func() error {
 		t.Fatal("unadmitted dispatcher input reached the write boundary")
 		return nil
