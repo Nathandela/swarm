@@ -138,6 +138,8 @@ The full loaded macOS arm64 calibration paired signed Go v0.29.24 and signed Rus
 | Idle CPU as a percent of one core | 1.596% | 0.264% |
 | Daemon plus three shims at idle sample end | 76.578 MiB RSS | 21.109 MiB RSS |
 
+The pinned Go v0.29.24 in-process N-1 test separately measured 2.175 ms p95 over 25 trials with 50 real sessions on native macOS arm64. Its timer starts after the socket connection and spans subscription, roster loading and first rendering. The external calibration's interval starts before the PTY launcher and ends after all 50 labels reach the terminal. The Go log SHA-256 is `e25a5896f13bf76d019cbf5154b5473474adf19eca420e3028b7608655dfb4aa`. [Go timing contract](https://github.com/Nathandela/swarm/blob/v0.29.24/internal/tui/firstpaint_gate_test.go)
+
 | Evidence | SHA-256 |
 | --- | --- |
 | `performance-macos.json` | `c75ab9a2731e2075a88b5bd4221c3f1563b6bb487a1f6a65121d176d9aa3f9e5` |
