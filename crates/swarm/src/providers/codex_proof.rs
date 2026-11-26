@@ -145,8 +145,8 @@ impl Ledger {
             }
             "turn/started" => {
                 let turn = field(&params["turn"], "id");
-                let parent = field(&params["turn"], "rootTurnId");
-                if !parent.is_empty() && parent != turn {
+                let parent = &params["turn"]["rootTurnId"];
+                if !parent.is_null() && parent.as_str() != Some(turn) {
                     return Ok(());
                 }
                 next["observed_turn"] = json!(true);
@@ -165,8 +165,8 @@ impl Ledger {
             }
             "turn/completed" => {
                 let turn = field(&params["turn"], "id");
-                let parent = field(&params["turn"], "rootTurnId");
-                if !parent.is_empty() && parent != turn {
+                let parent = &params["turn"]["rootTurnId"];
+                if !parent.is_null() && parent.as_str() != Some(turn) {
                     return Ok(());
                 }
                 if valid(turn) {
@@ -295,7 +295,8 @@ pub(crate) fn input_status(evidence: &Value, nonce: &str) -> Value {
 
 pub(crate) fn provider_exhausted(evidence: &Value) -> bool {
     let turn = &evidence["turns"][field(evidence, "current")];
-    evidence["binding"]["provider"] == "codex"
+    evidence["blocked"] == false
+        && evidence["binding"]["provider"] == "codex"
         && evidence["externally_steered"] != true
         && matches!(field(evidence, "thread_state"), "idle" | "systemError")
         && turn["closed"] == true
@@ -439,6 +440,9 @@ mod tests {
                 .observe(&terminal(thread, parent, "usageLimitExceeded"))
                 .unwrap();
         }
+        let mut malformed = terminal("thread", "root", "usageLimitExceeded");
+        malformed["params"]["turn"]["rootTurnId"] = json!({"malformed":"root"});
+        ledger.observe(&malformed).unwrap();
         let system_error = json!({"method":"thread/status/changed",
             "params":{"threadId":"thread","status":{"type":"systemError"}}});
         ledger.observe(&system_error).unwrap();
