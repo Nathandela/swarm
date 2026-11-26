@@ -78,6 +78,11 @@ fn candidate<'tx>(
         .map(u64::from_be_bytes)
         .filter(|n| *n > 0 && *n <= 32768)
         .ok_or_else(invalid)?;
+    if queue.iter_buckets().next().is_some()
+        || queue.iter_entries().take(32_769).count() as u64 != count
+    {
+        return Err(invalid());
+    }
     let binding = value(tx, "teammate_discussions", &active_key)?.ok_or_else(invalid)?;
     let id = field(discussion, "ID");
     let ids = tx.bucket(b"teammate_discussion_ids").ok_or_else(invalid)?;

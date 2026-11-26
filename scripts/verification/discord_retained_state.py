@@ -232,6 +232,19 @@ def inspect(go, rust, fixture, base):
         assert voice_db.read_bytes() == voice_bytes
         phase_result = run(fixture, old_env, "voice-phase", voice_db.parent, "701").strip()
         assert phase_result == f"{phase} {str(phase != 'prepared').lower()}"
+    corrupt = base / "recovery-count"
+    run(fixture, old_env, "create", corrupt, original, "personal", "true")
+    run(fixture, old_env, "bind", corrupt, "existing-dm", "400")
+    run(fixture, old_env, "voice-ingress", corrupt, "existing-dm", "701", "running")
+    assert run(fixture, old_env, "ingress", corrupt, "existing-dm", "702", "hold").strip() == "2"
+    run(fixture, old_env, "pending-count", corrupt, "1")
+    source = corrupt / "discord.db"
+    voice, = (corrupt / "discussions").glob("*/voice.db")
+    original_bytes = (source.read_bytes(), voice.read_bytes())
+    settle = ["discord", "migrate-state", "--settle-personal-ingress", "701"]
+    run(rust, old_env, *settle, "--dry-run", code=1)
+    run(rust, old_env, *settle, code=1)
+    assert (source.read_bytes(), voice.read_bytes()) == original_bytes
     print("PASS Go-made Discord personal/team retained evidence, rollback, and verified original/default supervisor split")
 
 

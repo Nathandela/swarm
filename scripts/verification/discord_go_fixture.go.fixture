@@ -2,6 +2,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,10 +55,17 @@ func main() {
 		fmt.Println(phase, cutover)
 		return
 	}
-	if action == "pending" {
+	if action == "pending" || action == "pending-count" {
 		db, err := bolt.Open(filepath.Join(dir, "discord.db"), 0600, nil)
 		check(err)
 		check(db.Update(func(tx *bolt.Tx) error {
+			if action == "pending-count" {
+				count, err := strconv.ParseUint(os.Args[3], 10, 64)
+				if err != nil {
+					return err
+				}
+				return tx.Bucket([]byte("teammate_meta")).Put([]byte("active_ingress_count"), binary.BigEndian.AppendUint64(nil, count))
+			}
 			return tx.Bucket([]byte("teammate_pending")).Put([]byte("fixture\000pending"), []byte("fixture-ingress"))
 		}))
 		check(db.Close())
