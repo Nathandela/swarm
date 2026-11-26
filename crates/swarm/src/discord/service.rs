@@ -997,6 +997,8 @@ mod tests {
             posts: Vec<Value>,
             primary_parent: &'static str,
             primary_mute: bool,
+            primary_history: bool,
+            source_failure: Option<(u16, bool)>,
             linked_history: bool,
             linked_history_reads: usize,
         }
@@ -1005,6 +1007,8 @@ mod tests {
             posts: Vec::new(),
             primary_parent: "10",
             primary_mute: false,
+            primary_history: true,
+            source_failure: None,
             linked_history: false,
             linked_history_reads: 0,
         }));
@@ -1057,6 +1061,7 @@ mod tests {
                     let (method, path) = request.split_once(' ').unwrap();
                     let path = path.strip_prefix("/api/v10/").unwrap();
                     let mut data = wire.lock().unwrap();
+                    let mut status = 200;
                     let value = match path.split('/').collect::<Vec<_>>().as_slice() {
                         ["channels", id @ ("2" | "5")] => {
                             let parent = if *id == "2" {
@@ -1075,8 +1080,9 @@ mod tests {
                         }
                         ["channels", parent, "permissions", "member", actor] => {
                             let permissions = match (*parent, *actor) {
-                                ("11", "3") if !data.linked_history => (1u64 << 10) | (1 << 38),
                                 (_, "3") if data.primary_mute => (1 << 10) | (1 << 16),
+                                ("10", "3") if !data.primary_history => (1u64 << 10) | (1 << 38),
+                                ("11", "3") if !data.linked_history => (1u64 << 10) | (1 << 38),
                                 _ => 8,
                             };
                             json!({"permissions":permissions.to_string()})
@@ -1087,12 +1093,24 @@ mod tests {
                             assert!(data.linked_history);
                             json!([])
                         }
-                        ["channels", "2", "messages", id] => data
-                            .rows
-                            .iter()
-                            .find(|row| row["id"] == *id)
-                            .unwrap()
-                            .clone(),
+                        ["channels", "2", "messages", id] => {
+                            if *id == "27"
+                                && let Some((code, revoke)) = data.source_failure
+                            {
+                                thread::sleep(Duration::from_millis(15));
+                                if revoke {
+                                    data.primary_history = false;
+                                }
+                                status = code;
+                                json!({})
+                            } else {
+                                data.rows
+                                    .iter()
+                                    .find(|row| row["id"] == *id)
+                                    .unwrap()
+                                    .clone()
+                            }
+                        }
                         ["channels", id @ ("2" | "5"), "messages"] if method == "POST" => {
                             let mut bytes = vec![0; size];
                             reader.read_exact(&mut bytes).unwrap();
@@ -1112,7 +1130,7 @@ mod tests {
                     drop(data);
                     let body = value.to_string();
                     let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()
                     );
                     socket.write_all(response.as_bytes()).unwrap();
@@ -1171,6 +1189,40 @@ mod tests {
         unknown["mentions"] = json!([{"id":"3"}]);
         wire.lock().unwrap().rows.insert(0, unknown);
         inbox.mark_team_gap().unwrap();
+        wire.lock().unwrap().source_failure = Some((403, false));
+        assert_eq!(
+            team_history::repair(&cfg, &mut inbox, &primary)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let staged = inbox.pending_team_gap(u64::MAX).unwrap();
+        assert_eq!(inbox.team_cursor(), Some("26"));
+        assert!(inbox.team_gap_pending());
+        assert!(!inbox.has_team_source("27"));
+        // A successful permission summary cannot explain an individual 403 away.
+        team_history::send_gap_notice(&cfg, &mut inbox, &primary).unwrap();
+        assert!(wire.lock().unwrap().posts.is_empty());
+
+        wire.lock().unwrap().source_failure = Some((404, true));
+        assert!(team_history::repair(&cfg, &mut inbox, &primary).is_err());
+        assert_eq!(inbox.team_cursor(), Some("26"));
+        assert!(inbox.team_gap_pending());
+        let mut data = wire.lock().unwrap();
+        data.primary_history = true;
+        data.source_failure = Some((404, false));
+        drop(data);
+        assert!(primary.history_current(&cfg, "27", "10").unwrap().is_none());
+
+        drop(inbox);
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        assert_eq!(
+            inbox.pending_team_gap(u64::MAX).unwrap().nonce,
+            staged.nonce
+        );
+        assert_eq!(inbox.team_cursor(), Some("26"));
+        assert!(inbox.team_gap_pending());
+        wire.lock().unwrap().source_failure = None;
         assert!(team_history::repair(&cfg, &mut inbox, &primary).unwrap());
         assert!(inbox.has_team_source("27"));
         drop(inbox);

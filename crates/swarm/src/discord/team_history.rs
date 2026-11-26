@@ -22,9 +22,14 @@ pub(super) fn repair(
         inbox.stage_team_gap(&access.parent)?;
         return Ok(false);
     }
-    repair_with(cfg, inbox, thread, &access.parent, |before| {
-        thread.history(cfg, &access.parent, before)
-    })?;
+    repair_with(
+        cfg,
+        inbox,
+        thread,
+        &access.parent,
+        |before| thread.history(cfg, &access.parent, before),
+        |id| thread.history_current(cfg, id, &access.parent),
+    )?;
     Ok(true)
 }
 
@@ -34,6 +39,7 @@ fn repair_with(
     thread: &impl Audience,
     parent: &str,
     page: impl FnMut(&str) -> io::Result<Vec<Value>>,
+    mut current_source: impl FnMut(&str) -> io::Result<Option<Value>>,
 ) -> io::Result<()> {
     let cursor = inbox.team_cursor().map(parse).transpose()?;
     let pending = inbox.pending_team();
@@ -45,6 +51,15 @@ fn repair_with(
     // A pre-existing connector without a watermark has no proof of an earlier
     // consent floor. Recheck old pending rows, but never guess prior ingress.
     let old = cursor.unwrap_or(u64::MAX);
+    if inbox.team_gap_pending()
+        && rows
+            .iter()
+            .any(|(&id, row)| id > old && admissible_gap_human(cfg, inbox, row))
+    {
+        // The authenticated page already proves a missed human message. Preserve that evidence
+        // before any individual source disappears or an admission advances what we know.
+        inbox.stage_team_gap(parent)?;
+    }
     let mut current = Vec::new();
     for (&id, row) in &rows {
         if id > old
@@ -52,26 +67,15 @@ fn repair_with(
             && !team_thread::control(cfg, row)
             && (inbox.team_gap_pending() || super::guild::address(cfg, row).is_none())
         {
-            current.push((id, thread.current(cfg, &id.to_string())?));
+            current.push((id, current_source(&id.to_string())?));
         }
     }
     for &id in &pending {
         if !current.iter().any(|(known, _)| *known == id) {
-            current.push((id, thread.current(cfg, &id.to_string())?));
+            current.push((id, current_source(&id.to_string())?));
         }
     }
     current.sort_unstable_by_key(|entry| entry.0);
-    if inbox.team_gap_pending()
-        && current.iter().any(|(id, current)| {
-            *id > old
-                && current
-                    .as_ref()
-                    .is_some_and(|row| admissible_gap_human(cfg, inbox, row))
-        })
-    {
-        // The notice must survive if admission or the history cursor advances before a restart.
-        inbox.stage_team_gap(parent)?;
-    }
     for row in rows
         .values()
         .filter(|row| row["author"]["id"] == cfg.text("application_id"))
@@ -119,7 +123,8 @@ pub(super) fn send_gap_notice(
     let Some(notice) = inbox.pending_team_gap(now) else {
         return Ok(());
     };
-    if thread.access(cfg)?.parent != notice.parent {
+    let access = thread.access(cfg)?;
+    if access.parent != notice.parent || (inbox.team_gap_pending() && access.can_read_history) {
         return Ok(());
     }
     inbox.team_gap_attempt(&notice.nonce, None)?;
@@ -244,9 +249,16 @@ mod tests {
         inbox.mark_team_gap().unwrap();
         let fixture = Interrupted(row.clone());
         assert_eq!(
-            repair_with(&cfg, &mut inbox, &fixture, "10", |_| Ok(vec![row.clone()]))
-                .unwrap_err()
-                .to_string(),
+            repair_with(
+                &cfg,
+                &mut inbox,
+                &fixture,
+                "10",
+                |_| Ok(vec![row.clone()]),
+                |id| fixture.current(&cfg, id)
+            )
+            .unwrap_err()
+            .to_string(),
             "fixture stopped before admission"
         );
         let nonce = inbox.pending_team_gap(u64::MAX).unwrap().nonce;
@@ -255,7 +267,17 @@ mod tests {
         assert!(!inbox.has_team_source("21"));
         assert_eq!(inbox.team_cursor(), Some("20"));
         assert!(inbox.team_gap_pending());
-        assert!(repair_with(&cfg, &mut inbox, &fixture, "10", |_| Ok(vec![row.clone()])).is_err());
+        assert!(
+            repair_with(
+                &cfg,
+                &mut inbox,
+                &fixture,
+                "10",
+                |_| Ok(vec![row.clone()]),
+                |id| fixture.current(&cfg, id)
+            )
+            .is_err()
+        );
         assert_eq!(inbox.pending_team_gap(u64::MAX).unwrap().nonce, nonce);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -306,17 +328,24 @@ mod tests {
         fixture.fetched.borrow_mut().clear();
         inbox.checkpoint_team("900").unwrap();
         let mut calls = 0;
-        repair_with(&cfg, &mut inbox, &fixture, "20", |before| {
-            calls += 1;
-            let interval = match before {
-                "" => 901..=1000,
-                "901" => 801..=900,
-                _ => panic!("paged below saved frontier"),
-            };
-            Ok(interval
-                .map(|id| json!({"id":id.to_string(),"author":{"id":"3","bot":true}}))
-                .collect())
-        })
+        repair_with(
+            &cfg,
+            &mut inbox,
+            &fixture,
+            "20",
+            |before| {
+                calls += 1;
+                let interval = match before {
+                    "" => 901..=1000,
+                    "901" => 801..=900,
+                    _ => panic!("paged below saved frontier"),
+                };
+                Ok(interval
+                    .map(|id| json!({"id":id.to_string(),"author":{"id":"3","bot":true}}))
+                    .collect())
+            },
+            |id| fixture.current(&cfg, id),
+        )
         .unwrap();
         assert_eq!(calls, 2);
         assert_eq!(&*fixture.fetched.borrow(), &["1"]);

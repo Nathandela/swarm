@@ -126,24 +126,45 @@ impl Route {
         id: &str,
         mut lookup: impl FnMut(&str) -> io::Result<Option<Value>>,
     ) -> io::Result<Option<Value>> {
+        self.current_scoped(cfg, id, None, |path, _| lookup(path))
+    }
+
+    fn current_scoped(
+        &self,
+        cfg: &Config,
+        id: &str,
+        history_parent: Option<&str>,
+        mut lookup: impl FnMut(&str, bool) -> io::Result<Option<Value>>,
+    ) -> io::Result<Option<Value>> {
         if !snowflake(id) {
             return Ok(None);
         }
-        if !self.verify(cfg, &mut lookup, &[])? {
+        if !self
+            .access(cfg, |path| lookup(path, false), &[], history_parent)?
+            .is_some_and(|access| access.can_read_history)
+        {
             return Ok(None);
         }
         let starter = self.starter.as_ref().filter(|_| id == self.thread);
         let source = starter.map_or(self.thread.as_str(), |(parent, _)| parent);
-        let Some(mut value) = lookup(&format!("/channels/{source}/messages/{id}"))? else {
+        let Some(mut value) = lookup(&format!("/channels/{source}/messages/{id}"), true)? else {
+            if history_parent.is_some() {
+                self.access(cfg, |path| lookup(path, false), &[], history_parent)?;
+            }
             return Ok(None);
         };
         if value["id"] != id
             || value["channel_id"] != source
             || !value["guild_id"].is_null() && value["guild_id"] != self.guild
-            || starter.is_some_and(|(_, expected)| {
-                super::thread_creation::revision(&value).ok().as_ref() != Some(expected)
-            })
         {
+            if history_parent.is_some() {
+                return Err(invalid("thread history source returned another audience"));
+            }
+            return Ok(None);
+        }
+        if starter.is_some_and(|(_, expected)| {
+            super::thread_creation::revision(&value).ok().as_ref() != Some(expected)
+        }) {
             return Ok(None);
         }
         if starter.is_some() {
@@ -156,7 +177,13 @@ impl Route {
         else {
             return Ok(None);
         };
-        if !self.verify(cfg, lookup, &[actor])? {
+        if !self
+            .access(cfg, |path| lookup(path, false), &[actor], history_parent)?
+            .is_some_and(|access| access.can_read_history)
+        {
+            if history_parent.is_some() {
+                self.access(cfg, |path| lookup(path, false), &[], history_parent)?;
+            }
             return Ok(None);
         }
         value["guild_id"] = json!(self.guild);
@@ -170,7 +197,7 @@ impl Route {
         users: &[&str],
     ) -> io::Result<bool> {
         Ok(self
-            .access(cfg, get, users)?
+            .access(cfg, get, users, None)?
             .is_some_and(|access| access.can_read_history))
     }
 
@@ -179,19 +206,28 @@ impl Route {
         cfg: &Config,
         mut get: impl FnMut(&str) -> io::Result<Option<Value>>,
         users: &[&str],
+        history_parent: Option<&str>,
     ) -> io::Result<Option<ThreadAccess>> {
+        let unavailable = || {
+            if history_parent.is_some() {
+                Err(invalid("linked team history authority changed"))
+            } else {
+                Ok(None)
+            }
+        };
         let Some(thread) = get(&format!("/channels/{}", self.thread))? else {
-            return Ok(None);
+            return unavailable();
         };
         let Some(parent) = thread["parent_id"]
             .as_str()
             .filter(|id| snowflake(id) && *id != self.thread)
         else {
-            return Ok(None);
+            return unavailable();
         };
         if thread["id"] != self.thread
             || thread["guild_id"] != self.guild
             || !matches!(thread["type"].as_u64(), Some(10..=12))
+            || history_parent.is_some_and(|expected| parent != expected)
             || self
                 .starter
                 .as_ref()
@@ -202,16 +238,16 @@ impl Route {
                 !ids.is_empty() && !ids.iter().any(|id| id == &self.thread || id == parent)
             })
         {
-            return Ok(None);
+            return unavailable();
         }
         let Some(container) = get(&format!("/channels/{parent}"))? else {
-            return Ok(None);
+            return unavailable();
         };
         if container["id"] != parent
             || container["guild_id"] != self.guild
             || !matches!(container["type"].as_u64(), Some(0 | 5 | 15 | 16))
         {
-            return Ok(None);
+            return unavailable();
         }
         const ADMIN: u64 = 1 << 3;
         const VIEW_AND_SEND: u64 = (1 << 10) | (1 << 38);
@@ -219,11 +255,12 @@ impl Route {
         let mut can_read_history = true;
         let bot = cfg.text("application_id");
         for user in std::iter::once(bot).chain(users.iter().copied()) {
+            let inaccessible = || if user == bot { unavailable() } else { Ok(None) };
             if !snowflake(user) {
-                return Ok(None);
+                return inaccessible();
             }
             let Some(member) = get(&format!("/guilds/{}/members/{user}", self.guild))? else {
-                return Ok(None);
+                return inaccessible();
             };
             if member["user"]["id"] != user
                 || member["user"]["system"] == true
@@ -232,20 +269,23 @@ impl Route {
                     && !member["user"]["bot"].is_null()
                     && member["user"]["bot"] != false)
             {
-                return Ok(None);
+                return inaccessible();
             }
             let bits = super::guild::member_permissions(&mut get, parent, user)?;
             if bits & ADMIN == 0 && bits & VIEW_AND_SEND != VIEW_AND_SEND {
-                return Ok(None);
+                return inaccessible();
+            }
+            if user == bot && history_parent.is_some() && bits & (ADMIN | HISTORY) == 0 {
+                return unavailable();
             }
             can_read_history &= bits & (ADMIN | HISTORY) != 0;
             if thread["type"] == 12 {
                 let Some(row) = get(&format!("/channels/{}/thread-members/{user}", self.thread))?
                 else {
-                    return Ok(None);
+                    return inaccessible();
                 };
                 if row["id"] != self.thread || row["user_id"] != user {
-                    return Ok(None);
+                    return inaccessible();
                 }
             }
         }
@@ -269,8 +309,27 @@ pub(super) struct ThreadAudience<'a> {
 impl ThreadAudience<'_> {
     pub(super) fn access(&self, cfg: &Config) -> io::Result<ThreadAccess> {
         self.route
-            .access(cfg, |path| super::guild::lookup(self.api, path), &[])?
+            .access(cfg, |path| super::guild::lookup(self.api, path), &[], None)?
             .ok_or_else(|| invalid("linked team thread is no longer accessible"))
+    }
+
+    pub(super) fn history_current(
+        &self,
+        cfg: &Config,
+        id: &str,
+        parent: &str,
+    ) -> io::Result<Option<Value>> {
+        self.route
+            .current_scoped(cfg, id, Some(parent), |path, message| {
+                if !message {
+                    return super::guild::lookup(self.api, path);
+                }
+                match self.api.request(path, None) {
+                    Ok(message) => Ok(Some(message)),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+                    Err(error) => Err(error),
+                }
+            })
     }
 
     pub(super) fn history(
