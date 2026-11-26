@@ -121,17 +121,7 @@ impl Session {
                 let current =
                     providers::codex_continuity::profile(&target.env, cwd, &old["options"])?;
                 if origin["token"] != self.token
-                    || [
-                        "home",
-                        "native_home",
-                        "native_home_id",
-                        "config",
-                        "project",
-                        "system_policy",
-                        "cwd_config",
-                    ]
-                    .iter()
-                    .any(|key| old[*key] != current[*key])
+                    || !providers::codex_continuity::same_origin(old, &current)
                     || old["account"] != current["account"]
                 {
                     return Err(io::Error::other("Codex native origin or authority changed"));
@@ -143,7 +133,7 @@ impl Session {
                 )?;
             }
             "claude" => {
-                let (_, _, original, _) = self.hands_off_claude_source()?;
+                let (_, _, original, _) = self.hands_off_source()?;
                 if original != thread {
                     return Err(io::Error::other("Claude conversation changed"));
                 }

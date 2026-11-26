@@ -102,7 +102,7 @@ pub(super) fn hands_off(
         format!("{}/{}", state.endpoint, source)
     };
     let session = state.session(&json!({"session_id":scoped}))?;
-    let (cwd, transcript, id, proof) = session.hands_off_claude_source()?;
+    let (cwd, transcript, id, proof) = session.hands_off_source()?;
     let rendered = render([
         &id,
         transcript
@@ -110,7 +110,7 @@ pub(super) fn hands_off(
             .ok_or_else(|| io::Error::other("non-UTF-8 transcript path"))?,
         cwd.to_str()
             .ok_or_else(|| io::Error::other("non-UTF-8 working directory"))?,
-        "claude",
+        &session.agent,
         &session.id,
     ])?;
     launch["cwd"] = json!(cwd);

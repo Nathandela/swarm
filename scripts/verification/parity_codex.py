@@ -101,6 +101,34 @@ def model_fixture(root, alternate_check, guard_check=False):
     return server,replies
 
 
+def check_live_handoff(root, env, identity, thread, native_home, invoke):
+    (root / "effects/handoff-fixture").touch()
+    with socket.socket(socket.AF_UNIX) as conn:
+        conn.settimeout(15)
+        conn.connect(env["SWARM_DAEMON_SOCK"])
+        control(conn, "hello", endpoint_id="", protocol_version=1, capabilities=["hands-off-handoff"])
+        hello = read_control(conn)
+        assert "hands-off-handoff" in hello["capabilities"]
+        request = {"agent":"claude", "name":"handoff receiver", "cwd":"/",
+                   "initial_prompt":"forged handoff", "options":{"handoff_from":identity}}
+        control(conn, "launch", endpoint_id=hello["endpoint_id"], launch=request)
+        offered = read_control(conn)
+    assert offered["op"] == "launch", offered
+    child = offered["session"]
+    assert child["spawned_from"] == identity.split("/")[1] and child["cwd"] == str(root / "work"), child
+    transcript, = (native_home / "sessions").rglob(f"*-{thread}.jsonl")
+    target = root / "effects/provider-argv"
+    def received():
+        if target.exists():
+            return next((arg for args in map(json.loads, target.read_text().splitlines()) for arg in args
+                         if f"conversation uid: {thread}" in arg), None)
+    prompt = fixtures.wait_for(received, "Claude successor received the original Codex pointers")
+    assert str(transcript) in prompt and "forged handoff" not in prompt
+    assert "codex" in prompt and str(root / "work") in prompt
+    invoke("kill", child["id"])
+    assert json.loads(invoke("watch", child["id"], "--until", "completed", "--timeout", "4s"))["group"] == "completed"
+    print("live native Codex to Claude fixture handoff preserved original rollout and checkout")
+
 def drive(root, native, guard, loopback, resume_check=False, history_check=False, alternate_check=False, reattach_check=False, guard_check=False):
     model, replies = model_fixture(root, alternate_check, guard_check) if loopback else (None, [])
     daemon = None
@@ -426,6 +454,8 @@ def drive(root, native, guard, loopback, resume_check=False, history_check=False
                 assert len(watched)==2 and watched[-1]["worker_data"]["item"]==reply["item"],watched
                 invoke(*pilot,"exit")
                 print("owner paginated the retained native turn; Pilot read and replayed the verified reply")
+            if resume_check:
+                check_live_handoff(root, env, identity, thread, native_home, invoke)
             invoke("kill", identity)
             assert json.loads(invoke("watch", identity, "--until", "completed", "--timeout", "4s"))["group"] == "completed"
             print("managed Codex worker and exact native thread survived owner restart")
@@ -583,10 +613,16 @@ def verify(candidate, provider, native, scratch, loopback, resume_check=False, h
                                  (source / "parity_ipc.py", "parity_ipc.py"),
                                  (source / "parity/swarm-parity", "parity/swarm-parity"),
                                  (source / "parity/claude", "parity/claude"),
+                                 (source / "parity/claude", "claude"),
                                  (Path(__file__), "parity_codex.py")):
             dest = root / "bin" / target
             shutil.copyfile(original, dest)
             dest.chmod(0o700)
+        if resume_check:
+            (root / "home/.claude").mkdir(mode=0o700)
+            account = root / "home/.claude.json"
+            account.write_text(json.dumps({"oauthAccount":{"accountUuid":"fixture-claude-successor"}}))
+            account.chmod(0o600)
         if native:
             home = root/"home"/("custom-codex" if alternate_check else ".codex")
             home.mkdir(mode=0o700)

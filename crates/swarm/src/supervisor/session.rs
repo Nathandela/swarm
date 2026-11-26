@@ -1,3 +1,4 @@
+mod handoff;
 mod hermes;
 pub(super) mod maintenance;
 mod manager_retire;
@@ -164,7 +165,7 @@ pub(super) struct Session {
     token: String,
     mailbox: Value,
     manager: Value,
-    agent: String,
+    pub(super) agent: String,
     resumed_from: Option<String>,
     worker_native_installation: Option<String>,
     hermes_native: bool,
@@ -606,50 +607,6 @@ impl Session {
         claude_conversation(&self.dir, &self.token)
     }
 
-    pub(super) fn hands_off_claude_source(&self) -> io::Result<(PathBuf, PathBuf, String, Value)> {
-        if self.agent != "claude" || !self.owner_interactive || self.schedule.is_some() {
-            return Err(io::Error::other(
-                "hands-off source requires a retained ordinary Claude worker",
-            ));
-        }
-        if self.is_live() {
-            self.dial()?;
-        } else if !self.exit()?["error"].is_null() || !owner_gone(&self.dir, &self.token)? {
-            return Err(io::Error::other("hands-off source ownership is unproven"));
-        }
-        let cwd = self.verify_effective()?.to_owned();
-        let meta = runtime::read_json(&self.dir.join("session.json"))?;
-        let profile = &meta["claude_profile"];
-        let home = env::var_os("HOME")
-            .map(PathBuf::from)
-            .ok_or_else(|| io::Error::other("daemon home is missing"))?
-            .canonicalize()?;
-        if profile["home"].as_str().map(Path::new) != Some(home.as_path()) {
-            return Err(io::Error::other(
-                "Claude transcript is outside the daemon's trusted native profile",
-            ));
-        }
-        let current = providers::claude::profile(
-            &runtime::launch_env(&Value::Null),
-            &Value::Null,
-            &profile["options"],
-        )?;
-        if ["home", "home_id", "origin", "settings"]
-            .iter()
-            .any(|key| current[*key] != profile[*key])
-        {
-            return Err(io::Error::other("Claude source profile or account changed"));
-        }
-        let id = self.claude_conversation()?;
-        let authority = self.claude_project_authority(&home, &cwd)?;
-        let (transcript, identity) = providers::claude::transcript(&home, &cwd, &id)?;
-        use std::os::unix::fs::MetadataExt;
-        let dir = cwd.metadata()?;
-        let proof = json!({"conversation":id,"transcript":transcript,"identity":identity,
-            "cwd":cwd,"cwd_identity":[dir.dev(),dir.ino()],"home":home,"project_authority":authority});
-        Ok((cwd, transcript, id, proof))
-    }
-
     fn claude_project_authority(&self, home: &Path, cwd: &Path) -> io::Result<Value> {
         let proof = runtime::read_json(&self.dir.join("claude-authority.json"))?;
         if proof["token"] != self.token
@@ -806,17 +763,7 @@ impl Session {
             env.push(("CODEX_HOME".into(), native.to_string_lossy().into_owned()));
         }
         let current = codex_continuity::profile(&env, &cwd, &old["options"])?;
-        if [
-            "home",
-            "native_home",
-            "native_home_id",
-            "config",
-            "project",
-            "system_policy",
-            "cwd_config",
-        ]
-        .into_iter()
-        .any(|key| current[key] != old[key])
+        if !codex_continuity::same_origin(old, &current)
             || old["account"] != current["account"]
                 && !relogin.is_some_and(|proof| {
                     proof["from"] == old["account"]

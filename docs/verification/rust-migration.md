@@ -1,5 +1,11 @@
 # Rust migration qualification
 
+## November 26 combined implementation
+
+Commit `76e03953` passed 194 default tests on macOS arm64 and 194 on Linux x86_64. Eight environment-dependent cases per host require separate execution. Formatting, warnings-denied Clippy and five packaging tests passed. Both mixed Go/Rust dashboard owner directions exercised attach, kill and delete through the public board. Scheduled ACP reached its scoped completion with the official agy 1.5.17 on both hosts. [Linked dashboards](rust-board-linked-discussions.md) · [Native updater](rust-native-upgrade.md)
+
+The signed development archive from `cb630ec5` also passed managed installation, Node/DAVE verification and real PTY recovery after daemon termination inside an offline ARM64 Linux guest. Work on retained Discord state, live publication and calls, full provider continuity, durations, and release qualification is ongoing. [Architecture-specific package runs](rust-managed-upgrade.md) · [Retained Discord state](rust-discord-retained-state.md) · [Long-running workloads](rust-m11-development.md)
+
 ## Initial fleet round, 25 November 2026
 
 This branch is under development. The production Go reference is v0.29.22; the additional Discord call reference is da7b9f2d. The evidence below applies to an isolated Mac or Linux fixture. Production release, migration of existing sessions and real provider/Discord behavior have separate gates in the [roadmap](../specifications/rust-migration/README.md).

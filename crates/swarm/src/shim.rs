@@ -458,6 +458,9 @@ fn serve(dir: &Path) -> io::Result<()> {
             }
         }
         if let Some(proof)=config["lineage"]["hands_off"].as_object(){
+            match proof.get("kind").and_then(Value::as_str) {
+                Some("codex") => providers::codex_continuity::verify_handoff(dir, &config["lineage"])?,
+                None | Some("claude") => {
             use std::os::unix::fs::MetadataExt;
             let get=|key|proof.get(key).and_then(Value::as_str).unwrap_or_default();
             let cwd=Path::new(get("cwd"));
@@ -471,6 +474,9 @@ fn serve(dir: &Path) -> io::Result<()> {
                 || proof.get("cwd_identity")!=Some(&json!([status.dev(),status.ino()]))
             {
                 return Err(io::Error::other("hands-off source custody changed before launch"));
+            }
+                }
+                _ => return Err(io::Error::other("unrecognized hands-off provider")),
             }
         }
         if provider["name"]=="claude" {

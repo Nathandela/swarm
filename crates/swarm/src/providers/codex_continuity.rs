@@ -126,6 +126,20 @@ fn no_forced_preferences() -> io::Result<()> {
     }
 }
 
+pub(crate) fn same_origin(old: &Value, current: &Value) -> bool {
+    [
+        "home",
+        "native_home",
+        "native_home_id",
+        "config",
+        "project",
+        "system_policy",
+        "cwd_config",
+    ]
+    .iter()
+    .all(|key| old[*key] == current[*key])
+}
+
 pub(crate) fn profile(env: &[(String, String)], cwd: &Path, options: &Value) -> io::Result<Value> {
     no_system_files(Path::new("/etc/codex"))?;
     #[cfg(target_os = "macos")]
@@ -327,13 +341,52 @@ pub(crate) fn rollout(home: &Path, cwd: &Path, thread: &str) -> io::Result<Value
             "Codex rollout home is not physically rooted",
         ));
     }
+    let date = day.date();
+    let mut found = None;
+    for candidate in [Some(date), date.next_day(), date.previous_day()]
+        .into_iter()
+        .flatten()
+    {
+        if let Some(path) = find_rollout_day(home, candidate, thread)? {
+            found = Some(path);
+            break;
+        }
+    }
+    let path = found.ok_or_else(|| io::Error::other("exact Codex native rollout not found"))?;
+    let file = owned(&path)?;
+    let stat = file.metadata()?;
+    let mut line = Vec::new();
+    BufReader::new(file.take(1 << 20)).read_until(b'\n', &mut line)?;
+    if line.last() != Some(&b'\n') {
+        return Err(io::Error::other("incomplete Codex rollout header"));
+    }
+    let row: Value = serde_json::from_slice(&line)?;
+    if row["type"] != "session_meta"
+        || row["payload"]["id"] != thread
+        || Path::new(field(&row["payload"], "cwd")).canonicalize()? != cwd
+    {
+        return Err(io::Error::other("Codex rollout root or checkout differs"));
+    }
+    Ok(json!({"path":path,"identity":[stat.dev(),stat.ino()]}))
+}
+
+fn find_rollout_day(
+    home: &Path,
+    day: time::Date,
+    thread: &str,
+) -> io::Result<Option<std::path::PathBuf>> {
     let mut rooted = home.to_owned();
     let year = format!("{:04}", day.year());
     let month = format!("{:02}", u8::from(day.month()));
     let date = format!("{:02}", day.day());
     for component in ["sessions", &year, &month, &date] {
         rooted.push(component);
-        if !rooted.symlink_metadata()?.is_dir() || rooted.canonicalize()? != rooted {
+        let meta = match rooted.symlink_metadata() {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if !meta.is_dir() || rooted.canonicalize()? != rooted {
             return Err(io::Error::other("Codex rollout directory is an alias"));
         }
     }
@@ -352,22 +405,71 @@ pub(crate) fn rollout(home: &Path, cwd: &Path, thread: &str) -> io::Result<Value
             result = Some(entry.path());
         }
     }
-    let path = result.ok_or_else(|| io::Error::other("exact Codex native rollout not found"))?;
-    let file = owned(&path)?;
-    let stat = file.metadata()?;
-    let mut line = Vec::new();
-    BufReader::new(file.take(1 << 20)).read_until(b'\n', &mut line)?;
-    if line.last() != Some(&b'\n') {
-        return Err(io::Error::other("incomplete Codex rollout header"));
+    Ok(result)
+}
+
+pub(crate) fn verify_handoff(session_dir: &Path, lineage: &Value) -> io::Result<()> {
+    use crate::supervisor::runtime;
+    let id = field(lineage, "spawned_from");
+    if !runtime::valid_id(id) {
+        return Err(io::Error::other("invalid native handoff source"));
     }
-    let row: Value = serde_json::from_slice(&line)?;
-    if row["type"] != "session_meta"
-        || row["payload"]["id"] != thread
-        || Path::new(field(&row["payload"], "cwd")).canonicalize()? != cwd
+    let sessions = session_dir
+        .parent()
+        .ok_or_else(|| io::Error::other("missing session root"))?;
+    let owner = sessions
+        .parent()
+        .ok_or_else(|| io::Error::other("missing owner root"))?;
+    let source = sessions.join(id);
+    let proof = &lineage["hands_off"];
+    let cwd = Path::new(field(proof, "cwd"));
+    let thread = field(proof, "conversation");
+    let meta = runtime::read_json(&source.join("session.json"))?;
+    let token = field(&meta, "token");
+    let record = runtime::read_json(&source.join("codex-profile.json"))?;
+    let observed = runtime::read_json(&source.join("observation.json"))?;
+    if token.is_empty()
+        || meta["id"] != id
+        || meta["provider"]["name"] != "codex"
+        || meta["provider"]["mode"] != "managed"
+        || proof["instance"] != codex_receipt::instance(token)
+        || record["token"] != token
+        || observed["token"] != token
+        || observed["conversation_id"] != thread
+        || !source
+            .join("codex-thread-changed.json")
+            .symlink_metadata()
+            .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
     {
-        return Err(io::Error::other("Codex rollout root or checkout differs"));
+        return Err(io::Error::other(
+            "Codex handoff source changed before launch",
+        ));
     }
-    Ok(json!({"path":path,"identity":[stat.dev(),stat.ino()]}))
+    let raw = json!(crate::environment::restore(owner)?);
+    super::codex::refuse_unqualified_origin(&raw)?;
+    let mut env = runtime::launch_env(&raw);
+    let original = &record["profile"];
+    let home = Path::new(field(original, "home"));
+    if let Some(native) = super::codex::explicit_home(&raw, home)? {
+        env.push(("CODEX_HOME".into(), native.to_string_lossy().into_owned()));
+    }
+    let current = profile(&env, cwd, &original["options"])?;
+    let admitted = &proof["profile"];
+    let file = rollout(Path::new(field(&current, "native_home")), cwd, thread)?;
+    let dir = cwd.metadata()?;
+    if !same_origin(original, &current)
+        || !same_origin(admitted, &current)
+        || admitted["account"] != current["account"]
+        || original["account"] != current["account"]
+        || file["path"] != proof["transcript"]
+        || file["identity"] != proof["identity"]
+        || proof["cwd_identity"] != json!([dir.dev(), dir.ino()])
+    {
+        return Err(io::Error::other(
+            "Codex handoff artifact changed before launch",
+        ));
+    }
+    Ok(())
 }
 
 /// Reads one worker turn by its opening prompt or by an admitted native scope.
@@ -685,6 +787,15 @@ mod tests {
         fs::copy(&file, &duplicate).unwrap();
         assert!(rollout(&home, &cwd, id).is_err());
         fs::remove_file(duplicate).unwrap();
+        let next = folder.with_file_name("27");
+        fs::create_dir(&next).unwrap();
+        let after_midnight = next.join(format!("rollout-2026-11-27T00-00-01-{id}.jsonl"));
+        fs::rename(&file, &after_midnight).unwrap();
+        assert_eq!(
+            rollout(&home, &cwd, id).unwrap()["path"],
+            after_midnight.to_str().unwrap()
+        );
+        fs::rename(&after_midnight, &file).unwrap();
         let saved = file.with_extension("saved");
         fs::rename(&file, &saved).unwrap();
         std::os::unix::fs::symlink(&saved, &file).unwrap();
