@@ -291,6 +291,7 @@ mod tests {
             json!({"installation_id":"fixture","application_id":"200","owner_id":"300","dm_channel_id":"400"}),
         );
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        inbox.checkpoint("100").unwrap();
         let admitted = 1000;
         let worker = accept_partial(&mut inbox, "101", admitted);
         let initial = inbox.data.clone();
@@ -353,6 +354,7 @@ mod tests {
             json!({"installation_id":"fixture","application_id":"200","owner_id":"300","dm_channel_id":"400"}),
         );
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        inbox.checkpoint("100").unwrap();
         let admitted = 1000;
         let old = accept_partial(&mut inbox, "101", admitted);
         assert!(advance(&mut inbox, admitted + 30_000, None));

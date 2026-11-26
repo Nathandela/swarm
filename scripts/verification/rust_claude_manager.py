@@ -473,6 +473,7 @@ def verify(swarm, provider, test, root, server):
          refreshToken="synthetic-refresh", expiresAt=int(time.time() * 1000) + 3600000,
          scopes=["user:inference", "user:profile"], subscriptionType="max", rateLimitTier="default_claude_max_5x")))
     access = {}
+    codex_version = None
     mac_guard = None
     if server.vm:
         child = root / "child"
@@ -529,6 +530,9 @@ def verify(swarm, provider, test, root, server):
                 '[tui]\nscreen_reader_detection_done=true\n[tui.model_availability_nux]\n"gpt-6.1-sol"=100\n')
             (native_home / "config.toml").chmod(0o600)
             save(native_home / "auth.json", dict(auth_mode="apikey", OPENAI_API_KEY="fixture-only"))
+            codex_version = subprocess.check_output(
+                guarded([str(codex_wrapper), "--version"], root, [server.server_port]),
+                env=env, text=True, timeout=8).strip()
         access.update(project_access="enrolled", projects=dict(approved=str(server.approved)))
         env["SWARM_CLAUDE_MANAGER_FIXTURE_ENROLLED"] = "1"
         if server.missing_reply:
@@ -614,6 +618,7 @@ def verify(swarm, provider, test, root, server):
                                   vm_native_worker_launch=server.vm and not server.vm_revoked, vm_grant_revoked=server.vm_revoked, vm_worktree_files=server.worktree,
                                   enrolled_typed_launch=server.enrolled,
                                   missing_worker_reply=server.missing_reply,
+                                  codex_version=codex_version,
                                   project_authority_fault=server.project_fault,
                                   parked_worker_return=server.park, forwarded_attachments=server.forwarded)))
         except Exception:
