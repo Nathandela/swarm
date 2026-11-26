@@ -140,6 +140,30 @@ pub(crate) fn same_origin(old: &Value, current: &Value) -> bool {
     .all(|key| old[*key] == current[*key])
 }
 
+pub(crate) fn relocation_origin(old: &Value, current: &Value) -> bool {
+    [
+        "home",
+        "native_home",
+        "native_home_id",
+        "config",
+        "system_policy",
+    ]
+    .iter()
+    .all(|key| old.get(*key).is_some() && old[*key] == current[*key])
+        && old["cwd_config"].is_null()
+        && current["cwd_config"].is_null()
+        && old["project"]
+            .as_array()
+            .zip(current["project"].as_array())
+            .is_some_and(|(source, destination)| {
+                let permitted = |from: &[Value], to: &[Value]| {
+                    from.iter()
+                        .all(|entry| entry[3].is_null() || to.contains(entry))
+                };
+                permitted(source, destination) && permitted(destination, source)
+            })
+}
+
 pub(crate) fn profile(env: &[(String, String)], cwd: &Path, options: &Value) -> io::Result<Value> {
     no_system_files(Path::new("/etc/codex"))?;
     #[cfg(target_os = "macos")]
@@ -327,6 +351,10 @@ pub(crate) fn discover_external(
 }
 
 pub(crate) fn rollout(home: &Path, cwd: &Path, thread: &str) -> io::Result<Value> {
+    read_rollout(home, cwd, thread, false)
+}
+
+fn read_rollout(home: &Path, cwd: &Path, thread: &str, literal: bool) -> io::Result<Value> {
     if !codex_receipt::canonical_thread(thread) || thread.as_bytes().get(14) != Some(&b'7') {
         return Err(io::Error::other(
             "Codex rollout requires a canonical UUIDv7 thread",
@@ -364,13 +392,25 @@ pub(crate) fn rollout(home: &Path, cwd: &Path, thread: &str) -> io::Result<Value
         return Err(io::Error::other("incomplete Codex rollout header"));
     }
     let row: Value = serde_json::from_slice(&line)?;
-    if row["type"] != "session_meta"
-        || row["payload"]["id"] != thread
-        || Path::new(field(&row["payload"], "cwd")).canonicalize()? != cwd
-    {
+    let recorded = Path::new(field(&row["payload"], "cwd"));
+    let matches = cwd.is_absolute()
+        && if literal {
+            recorded == cwd
+        } else {
+            recorded.canonicalize()? == cwd
+        };
+    if row["type"] != "session_meta" || row["payload"]["id"] != thread || !matches {
         return Err(io::Error::other("Codex rollout root or checkout differs"));
     }
-    Ok(json!({"path":path,"identity":[stat.dev(),stat.ino()]}))
+    Ok(json!({"path":path,"identity":[stat.dev(),stat.ino()],
+        "header":format!("{:x}",Sha256::digest(&line))}))
+}
+
+pub(crate) fn matches_rollout(anchor: &Value, current: &Value) -> bool {
+    anchor.is_object()
+        && anchor["path"] == current["path"]
+        && anchor["identity"] == current["identity"]
+        && (anchor["header"].is_null() || anchor["header"] == current["header"])
 }
 
 pub(crate) fn retained_rollout(
@@ -379,15 +419,38 @@ pub(crate) fn retained_rollout(
     thread: &str,
     reservation: &Value,
 ) -> io::Result<Value> {
-    let current = rollout(home, cwd, thread)?;
+    checked_rollout(home, cwd, thread, reservation, false)
+}
+
+pub(crate) fn relocating_rollout(
+    home: &Path,
+    cwd: &Path,
+    thread: &str,
+    reservation: &Value,
+) -> io::Result<Value> {
+    checked_rollout(home, cwd, thread, reservation, true)
+}
+
+fn checked_rollout(
+    home: &Path,
+    cwd: &Path,
+    thread: &str,
+    reservation: &Value,
+    relocate: bool,
+) -> io::Result<Value> {
+    let original = reservation["source_cwd"].as_str().map(Path::new);
+    let current = read_rollout(
+        home,
+        original.unwrap_or(cwd),
+        thread,
+        relocate || original.is_some(),
+    )?;
     if !reservation.is_null() {
         let original = reservation
             .get("external_rollout")
             .or_else(|| reservation.get("rollout"));
         if reservation["thread"] != thread
-            || !original.is_some_and(|anchor| {
-                anchor["path"] == current["path"] && anchor["identity"] == current["identity"]
-            })
+            || !original.is_some_and(|anchor| matches_rollout(anchor, &current))
         {
             return Err(io::Error::other(
                 "original Codex rollout was replaced after acquisition",
@@ -656,8 +719,7 @@ fn scan_worker_turn(
     Ok(None)
 }
 
-pub(crate) fn initial_history(home: &Path, cwd: &Path, thread: &str) -> io::Result<Vec<Value>> {
-    let anchor = rollout(home, cwd, thread)?;
+pub(crate) fn initial_history(anchor: &Value, thread: &str) -> io::Result<Vec<Value>> {
     let file = owned(Path::new(field(&anchor, "path")))?;
     let stat = file.metadata()?;
     if anchor["identity"] != json!([stat.dev(), stat.ino()]) || stat.len() > 4 << 20 {
@@ -774,7 +836,12 @@ pub(crate) fn relogin_proof(
     if origin["token"] != token || unchanged != current || old["account"] == current["account"] {
         return Err(io::Error::other("Codex native origin or authority changed"));
     }
-    let rollover = rollout(Path::new(field(old, "native_home")), cwd, thread)?;
+    let rollover = retained_rollout(
+        Path::new(field(old, "native_home")),
+        cwd,
+        thread,
+        &reservation["codex_resume"],
+    )?;
     Ok(json!({
         "from":old["account"], "to":current["account"], "thread":thread, "rollout":rollover,
         "profile":current, "cwd_identity":identity,
@@ -791,6 +858,22 @@ pub(crate) fn newer_or_same(current: &str, saved: &str) -> bool {
 mod tests {
     use super::*;
     use crate::supervisor::runtime;
+
+    #[test]
+    fn relocation_preserves_only_shared_project_configuration() {
+        let source = json!({"home":"/home","native_home":"/home/.codex","native_home_id":[1,2],
+        "config":null,"system_policy":"absent-v1","project":[
+            ["/projects/old",1,3,null],["/projects",1,4,[1,5,"same"]],
+        ]});
+        let mut chosen = source.clone();
+        chosen["project"][0] = json!(["/projects/new", 1, 6, null]);
+        assert!(relocation_origin(&source, &chosen));
+        chosen["project"][0][3] = json!([1, 7, "unreviewed"]);
+        assert!(!relocation_origin(&source, &chosen));
+        chosen["project"][0][3] = Value::Null;
+        chosen["project"][1][2] = json!(8);
+        assert!(!relocation_origin(&source, &chosen));
+    }
 
     #[test]
     fn rollout_checks_exact_cwd_id_and_file_identity() {
@@ -837,6 +920,20 @@ mod tests {
         }
         fs::remove_file(&file).unwrap();
         fs::rename(&held, &file).unwrap();
+        let selected = root.join("selected");
+        fs::rename(&cwd, &selected).unwrap();
+        assert!(rollout(&home, &selected, id).is_err());
+        let relocated = json!({"thread":id,"rollout":anchor,"source_cwd":cwd});
+        assert_eq!(
+            retained_rollout(&home, &selected, id, &relocated).unwrap(),
+            anchor
+        );
+        fs::rename(&file, &held).unwrap();
+        fs::copy(&held, &file).unwrap();
+        assert!(retained_rollout(&home, &selected, id, &relocated).is_err());
+        fs::remove_file(&file).unwrap();
+        fs::rename(&held, &file).unwrap();
+        fs::rename(&selected, &cwd).unwrap();
         let duplicate = folder.join(format!("rollout-2026-11-26T01-48-10-{id}.jsonl"));
         fs::copy(&file, &duplicate).unwrap();
         assert!(rollout(&home, &cwd, id).is_err());

@@ -482,14 +482,20 @@ fn serve(dir: &Path) -> io::Result<()> {
             if restored.is_object() && !scope["resume_request"].is_null() {
                 return Err(io::Error::other("overlapping manager and owner Codex resume requests"));
             }
-            let same_rollout=|profile:&Value| -> io::Result<bool> {
+            let same_rollout=|profile:&Value, before_resume:bool| -> io::Result<bool> {
                 let home=Path::new(field(profile,"native_home"));
                 let thread=field(restored,"thread");
-                if restored["external_rollout"].is_object() {
-                    Ok(codex_continuity::discover_external(home,true,thread)?
-                        .first()==Some(&restored["external_rollout"]))
+                if let Some(external) = restored.get("external_rollout") {
+                    Ok(codex_continuity::discover_external(home,true,thread)?.first().is_some_and(|current| {
+                        if before_resume {
+                            current == external
+                        } else {
+                            current["archived"] == false && current["cwd"] == external["cwd"]
+                                && codex_continuity::matches_rollout(external, current)
+                        }
+                    }))
                 } else {
-                    Ok(codex_continuity::rollout(home,cwd,thread)?==restored["rollout"])
+                    codex_continuity::retained_rollout(home,cwd,thread,restored).map(|_|true)
                 }
             };
             let profile=codex_continuity::profile(&environment,cwd,&config["codex_options"]);
@@ -502,7 +508,7 @@ fn serve(dir: &Path) -> io::Result<()> {
             if restored.is_object() {
                 let profile=profile?;
                 if profile!=restored["profile"] ||
-                    !same_rollout(&profile)?
+                    !same_rollout(&profile,true)?
                     || !argv.as_slice().starts_with(&["resume".into(),field(restored,"thread").into()])
                 {
                     return Err(io::Error::other("Codex resume profile, rollout or argument custody changed"));
@@ -532,10 +538,16 @@ fn serve(dir: &Path) -> io::Result<()> {
                 }
                 command.args(argv.drain(..2));
             } else if restored.is_object() {
-                if codex_continuity::profile(&environment,cwd,&config["codex_options"])?!=restored["profile"] || !same_rollout(&restored["profile"])?{
+                if codex_continuity::profile(&environment,cwd,&config["codex_options"])?!=restored["profile"] || !same_rollout(&restored["profile"],true)?{
                     return Err(io::Error::other("Codex resume authority changed during app-server startup"));
                 }
-                connection.bind_resume(field(restored,"thread"),cwd)?;
+                let rollout = restored.get("external_rollout").unwrap_or(&restored["rollout"]);
+                connection.bind_resume(field(restored,"thread"),cwd,Path::new(field(rollout,"path")),restored["source_cwd"].is_string())?;
+                let expected = &restored["profile"];
+                if codex_continuity::profile(&environment,cwd,&config["codex_options"])?!=*expected
+                    || !same_rollout(expected,false)? {
+                    return Err(io::Error::other("Codex resume authority changed before terminal exec"));
+                }
             }
             command
                 .args(["--remote", &connection.endpoint])

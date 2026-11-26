@@ -822,23 +822,25 @@ impl Session {
                 "Codex resume requires a confirmed stopped ordinary managed viewer",
             ));
         }
-        if launch["options"]
-            .as_object()
-            .is_none_or(|options| options.len() != 1)
-            || launch.as_object().is_none_or(|keys| {
-                keys.iter().any(|(key, value)| {
-                    !matches!(
-                        key.as_str(),
-                        "agent" | "name" | "cwd" | "env" | "cols" | "rows" | "options"
-                    ) && !value.is_null()
-                })
+        let relocate = launch["options"].get("resume_relocate").is_some();
+        if launch["options"].as_object().is_none_or(|options| {
+            options.len() != 1 + usize::from(relocate)
+                || relocate && (options["resume_relocate"] != "true" || relogin.is_some())
+        }) || launch.as_object().is_none_or(|keys| {
+            keys.iter().any(|(key, value)| {
+                !matches!(
+                    key.as_str(),
+                    "agent" | "name" | "cwd" | "env" | "cols" | "rows" | "options"
+                ) && !value.is_null()
             })
-        {
+        }) {
             return Err(io::Error::other("unsupported Codex resume parameters"));
         }
-        let cwd = self.verify_effective()?.to_owned();
         let meta = runtime::read_json(&self.dir.join("session.json"))?;
-        if meta["provider"]["mode"] != "managed"
+        if meta["token"] != self.token
+            || meta["id"] != self.id
+            || meta["cwd"] != self.cwd
+            || meta["provider"]["mode"] != "managed"
             || self
                 .dir
                 .join("codex-thread-changed.json")
@@ -866,8 +868,41 @@ impl Session {
         if let Some(native) = providers::codex::explicit_home(&launch["env"], home)? {
             env.push(("CODEX_HOME".into(), native.to_string_lossy().into_owned()));
         }
+        let cwd = if relocate {
+            let selected = Path::new(field(launch, "cwd"));
+            if !selected.is_absolute() || !selected.is_dir() {
+                return Err(io::Error::other(
+                    "Codex relocation requires an existing absolute directory",
+                ));
+            }
+            match self.effective.symlink_metadata() {
+                Ok(_) => {
+                    let previous =
+                        codex_continuity::profile(&env, self.verify_effective()?, &old["options"])?;
+                    if !codex_continuity::same_origin(old, &previous) {
+                        return Err(io::Error::other("Codex source project authority changed"));
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    if old["project"][0][0].as_str().map(Path::new) != Some(&self.effective) {
+                        return Err(io::Error::other(
+                            "Codex saved project directory is unproved",
+                        ));
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+            selected.canonicalize()?
+        } else {
+            self.verify_effective()?.to_owned()
+        };
         let current = codex_continuity::profile(&env, &cwd, &old["options"])?;
-        if !codex_continuity::same_origin(old, &current)
+        let same_authority = if relocate && cwd != self.effective {
+            codex_continuity::relocation_origin(old, &current)
+        } else {
+            codex_continuity::same_origin(old, &current)
+        };
+        if !same_authority
             || old["account"] != current["account"]
                 && !relogin.is_some_and(|proof| {
                     proof["from"] == old["account"]
@@ -883,12 +918,23 @@ impl Session {
             .ok_or_else(|| io::Error::other("saved Codex PATH is unproved"))?;
         env.retain(|(key, _)| key != "PATH");
         env.push(("PATH".into(), path.into()));
-        let rollout = codex_continuity::retained_rollout(
-            Path::new(field(old, "native_home")),
-            &cwd,
-            &thread,
-            &meta["codex_resume"],
-        )?;
+        let native_home = Path::new(field(old, "native_home"));
+        let previous = &meta["codex_resume"];
+        let rollout = if relocate {
+            codex_continuity::relocating_rollout(native_home, &self.effective, &thread, previous)?
+        } else {
+            codex_continuity::retained_rollout(native_home, &cwd, &thread, previous)?
+        };
+        let observed = runtime::read_json(&self.dir.join("observation.json"))?;
+        if !observed["rollout"].is_null()
+            && (observed["token"] != self.token
+                || observed["conversation_id"] != thread
+                || !codex_continuity::matches_rollout(&observed["rollout"], &rollout))
+        {
+            return Err(io::Error::other(
+                "original Codex rollout differs from the observed worker",
+            ));
+        }
         if relogin.is_some_and(|proof| proof["rollout"] != rollout) {
             return Err(io::Error::other(
                 "original Codex rollout changed during relogin",
@@ -917,10 +963,15 @@ impl Session {
             ));
         }
         prepared.provider.argv = codex_resume_args(&thread, &cwd, field(&old["options"], "model"));
-        let mut continuation = old.clone();
-        continuation["account"] = current["account"].clone();
+        let mut continuation = current;
+        continuation["path"] = json!(path);
         prepared.codex_resume =
             json!({"thread":thread,"resumed_from":source,"profile":continuation,"rollout":rollout});
+        if relocate || previous["source_cwd"].is_string() {
+            prepared.codex_resume["source_cwd"] = previous["source_cwd"]
+                .as_str()
+                .map_or_else(|| json!(self.effective), |original| json!(original));
+        }
         prepared.tag = self.labels.lock().unwrap().tag.clone();
         Ok(prepared)
     }

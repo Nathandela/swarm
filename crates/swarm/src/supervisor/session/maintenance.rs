@@ -126,10 +126,11 @@ impl Session {
                 {
                     return Err(io::Error::other("Codex native origin or authority changed"));
                 }
-                providers::codex_continuity::rollout(
+                providers::codex_continuity::retained_rollout(
                     Path::new(field(old, "native_home")),
                     cwd,
                     thread,
+                    &meta["codex_resume"],
                 )?;
             }
             "claude" => {

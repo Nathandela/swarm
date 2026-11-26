@@ -92,10 +92,20 @@ impl Channel {
         Err(io::Error::other("Codex external identity proof timed out"))
     }
 
-    pub(super) fn bind_resume(&mut self, thread: &str, cwd: &Path) -> io::Result<()> {
+    pub(super) fn bind_resume(
+        &mut self,
+        thread: &str,
+        cwd: &Path,
+        path: &Path,
+        relocated: bool,
+    ) -> io::Result<()> {
+        let mut params = json!({"threadId":thread,"excludeTurns":true});
+        if relocated {
+            params["cwd"] = json!(cwd);
+        }
         send(
             &mut self.connection,
-            json!({"id":2,"method":"thread/resume","params":{"threadId":thread,"excludeTurns":true}}),
+            json!({"id":2,"method":"thread/resume","params":params}),
         )?;
         let mut observation = Observation {
             thread: thread.to_owned(),
@@ -115,6 +125,7 @@ impl Channel {
             let restored = &frame["result"]["thread"];
             let live = field(restored, "cwd");
             if restored["id"] != thread
+                || relocated && restored["path"].as_str().map(Path::new) != Some(path)
                 || live.is_empty()
                 || Path::new(live).canonicalize()?.as_path() != cwd
                 || restored["status"]["type"] != "idle"
@@ -313,6 +324,7 @@ struct Observation {
     legacy_system_helper: bool,
     proof: Option<codex_proof::Ledger>,
     thread: String,
+    rollout: Value,
     turn: Option<String>,
     requests: std::collections::BTreeSet<String>,
     joined: bool,
@@ -476,15 +488,34 @@ struct SemanticTarget<'a> {
     cwd: &'a Path,
 }
 
-fn persist_observation(observation: &Observation, target: &SemanticTarget<'_>) {
+fn persist_observation(observation: &mut Observation, target: &SemanticTarget<'_>) {
     if observation.ambiguous {
         let _ = runtime::write_json(
             &target.dir.join("codex-thread-changed.json"),
             &json!({"token":target.token}),
         );
     }
+    if observation.rollout.is_null()
+        && observation.joined
+        && !observation.ambiguous
+        && target.schedule.is_none()
+        && target.manager.is_null()
+        && let Ok(profile) = runtime::read_json(&target.dir.join("codex-profile.json"))
+        && profile["token"] == target.token
+        && let Ok(meta) = runtime::read_json(&target.dir.join("session.json"))
+        && meta["token"] == target.token
+        && let Ok(rollout) = crate::providers::codex_continuity::retained_rollout(
+            Path::new(field(&profile["profile"], "native_home")),
+            target.cwd,
+            &observation.thread,
+            &meta["codex_resume"],
+        )
+    {
+        observation.rollout = rollout;
+    }
     let mut view = json!({
         "token":target.token, "conversation_id":observation.thread, "status":observation.status(),
+        "rollout":observation.rollout,
         "backend_available":!observation.ambiguous, "requests_available":observation.joined && !observation.ambiguous && !observation.requests_unverified,
         "schedule_ready":target.schedule.is_some() && observation.schedule_ready(),
         "manager_ingress_ready": observation.can_enter_joined_thread(true) && observation.idle
@@ -561,6 +592,7 @@ fn backfill_initial_history(observation: &Observation, target: &SemanticTarget<'
     if observation.ambiguous
         || !target.manager.is_null()
         || target.schedule.is_some()
+        || observation.rollout.is_null()
         || target
             .dir
             .join("pilot-replies.json")
@@ -569,19 +601,13 @@ fn backfill_initial_history(observation: &Observation, target: &SemanticTarget<'
     {
         return;
     }
-    let profile = runtime::read_json(&target.dir.join("codex-profile.json"));
-    let Ok(profile) = profile else { return };
-    if profile["token"] == target.token {
-        let items = crate::providers::codex_continuity::initial_history(
-            Path::new(field(&profile["profile"], "native_home")),
-            target.cwd,
-            &observation.thread,
-        );
-        if let Ok(items) = items {
-            for item in items {
-                if super::capture_pilot_item(target.dir, target.token, item).is_err() {
-                    break;
-                }
+    if let Ok(items) = crate::providers::codex_continuity::initial_history(
+        &observation.rollout,
+        &observation.thread,
+    ) {
+        for item in items {
+            if super::capture_pilot_item(target.dir, target.token, item).is_err() {
+                break;
             }
         }
     }
@@ -884,7 +910,7 @@ pub(super) fn observe(
         manager: &manager,
     };
     if resumed {
-        persist_observation(&observation, &target);
+        persist_observation(&mut observation, &target);
     }
     let mut serial = 10;
     let mut join = None;
@@ -910,7 +936,7 @@ pub(super) fn observe(
         {
             observation.guard =
                 context_guard::Guard::bind(state.clone(), &observation.thread, version, &channel);
-            persist_observation(&observation, &target);
+            persist_observation(&mut observation, &target);
         }
 
         if !observation.thread.is_empty()
@@ -963,7 +989,7 @@ pub(super) fn observe(
             let changed = before != guard.view();
             observation.guard = Some(guard);
             if changed {
-                persist_observation(&observation, &target);
+                persist_observation(&mut observation, &target);
             }
             if result.is_err() {
                 break;
@@ -987,7 +1013,7 @@ pub(super) fn observe(
                             observation.idle = true;
                         }
                         observation.scheduled_turn = None;
-                        persist_observation(&observation, &target);
+                        persist_observation(&mut observation, &target);
                     }
                 } else if join.is_some_and(|(id, _)| message["id"] == id)
                     && message["method"].is_null()
@@ -998,10 +1024,10 @@ pub(super) fn observe(
                     {
                         observation.joined = true;
                         observation.missing_rollout = false;
-                        backfill_initial_history(&observation, &target);
                         observation.idle = observation.turn.is_none()
                             && field(&message["result"]["thread"]["status"], "type") == "idle";
-                        persist_observation(&observation, &target);
+                        persist_observation(&mut observation, &target);
+                        backfill_initial_history(&observation, &target);
                     } else if message["result"].is_null()
                         && message["error"]["code"] == -32600
                         && field(&message["error"], "message")
@@ -1013,9 +1039,9 @@ pub(super) fn observe(
                                 .proof
                                 .as_ref()
                                 .is_some_and(|proof| proof.is_virgin());
-                        persist_observation(&observation, &target);
+                        persist_observation(&mut observation, &target);
                         next_join = Some(Instant::now() + Duration::from_secs(1));
-                        persist_observation(&observation, &target);
+                        persist_observation(&mut observation, &target);
                     } else {
                         next_join = None;
                     }
@@ -1061,7 +1087,7 @@ pub(super) fn observe(
         }
     }
     let mut terminal = json!({
-        "token":token,"conversation_id":observation.thread,
+        "token":token,"conversation_id":observation.thread,"rollout":observation.rollout,
         "status":{"Process":"running","Turn":"unknown","Interaction":"none"},
         "backend_available":false,
     });
