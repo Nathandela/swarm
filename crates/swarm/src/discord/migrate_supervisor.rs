@@ -58,6 +58,108 @@ fn peer_executable(pid: u32) -> io::Result<PathBuf> {
         std::str::from_utf8(&bytes[..n]).map_err(io::Error::other)?,
     ))
 }
+#[cfg(target_os = "linux")]
+fn peer_holds_lock(pid: u32, _: &Path, lock: &fs::File) -> io::Result<bool> {
+    let expected = lock.metadata()?;
+    let proc = PathBuf::from(format!("/proc/{pid}"));
+    for entry in fs::read_dir(proc.join("fdinfo"))?.take(4096) {
+        let entry = entry?;
+        let Ok(opened) = fs::metadata(proc.join("fd").join(entry.file_name())) else {
+            continue;
+        };
+        if (opened.dev(), opened.ino()) != (expected.dev(), expected.ino()) {
+            continue;
+        }
+        let mut info = String::new();
+        fs::File::open(entry.path())?
+            .take(8192)
+            .read_to_string(&mut info)?;
+        if info.lines().any(|line| {
+            let mut fields = line.split_whitespace();
+            fields.next() == Some("lock:")
+                && fields.next().is_some()
+                && fields.next() == Some("FLOCK")
+                && fields.next() == Some("ADVISORY")
+                && fields.next() == Some("WRITE")
+                && fields.next().and_then(|value| value.parse().ok()) == Some(pid)
+                && fields.next().is_some_and(|identity| {
+                    let mut parts = identity.split(':');
+                    parts.next().and_then(|n| u32::from_str_radix(n, 16).ok())
+                        == Some(libc::major(expected.dev()))
+                        && parts.next().and_then(|n| u32::from_str_radix(n, 16).ok())
+                            == Some(libc::minor(expected.dev()))
+                        && parts.next().and_then(|n| n.parse().ok()) == Some(expected.ino())
+                })
+                && fields.next() == Some("0")
+                && fields.next() == Some("EOF")
+        }) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+fn peer_holds_lock(pid: u32, path: &Path, lock: &fs::File) -> io::Result<bool> {
+    use std::os::unix::ffi::OsStrExt;
+    unsafe extern "C" {
+        fn proc_listpidspath(
+            kind: u32,
+            kind_info: u32,
+            path: *const libc::c_char,
+            path_flags: u32,
+            buffer: *mut libc::c_void,
+            size: libc::c_int,
+        ) -> libc::c_int;
+    }
+    const PROC_ALL_PIDS: u32 = 1;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+    // XNU exposes flock through F_GETLK as an anonymous file-description lock.
+    // Require a whole-file writer and a single possible owner besides this probe.
+    let mut conflict = libc::flock {
+        l_start: 0,
+        l_len: 0,
+        l_pid: 0,
+        l_type: libc::F_RDLCK,
+        l_whence: libc::SEEK_SET as i16,
+    };
+    if unsafe { libc::fcntl(lock.as_raw_fd(), libc::F_GETLK, &mut conflict) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if conflict.l_type != libc::F_WRLCK
+        || conflict.l_start != 0
+        || conflict.l_len != 0
+        || conflict.l_pid != -1
+    {
+        return Ok(false);
+    }
+    let mut holders = [0i32; 4096];
+    let size = size_of_val(&holders);
+    let count = unsafe {
+        proc_listpidspath(
+            PROC_ALL_PIDS,
+            0,
+            path.as_ptr(),
+            0,
+            holders.as_mut_ptr().cast(),
+            size as i32,
+        )
+    };
+    let Ok(bytes) = usize::try_from(count) else {
+        return Err(io::Error::last_os_error());
+    };
+    if bytes >= size || bytes % size_of::<i32>() != 0 {
+        return Ok(false);
+    }
+    let ours = std::process::id() as i32;
+    let holders = &holders[..bytes / size_of::<i32>()];
+    Ok(holders.contains(&ours)
+        && holders.contains(&(pid as i32))
+        && holders
+            .iter()
+            .all(|&holder| holder == ours || holder == pid as i32))
+}
+
 fn live(root: &Path, socket: &Path, lock: &Path) -> io::Result<String> {
     let endpoint = real_endpoint(root)?;
     let identity = fs::symlink_metadata(socket)?;
@@ -100,16 +202,19 @@ fn live(root: &Path, socket: &Path, lock: &Path) -> io::Result<String> {
         }
         Err(e) => return Err(e),
     }
-    let lock = open_owner_file(lock)?;
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0
-        || io::Error::last_os_error().kind() != io::ErrorKind::WouldBlock
-    {
-        return Err(io::Error::other("supervisor owner lock is not held"));
-    }
+    let lock_file = open_owner_file(lock)?;
+    let expected_lock = lock_file.metadata()?;
     client.sessions()?;
+    if !peer_holds_lock(pid, lock, &lock_file)? {
+        return Err(io::Error::other(
+            "supervisor socket peer does not hold the configured owner lock",
+        ));
+    }
+    let current_lock = fs::symlink_metadata(lock)?;
     let after = fs::symlink_metadata(socket)?;
     if runtime::birth(pid)? != birth
         || (after.dev(), after.ino()) != (identity.dev(), identity.ino())
+        || (current_lock.dev(), current_lock.ino()) != (expected_lock.dev(), expected_lock.ino())
     {
         return Err(io::Error::other(
             "supervisor owner changed during verification",

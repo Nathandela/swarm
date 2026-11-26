@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise original Go-made connector evidence without using Discord."""
+import fcntl
 import hashlib
 import json
 import os
@@ -120,6 +121,23 @@ def inspect(go, rust, fixture, base):
         finally:
             pidfile.write_bytes(actual)
         assert disk(config) == original_config and not new_selector.exists()
+        alien = destination / "unrelated.lock"
+        fd = os.open(alien, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+        with os.fdopen(fd, "rb") as unrelated:
+            fcntl.flock(unrelated, fcntl.LOCK_EX)
+            wrong_home = env | {"SWARM_DAEMON_LOCK": str(alien)}
+            run(rust, wrong_home, *command, "--dry-run", code=1)
+            run(rust, wrong_home, *command, code=1)
+            assert disk(config) == original_config and not new_selector.exists()
+            # Supply a foreign lock in the old Go enrollment, with its true socket and PID.
+            wrong_source = original_config | {"supervisor": original_config["supervisor"] | {"lock": str(alien)}}
+            saved = config.read_bytes()
+            try:
+                config.write_text(json.dumps(wrong_source))
+                run(rust, env, *command, code=1)
+                assert disk(config) == wrong_source and not new_selector.exists()
+            finally:
+                config.write_bytes(saved)
         run(rust, env, *command)
         result = disk(config)
         assert result["daemon_socket"] == env["SWARM_DAEMON_SOCK"]
