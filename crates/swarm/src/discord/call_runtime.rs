@@ -923,6 +923,7 @@ fn auth_request(dir: &Path, input: &Value) -> io::Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use sha2::{Digest, Sha256};
     use std::fs;
     use std::net::{TcpListener, TcpStream};
     use std::os::unix::fs::PermissionsExt;
@@ -1109,8 +1110,14 @@ while read -r line; do :; done
                 let (mut stream, _) = listener.accept().unwrap();
                 // The normal text bridge cannot answer until the native operation returns.
                 wait.recv_timeout(Duration::from_secs(4)).unwrap();
-                let mut bytes = [0; 2048];
-                let _ = stream.read(&mut bytes).unwrap();
+                let identity = Sha256::digest(b"test");
+                let request = format!(
+                    "POST /installation-v1/{identity:x}/shutdown HTTP/1.0\r\nHost: local\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{{}}"
+                );
+                let mut bytes = vec![0; request.len()];
+                stream.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
+                stream.read_exact(&mut bytes).unwrap();
+                assert_eq!(bytes, request.as_bytes());
                 stream
                     .write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 16\r\n\r\n{\"stopped\":true}")
                     .unwrap();
