@@ -250,6 +250,23 @@ pub(crate) fn lookup(root: &Path, binding: &Value, id: &str) -> io::Result<Value
     with_files(&tx, &key, note)
 }
 
+pub(in crate::supervisor) fn has_attempt_note(root: &Path, binding: &Value) -> io::Result<bool> {
+    let path = match open_path(root, false) {
+        Ok(path) => path,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let (_pin, db) = crate::checkout::state::receipts::open_bolt(&path, 256 << 20)?;
+    let tx = db.begin().map_err(io_error)?;
+    let notes = tx.bucket(b"notes").ok_or_else(absent)?;
+    let mut prefix = key(binding, "x")?;
+    prefix.pop();
+    Ok(notes
+        .cursor()
+        .seek(&prefix)
+        .is_some_and(|(key, _)| key.starts_with(&prefix)))
+}
+
 pub(crate) fn pending(
     root: &Path,
     discussion: &str,

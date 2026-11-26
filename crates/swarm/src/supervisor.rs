@@ -1412,6 +1412,12 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     reply(&writer,state,json!({"op":"manager_worker_read","session_id":request["session_id"],
                         "worker_result":result}))
                 }),
+            "manager_worker_reply_evidence" if caps.contains(&crate::discord::enrolled_worker::CAP) =>
+                state.session(&request).and_then(|manager| {
+                    let proof = manager.enrolled_reply_evidence(state, &request)?;
+                    reply(&writer, state, json!({"op":"manager_worker_reply_evidence",
+                        "session_id":request["session_id"],"worker_reply_evidence":proof}))
+                }),
             "manager_worker_send" if caps.contains(&crate::discord::enrolled_worker::CAP) =>
                 state.session(&request).and_then(|manager| {
                     let action=&request["manager_worker_send"];

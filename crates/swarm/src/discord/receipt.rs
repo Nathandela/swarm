@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 
 #[path = "receipt_quiet.rs"]
 mod quiet_reply;
+pub(crate) use quiet_reply::reply_worker_anchor;
+#[path = "receipt_reply_notice.rs"]
+mod reply_notice;
+pub(super) use reply_notice::{UNVERIFIED_REPLY, valid_missing_worker};
 
 const VERSION: u64 = 2;
 const VOICE_VERSION: u64 = 3;
@@ -1239,6 +1243,9 @@ pub(super) fn publication_args(args: &Value) -> bool {
 
 pub(super) fn verify_publication(nonce: &str, entry: &Value) -> io::Result<()> {
     let proof = &entry["proof"];
+    if proof["kind"] == "unverified_reply" {
+        return reply_notice::verify_notice(nonce, entry);
+    }
     let args = &proof["arguments"];
     let native = &proof["call_receipt"];
     let host = super::provenance::coordinates(&proof["binding"], &proof["host_meta"])?;
@@ -1465,7 +1472,9 @@ impl Inbox {
             .as_object()
             .unwrap()
             .iter()
-            .filter(|(_, entry)| entry["state"] == "prepared")
+            .filter(|(_, entry)| {
+                entry["state"] == "prepared" && entry["proof"]["kind"] != "unverified_reply"
+            })
             .map(|(nonce, _)| nonce.clone())
             .collect()
     }

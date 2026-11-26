@@ -1,8 +1,8 @@
 //! One owner-personal discussion on the native supervisor's exact manager binding.
 use super::config::{Config, invalid};
 use super::receipt::{
-    Inbox, Observation, PublicationClaimError, hash, publication_args, publication_nonce,
-    verify_publication,
+    Inbox, Observation, PublicationClaimError, UNVERIFIED_REPLY, hash, publication_args,
+    publication_nonce, verify_publication,
 };
 use super::rest::{Discord, Post};
 use super::{mail_wake, manager::Manager};
@@ -181,11 +181,13 @@ impl Dispatcher {
         {
             let conversation = field(&self.launch["manager"], "conversation_id");
             let now = millis()?;
-            if inbox.quiet_reply_due(conversation, now) {
+            if inbox.quiet_reply_due(conversation, now)
+                || inbox.pending_unverified_reply(now).is_some()
+            {
                 self.next_quiet_probe
                     .set(Some(Instant::now() + Duration::from_secs(2)));
                 let mut cursor = self.quiet_cursor.get();
-                let result = inbox.advance_quiet_reply(
+                let result = inbox.advance_completed_reply(
                     conversation,
                     now,
                     &mut cursor,
@@ -193,10 +195,14 @@ impl Dispatcher {
                         api.verify(cfg)?;
                         Self::publication_text_source(cfg, inbox, api, source, revision)
                     },
+                    |session, source, action| {
+                        self.owner.enrolled_reply_evidence(session, source, action)
+                    },
                     millis,
                 );
                 self.quiet_cursor.set(cursor);
                 result?;
+                self.deliver_unverified_reply(cfg, inbox, api, millis()?)?;
             }
         }
         let mut state = inbox.manager().clone();
@@ -531,7 +537,10 @@ impl Dispatcher {
             self.idle_since.set(Some(Instant::now()));
             return Ok(());
         };
-        if since.elapsed() < Duration::from_secs(120) || !self.owner.can_retire() {
+        if since.elapsed() < Duration::from_secs(120)
+            || cfg.text("project_access") == "enrolled" && inbox.keeps_manager_for_reply(millis()?)
+            || !self.owner.can_retire()
+        {
             return Ok(());
         }
         self.checkpoint_retirement(inbox, inbox.manager().clone(), status, None)
@@ -937,6 +946,62 @@ impl Dispatcher {
         Ok(())
     }
 
+    fn deliver_unverified_reply(
+        &self,
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        now: u64,
+    ) -> io::Result<()> {
+        let Some((nonce, entry)) = inbox.pending_unverified_reply(now) else {
+            return Ok(());
+        };
+        if !inbox.pending_publications().is_empty() {
+            return Ok(());
+        }
+        let source = field(&entry["proof"], "source_id");
+        let revision = &entry["proof"]["revision"];
+        let manager = inbox.manager().clone();
+        match inbox.claim_publication(&nonce, &manager, &entry, |inbox| {
+            let (completion, action) = inbox.unverified_reply_authority(&entry)?;
+            let latest = self.owner.enrolled_reply_evidence(
+                field(&completion["binding"], "session"),
+                source,
+                action,
+            )?;
+            if latest != entry["proof"]["worker"] {
+                return Err(invalid("enrolled worker changed before notice delivery"));
+            }
+            api.verify(cfg)?;
+            Self::publication_text_source(cfg, inbox, api, source, revision)
+        }) {
+            Ok(()) => Self::post_claimed(cfg, inbox, api, &nonce, UNVERIFIED_REPLY, &[]),
+            Err(PublicationClaimError::BeforeWrite(_)) => Ok(()),
+            Err(PublicationClaimError::Commit(error)) => Err(error),
+        }
+    }
+
+    fn post_claimed(
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        nonce: &str,
+        body: &str,
+        files: &[Captured],
+    ) -> io::Result<()> {
+        match api.post(cfg, nonce, body, files) {
+            Post::Acknowledged(receipt)
+                if receipt["nonce"] == nonce && inbox.observe(&receipt, Observation::Rest)? =>
+            {
+                Ok(())
+            }
+            Post::RateLimited(after) => {
+                inbox.publication_state(nonce, "prepared", Some(millis()?.saturating_add(after)))
+            }
+            _ => inbox.publication_state(nonce, "uncertain", None),
+        }
+    }
+
     fn deliver(
         &self,
         cfg: &Config,
@@ -1027,17 +1092,7 @@ impl Dispatcher {
                     return Err(error);
                 }
             }
-            match api.post(cfg, nonce, body, &files) {
-                Post::Acknowledged(receipt)
-                    if receipt["nonce"] == nonce.as_str()
-                        && inbox.observe(&receipt, Observation::Rest)? => {}
-                Post::RateLimited(after) => inbox.publication_state(
-                    nonce,
-                    "prepared",
-                    Some(millis()?.saturating_add(after)),
-                )?,
-                _ => inbox.publication_state(nonce, "uncertain", None)?,
-            }
+            Self::post_claimed(cfg, inbox, api, nonce, body, &files)?;
             if inbox.publication(nonce)["state"] != "sent" {
                 break;
             }

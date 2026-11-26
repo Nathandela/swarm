@@ -443,6 +443,39 @@ impl Manager {
         Ok(result.clone())
     }
 
+    pub(super) fn enrolled_reply_evidence(
+        &self,
+        session: &str,
+        source: &str,
+        action: &Value,
+    ) -> io::Result<Value> {
+        let worker = self.enrolled_worker(session, action, false)?;
+        if worker["state"] != "created" {
+            return Err(invalid(
+                "enrolled worker launch has no exact applied receipt",
+            ));
+        }
+        let mut caps = CAPS.to_vec();
+        caps.push(super::enrolled_worker::CAP);
+        let mut client = Client::dial(Path::new(self.cfg.text("daemon_socket")), &caps)?;
+        self.cfg.check_supervisor(&client, &caps)?;
+        let reply = client.request_body(json!({"op":"manager_worker_reply_evidence","body_version":1,
+            "session_id":session,"manager_worker_reply_evidence":{
+                "source_id":source,"worker":worker["session"],"instance":worker["session_instance"],"attempt":worker["attempt_id"]
+            }}), "manager_worker_reply_evidence")?;
+        self.verify_endpoint(&client, &reply)?;
+        let proof = &reply["worker_reply_evidence"];
+        if reply["session_id"] != session
+            || proof["session"] != worker["session"]
+            || proof["session_instance"] != worker["session_instance"]
+            || proof["attempt_id"] != worker["attempt_id"]
+            || !super::receipt::valid_missing_worker(proof)
+        {
+            return Err(invalid("uncorrelated enrolled worker reply evidence"));
+        }
+        Ok(proof.clone())
+    }
+
     pub(super) fn enrolled_send(
         &self,
         session: &str,

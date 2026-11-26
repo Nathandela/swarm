@@ -238,6 +238,82 @@ impl Session {
         crate::discord::enrolled_worker::launch(&self.manager, input, action)
     }
 
+    pub(in crate::supervisor) fn enrolled_reply_evidence(
+        &self,
+        state: &crate::supervisor::State,
+        request: &Value,
+    ) -> io::Result<Value> {
+        let query = &request["manager_worker_reply_evidence"];
+        let session = field(request, "session_id");
+        let source = field(query, "source_id");
+        let data = crate::discord::connector_intent(&self.manager)?;
+        let manager = &data["manager"];
+        let (completion, action) = crate::discord::reply_worker_anchor(&data, source)?;
+        let child = state.session(&json!({"session_id":query["worker"]}))?;
+        let observed = &completion["observation"];
+        let nonce = field(observed, "native_input_id");
+        let instance = codex_receipt::instance(&child.token);
+        let mail = &child.mailbox;
+        if request["body_version"] != 1
+            || self.native_cli_manager()
+            || manager["session"] != session
+            || query["instance"] != instance
+            || query["attempt"] != action["operation_id"]
+            || child.agent != "codex"
+            || mail["structured"] != true
+            || mail["discussion"] != completion["binding"]["conversation_id"]
+            || mail["parent"] != self.id
+            || mail["parent_incarnation"] != completion["binding"]["session_instance"]
+            || mail["parent_input_hash"] != crate::supervisor::mail::parent_hash(nonce)
+            || mail["attempt"] != action["operation_id"]
+            || mail["project"] != action["arguments"]["cwd"]
+            || child.verified_exit().is_none()
+        {
+            return Err(refuse("enrolled worker has no matching verified exit"));
+        }
+        let native = self.native_manager_proof(session, false)?;
+        let original = codex_proof::input_status(&native, nonce);
+        if native["binding"] != completion["binding"]
+            || original["state"] != "completed"
+            || original["native_input_id"] != nonce
+            || original["native_turn_id"] != observed["native_turn_id"]
+            || original["external_input"] != observed["external_input"]
+            || original["externally_steered"] == true
+        {
+            return Err(refuse(
+                "enrolled worker reply lost its completed native parent",
+            ));
+        }
+        let result = child.enrolled_worker_result(manager, &json!({"session":query["worker"],
+            "session_instance":instance,"job_id":action["key"],"attempt_id":action["operation_id"]}))?;
+        let terminal = &result["evidence"];
+        let root = state
+            .root
+            .parent()
+            .ok_or_else(|| refuse("missing worker mailbox root"))?;
+        if !matches!(field(&result, "state"), "interrupted" | "failed")
+            || terminal["state"] != result["state"]
+            || !codex_receipt::canonical_thread(field(terminal, "turn_id"))
+            || terminal["text"] != ""
+            || terminal["text_truncated"] != false
+            || super::super::mail_store::has_attempt_note(
+                root,
+                &json!({
+                    "Discussion":mail["discussion"],"Session":query["worker"],"Instance":instance,"Attempt":mail["attempt"],
+                }),
+            )?
+            || child.verified_exit().is_none()
+        {
+            return Err(refuse(
+                "enrolled worker lacks terminal evidence without an answer or note",
+            ));
+        }
+        Ok(
+            json!({"state":result["state"],"session":query["worker"],"session_instance":instance,
+            "attempt_id":action["operation_id"],"native_turn_id":terminal["turn_id"]}),
+        )
+    }
+
     pub(in crate::supervisor) fn enrolled_worker_send_context(
         &self,
         request: &Value,

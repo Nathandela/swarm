@@ -47,6 +47,7 @@ mod worker_proof;
 
 use crate::ipc;
 use config::{Config, Place, invalid};
+pub(crate) use receipt::reply_worker_anchor;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::io::{self, Read};
