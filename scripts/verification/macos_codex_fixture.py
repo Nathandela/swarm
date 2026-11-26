@@ -21,15 +21,16 @@ RUST_ID = "c0d3c01dc0d3c01dc0d3c01d"
 
 
 class Guard:
-    def __init__(self, root, state, port, cold):
+    def __init__(self, root, state, port, cold, *, endpoints=None):
         self.tools = root / "bin"
         namespace = Path("/tmp").resolve() / f"codex-daemon-{os.geteuid()}"
         metadata = namespace.lstat()
         assert (stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == os.geteuid()
                 and stat.S_IMODE(metadata.st_mode) == 0o700)
-        endpoints = [state / GO_ID / "codex.sock"]
-        if cold:
-            endpoints += [state / RESUMED_GO_ID / "codex.sock", state / "rust-v1" / RUST_ID / "b"]
+        if endpoints is None:
+            endpoints = [state / GO_ID / "codex.sock"]
+            if cold:
+                endpoints += [state / RESUMED_GO_ID / "codex.sock", state / "rust-v1" / RUST_ID / "b"]
         quote = lambda p: json.dumps(str(p))
         rules = [profile(root, [port]),
                  f'(deny file-read* (subpath {quote(Path.home())}))',

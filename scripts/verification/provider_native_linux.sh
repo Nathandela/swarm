@@ -12,6 +12,11 @@ extra_provider=
 mounted=/native/claude
 witness=$3
 case "$witness" in
+  codex_relocation.py)
+    test "$#" -eq 4
+    case "$4" in go|rust) ;; *) exit 2 ;; esac
+    mounted=/native/codex
+    set -- --binary /fixture/swarm --provider "$mounted" --implementation "$4" ;;
   rust_agy_schedule.py|rust_agy_handoff.py)
     test "$#" -eq 3
     mounted=/native/agy

@@ -1,7 +1,9 @@
 #!/bin/sh
 # Prepare private native fixture executables. The release builds have no fixed-ID hook.
 set -eu
-test "$#" -eq 1
+test "$#" -ge 1 && test "$#" -le 2
+mode=${2:-}
+case "$mode" in ""|--relocation) ;; *) exit 2 ;; esac
 test "$(uname -sm)" = "Darwin arm64"
 vendor=$1
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
@@ -38,5 +40,10 @@ rust.write_text(source.replace(allocation, '''let id = match std::env::var("SWAR
 PY
 (cd "$build/go" && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o "$build/go-oracle" ./cmd/swarm)
 (cd "$build/rust" && CARGO_TARGET_DIR="$build/target" cargo build --offline --locked -p swarm)
+if [ "$mode" = --relocation ]; then
+  witness="$repo/scripts/verification/codex_relocation.py"
+  python3 -Bu "$witness" --binary "$build/go-oracle" --provider "$vendor" --implementation go
+  exec python3 -Bu "$witness" --binary "$build/target/debug/swarm" --provider "$vendor" --implementation rust
+fi
 cp -p "$vendor" "$run/bin/codex"
 exec python3 -Bu "$repo/scripts/verification/live_go_codex.py" "$build/go-oracle" "$build/target/debug/swarm" "$run" 0.172.0 --cold
