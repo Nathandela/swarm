@@ -180,6 +180,7 @@ struct Entry {
     needs_sync: bool,
     exported: bool,
     live: Option<Arc<live::Owner>>,
+    observed_exit: Option<Value>,
 }
 
 impl Entry {
@@ -382,6 +383,21 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
     Ok(())
 }
 
+fn completed(file: &File, meta: &Value) -> io::Result<Option<Value>> {
+    let exit = match read_at(file, c"exit.json") {
+        Ok(exit) => exit,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let mut ended = meta.clone();
+    ended["status"]["Process"] = json!("exited");
+    ended["exit_code"] = exit["exit_code"].clone();
+    ended["last_activity"] = exit["finished_at"].clone();
+    ended["group_entered_at"] = exit["finished_at"].clone();
+    exited(file, &ended)?;
+    Ok(Some(ended))
+}
+
 fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
     let launch = read_at(file, c"shim-launch.json")
         .map_err(|e| io::Error::other(format!("Go launch evidence unavailable: {e}")))?;
@@ -508,15 +524,22 @@ impl Store {
                     continue;
                 }
             };
-            let (exported, live) = if adopt_live && meta["status"]["Process"] == "running" {
-                let owner = live::Owner::open(path, &file, &meta)
-                    .map_err(|err| io::Error::other(format!("Go session {id}: {err}")))?;
-                (false, Some(Arc::new(owner)))
-            } else {
-                let exported = qualified(root, &file, &meta)
-                    .map_err(|err| io::Error::other(format!("Go session {id}: {err}")))?;
-                (exported, None)
-            };
+            let (exported, live, observed_exit) =
+                if adopt_live && meta["status"]["Process"] == "running" {
+                    let adopt = (|| {
+                        qualified_role(&meta)?;
+                        if let Some(ended) = completed(&file, &meta)? {
+                            return Ok((false, None, Some(ended)));
+                        }
+                        let owner = live::Owner::open(path, &file, &meta)?;
+                        Ok::<_, io::Error>((false, Some(Arc::new(owner)), None))
+                    })();
+                    adopt.map_err(|err| io::Error::other(format!("Go session {id}: {err}")))?
+                } else {
+                    let exported = qualified(root, &file, &meta)
+                        .map_err(|err| io::Error::other(format!("Go session {id}: {err}")))?;
+                    (exported, None, None)
+                };
             rows.insert(
                 id.to_owned(),
                 Entry {
@@ -526,6 +549,7 @@ impl Store {
                     needs_sync: false,
                     exported,
                     live,
+                    observed_exit,
                 },
             );
         }
@@ -549,7 +573,12 @@ impl Store {
             .lock()
             .unwrap()
             .values()
-            .map(|entry| view(&entry.meta, endpoint))
+            .map(|entry| {
+                view(
+                    entry.observed_exit.as_ref().unwrap_or(&entry.meta),
+                    endpoint,
+                )
+            })
             .collect()
     }
 
@@ -563,6 +592,49 @@ impl Store {
             Some(_) => Err(io::Error::other("Go and Rust session IDs collide")),
             None => Ok(false),
         }
+    }
+
+    pub(super) fn live_ids(&self) -> Vec<String> {
+        self.rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, entry)| entry.live.is_some())
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    pub(super) fn observe_exit(&self, id: &str, endpoint: &str) -> io::Result<Option<Value>> {
+        let (dir, meta) = {
+            let rows = self.rows.lock().unwrap();
+            let Some(entry) = rows.get(id).filter(|entry| entry.live.is_some()) else {
+                return Ok(None);
+            };
+            (entry.dir.try_clone()?, entry.meta.clone())
+        };
+        let Some(ended) = completed(&dir, &meta)? else {
+            return Ok(None);
+        };
+        if !same_file(&dir.metadata()?, &fs::symlink_metadata(self.root.join(id))?) {
+            return Err(io::Error::other("live Go exit lost its directory binding"));
+        }
+        let raw = read_meta(&dir)?;
+        let row = view(&ended, endpoint);
+        let owner = {
+            let mut rows = self.rows.lock().unwrap();
+            let entry = rows.get_mut(id).expect("adopted Go entry is retained");
+            if raw != entry.raw {
+                return Err(io::Error::other(
+                    "live Go exit lost its original state binding",
+                ));
+            }
+            entry.observed_exit = Some(ended);
+            entry.live.take()
+        };
+        if let Some(owner) = owner {
+            owner.retire();
+        }
+        Ok(Some(row))
     }
 
     pub(super) fn has_live(&self) -> bool {
@@ -754,6 +826,7 @@ mod tests {
             needs_sync: false,
             exported: false,
             live: None,
+            observed_exit: None,
         };
         replace_meta(&entry.dir, &entry.raw, || {}).unwrap();
         let error = entry.set_label("tag", "new".into(), |_| {

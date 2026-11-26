@@ -140,6 +140,7 @@ def rehearse(go, rust, base):
         f"    printf '%s\\n' {shlex.quote(hook)} | {shlex.quote(go)} hook Stop\n"
         '  fi\n'
         '  printf "REPLY=%s\\n" "$line"\n'
+        '  if [ "$line" = exit-worker ]; then exit 0; fi\n'
         'done\n'
     )
     agent.chmod(0o700)
@@ -218,8 +219,27 @@ def rehearse(go, rust, base):
             peek = subprocess.check_output([go, "peek", active], env=go_env, text=True)
             assert "REPLY=board-path" in peek
             await_value(lambda: fold.is_file() and fold.read_bytes() != original_fold)
-            assert owner(go_env, {"op":"kill", "session_id":active})["op"] == "ok"
-            await_value(lambda: listed(go_env)[0]["status"]["Process"] == "exited")
+
+        prior = metadata.read_bytes()
+        with daemon(rust, rust_env, base / "rust-exit.log"):
+            with connect(rust_env) as watch:
+                watch[2]("subscribe", endpoint_id=watch[4])
+                assert watch[3]()["op"] == "ok"
+                with connect(rust_env) as control:
+                    attach(control, active)
+                    control[0](3, b"exit-worker\r")
+                    change = watch[3]()
+                assert change["op"] == "event" and change["session"]["status"]["Process"] == "exited", change
+            assert listed(rust_env)[0]["status"]["Process"] == "exited"
+            assert metadata.read_bytes() == prior
+        with daemon(rust, rust_env, base / "rust-exit.log"):
+            assert listed(rust_env)[0]["status"]["Process"] == "exited"
+            assert metadata.read_bytes() == prior
+        with daemon(go, go_env, base / "rollback-go-exit.log"):
+            row, = listed(go_env)
+            assert row["id"] == active and row["status"]["Process"] == "exited", row
+            assert disk(metadata)["shim_pid"] == original["shim_pid"]
+            assert disk(metadata)["conversation_id"] == NATIVE
             active = None
     finally:
         if active:

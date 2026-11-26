@@ -472,6 +472,24 @@ fn serve() -> io::Result<()> {
             scheduling::receipts(listener, state.clone());
         }
     }
+    if let Some(store) = &state.stopped_go {
+        for id in store.live_ids() {
+            let observer = state.clone();
+            thread::spawn(move || {
+                let store = observer
+                    .stopped_go
+                    .as_ref()
+                    .expect("live Go compatibility store");
+                loop {
+                    thread::sleep(Duration::from_millis(150));
+                    if let Ok(Some(row)) = store.observe_exit(&id, &observer.endpoint) {
+                        observer.publish_row(row);
+                        return;
+                    }
+                }
+            });
+        }
+    }
     let monitor = state.clone();
     thread::spawn(move || {
         loop {

@@ -242,6 +242,13 @@ impl Owner {
         )
     }
 
+    pub(super) fn retire(&self) {
+        if let Some(controller) = self.lease.lock().unwrap().take() {
+            let _ = controller.shim.shutdown(Shutdown::Both);
+            let _ = controller.client.shutdown(Shutdown::Both);
+        }
+    }
+
     pub(in crate::supervisor) fn begin(
         &self,
         generation: u64,
