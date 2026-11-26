@@ -220,6 +220,18 @@ impl State {
         }
         let launch = &request["launch"];
         let options = &launch["options"];
+        if options.get("handoff_from").is_some() {
+            if !caps.contains(&"hands-off-handoff") || managed.is_some() {
+                return Err(io::Error::other(
+                    "hands-off-handoff capability was not negotiated for this owner route",
+                ));
+            }
+            let _deletion = self.deletion_gate.lock().unwrap();
+            let (bound, source, proof) = handoff::hands_off(self, &request)?;
+            let mut prepared = Session::prepare(&bound)?;
+            prepared.lineage["hands_off"] = proof;
+            return self.reserve_prepared(prepared, false, Some(source), None);
+        }
         for (key, cap) in [
             ("resume_conversation_id", "external-resume"),
             ("resume_relocate", "resume-relocate"),
@@ -230,8 +242,10 @@ impl State {
                 )));
             }
         }
-        let resume = matches!(field(launch, "agent"), "agy" | "opencode" | "hermes")
-            && !field(options, "resume_from").is_empty();
+        let resume = matches!(
+            field(launch, "agent"),
+            "agy" | "opencode" | "hermes" | "claude" | "claude-code"
+        ) && !field(options, "resume_from").is_empty();
         let _deletion = resume.then(|| self.deletion_gate.lock().unwrap());
         if field(launch, "agent") == "hermes" && options.get("resume_from").is_some() && !resume {
             return Err(io::Error::other("resume_from requires a saved session"));
@@ -256,7 +270,19 @@ impl State {
                 let prepared = Session::prepare_bound(&request, Some(&predecessor))?;
                 return self.reserve_prepared_bound(prepared, false, None, None, Some(predecessor));
             }
-            let session = self.session(&json!({"session_id":source}))?;
+            let qualified = if source.contains('/') {
+                source.clone()
+            } else {
+                format!("{}/{}", self.endpoint, source)
+            };
+            let session = self.session(&json!({"session_id":qualified}))?;
+            if matches!(field(launch, "agent"), "claude" | "claude-code") {
+                if managed.is_some() {
+                    return Err(io::Error::other("unsupported Claude resume role"));
+                }
+                let prepared = session.prepare_claude_resume(launch, &qualified)?;
+                return self.reserve_prepared(prepared, false, None, None);
+            }
             if field(launch, "agent") == "opencode" {
                 if managed.is_some()
                     || launch["options"]
@@ -312,7 +338,13 @@ impl State {
         let _reservation = self.launch_gate.lock().unwrap();
         if let Some((local, instance)) = source {
             if !self.sessions.read().unwrap().get(&local).is_some_and(|s| {
-                s.is_live() && s.incarnation() == instance && s.verify_effective().is_ok()
+                s.incarnation() == instance
+                    && if prepared.lineage["hands_off"].is_object() {
+                        s.hands_off_claude_source()
+                            .is_ok_and(|(_, _, _, proof)| proof == prepared.lineage["hands_off"])
+                    } else {
+                        s.is_live() && s.verify_effective().is_ok()
+                    }
             }) {
                 return Err(io::Error::other(
                     "handoff: source changed during provider admission",
@@ -350,6 +382,18 @@ impl State {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 format!("workspace overlaps active Swarm session in {directory}"),
+            ));
+        }
+        if let Some(id) = prepared.claude_resume["conversation_id"].as_str()
+            && self
+                .sessions
+                .read()
+                .unwrap()
+                .values()
+                .any(|row| row.owns_claude_conversation(id))
+        {
+            return Err(io::Error::other(
+                "Claude conversation already has a live or unconfirmed writer",
             ));
         }
         if !prepared.resume.is_null()
@@ -645,6 +689,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     "attach"
                         | "subscribe"
                         | "owner-launch"
+                        | "hands-off-handoff"
                         | "external-resume"
                         | "resume-relocate"
                         | "semantic-send"

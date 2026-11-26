@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use std::io::{self, Read};
 
 pub(crate) const EVENTS: &[&str] = &[
+    "SessionStart",
     "Notification",
     "PermissionRequest",
     "PostToolUse",
@@ -76,6 +77,13 @@ pub(crate) fn argv(label: &str, request: &Value) -> io::Result<Vec<String>> {
     }
     if options["dangerously-skip-permissions"] == "true" {
         argv.push("--dangerously-skip-permissions".into());
+    }
+    if let Some(id) = request["claude_retained_conversation"].as_str() {
+        if !canonical_id(id) || !crate::ipc::field(request, "initial_prompt").is_empty() {
+            return Err(io::Error::other("invalid Claude resume binding"));
+        }
+        argv.extend(["--resume".into(), id.to_owned()]);
+        return Ok(argv);
     }
     if let Some(prompt) = request["initial_prompt"].as_str().filter(|p| !p.is_empty()) {
         if prompt.starts_with('-') {
@@ -350,4 +358,197 @@ mod schedule_tests {
         );
         assert!(canonical_id(&new_conversation().unwrap()));
     }
+}
+
+/// Retain proof of the native account and launch-path origin, never its credential bytes.
+pub(crate) fn profile(
+    env: &[(String, String)],
+    supplied: &Value,
+    options: &Value,
+) -> io::Result<Value> {
+    use std::os::unix::fs::MetadataExt;
+    use std::path::Path;
+    let env_value = |name: &str| {
+        env.iter()
+            .rev()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+            .unwrap_or_default()
+    };
+    let unsupported = |key: &str| {
+        matches!(
+            key,
+            "CLAUDE_CONFIG_DIR"
+                | "ANTHROPIC_CONFIG_DIR"
+                | "ANTHROPIC_AUTH_TOKEN"
+                | "ANTHROPIC_BASE_URL"
+                | "CLAUDE_SECURESTORAGE_CONFIG_DIR"
+        ) || key.starts_with("CLAUDE_CODE_USE_")
+            || key.starts_with("CLAUDE_CODE_GATEWAY_")
+    };
+    let unproven = if supplied.is_null() {
+        std::env::vars_os()
+            .any(|(key, value)| key.to_str().is_some_and(unsupported) && !value.is_empty())
+    } else {
+        supplied
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter_map(|entry| entry.split_once('='))
+            .any(|(key, value)| unsupported(key) && !value.is_empty())
+    };
+    if unproven {
+        return Err(io::Error::other(
+            "unqualified Claude profile or authority override",
+        ));
+    }
+    let original = Path::new(env_value("HOME"));
+    if !original.is_absolute() {
+        return Err(io::Error::other("Claude HOME is missing"));
+    }
+    let home = original.canonicalize()?;
+    let info = home.metadata()?;
+    let settings = read_private_optional(&home.join(".claude/settings.json"))?;
+    let account_file = read_private_optional(&home.join(".claude.json"))?;
+    let account = &account_file["oauthAccount"];
+    let account_id = account["accountUuid"].as_str().filter(|id| !id.is_empty());
+    let organization = account["organizationUuid"].as_str().unwrap_or_default();
+    let key = env_value("ANTHROPIC_API_KEY");
+    let config_key = settings["env"]["ANTHROPIC_API_KEY"]
+        .as_str()
+        .or_else(|| settings["env"]["ANTHROPIC_AUTH_TOKEN"].as_str())
+        .filter(|key| !key.is_empty());
+    let origin = if !key.is_empty() {
+        json!({"kind":"api-key","fingerprint":text_hash(key)})
+    } else if let Some(key) = config_key {
+        json!({"kind":"settings-key","fingerprint":text_hash(key)})
+    } else if let Some(account_id) = account_id {
+        json!({"kind":"oauth","fingerprint":text_hash(&json!([account_id,organization]).to_string())})
+    } else {
+        return Err(io::Error::other("Claude native account is not proved"));
+    };
+    Ok(json!({
+        "home":home,"home_id":[info.dev(),info.ino()],"path":env_value("PATH"),
+        "origin":origin,"settings":text_hash(&settings.to_string()),
+        "options":options.as_object().cloned().unwrap_or_default(),
+    }))
+}
+
+fn read_private_optional(path: &std::path::Path) -> io::Result<Value> {
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Value::Null),
+        Err(err) => return Err(err),
+    };
+    let info = file.metadata()?;
+    // SAFETY: geteuid does not modify process state.
+    if !info.is_file()
+        || info.uid() != unsafe { libc::geteuid() }
+        || info.nlink() != 1
+        || info.mode() & 0o022 != 0
+    {
+        return Err(io::Error::other("unsafe Claude native config ownership"));
+    }
+    let mut data = Vec::new();
+    file.take(1024 * 1024 + 1).read_to_end(&mut data)?;
+    if data.len() > 1024 * 1024 {
+        return Err(io::Error::other(
+            "Claude native config exceeds inspection limit",
+        ));
+    }
+    let value: Value = serde_json::from_slice(&data)?;
+    if !value.is_object() {
+        return Err(io::Error::other("invalid Claude native config"));
+    }
+    Ok(value)
+}
+
+pub(crate) fn release(value: &str) -> Option<(u32, u32, u32)> {
+    let parts: Vec<u32> = value
+        .split('.')
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    Some((
+        *parts.first()?,
+        *parts.get(1)?,
+        parts.get(2).copied().unwrap_or_default(),
+    ))
+}
+
+pub(crate) fn transcript(
+    home: &std::path::Path,
+    cwd: &std::path::Path,
+    id: &str,
+) -> io::Result<(std::path::PathBuf, Value)> {
+    use std::fs::{self, OpenOptions};
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    if !canonical_id(id) || !home.is_absolute() || !cwd.is_absolute() {
+        return Err(io::Error::other(
+            "unqualified Claude transcript coordinates",
+        ));
+    }
+    let cwd_text = cwd
+        .to_str()
+        .ok_or_else(|| io::Error::other("Claude checkout is not UTF-8"))?;
+    let project: String = cwd_text
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect();
+    let mut parent = home.to_owned();
+    for part in [".claude", "projects", &project] {
+        parent.push(part);
+        if !fs::symlink_metadata(&parent)?.is_dir() {
+            return Err(io::Error::other(
+                "Claude transcript directory is not an anchored directory",
+            ));
+        }
+    }
+    let path = parent.join(format!("{id}.jsonl"));
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)?;
+    let stat = file.metadata()?;
+    // SAFETY: geteuid has no process side effects.
+    if !stat.is_file()
+        || stat.uid() != unsafe { libc::geteuid() }
+        || stat.nlink() != 1
+        || stat.mode() & 0o022 != 0
+        || path.canonicalize()? != path
+    {
+        return Err(io::Error::other(
+            "Claude transcript is not a verified owner file",
+        ));
+    }
+    let mut input = BufReader::new(file.take(1024 * 1024));
+    let mut line = Vec::new();
+    while input.read_until(b'\n', &mut line)? != 0 {
+        if line.last() != Some(&b'\n') {
+            break;
+        }
+        let value: Value = serde_json::from_slice(&line)?;
+        line.clear();
+        let thread = crate::ipc::field(&value, "sessionId");
+        let location = crate::ipc::field(&value, "cwd");
+        if !thread.is_empty() && !location.is_empty() && value["isSidechain"] != true {
+            if thread != id || std::path::Path::new(location).canonicalize()? != cwd {
+                return Err(io::Error::other(
+                    "Claude transcript identity or checkout changed",
+                ));
+            }
+            return Ok((path, json!([stat.dev(), stat.ino()])));
+        }
+    }
+    Err(io::Error::other(
+        "Claude transcript has no complete matching root record",
+    ))
 }

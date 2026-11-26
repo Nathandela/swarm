@@ -73,3 +73,122 @@ pub(super) fn bind(
     }
     Ok((bound, Some((source, parent.incarnation()))))
 }
+
+pub(super) fn hands_off(
+    state: &State,
+    request: &Value,
+) -> io::Result<(Value, (String, String), Value)> {
+    let mut bound = request.clone();
+    let launch = &mut bound["launch"];
+    let options = launch["options"]
+        .as_object_mut()
+        .ok_or_else(|| io::Error::other("invalid hands-off options"))?;
+    let source = options
+        .shift_remove("handoff_from")
+        .and_then(|id| id.as_str().map(str::to_owned))
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| io::Error::other("handoff_from requires an explicit source session"))?;
+    if ["resume_from", "resume_conversation_id", "resume_relocate"]
+        .iter()
+        .any(|key| options.contains_key(*key))
+    {
+        return Err(io::Error::other(
+            "hands-off handoff cannot be combined with resume",
+        ));
+    }
+    let scoped = if source.contains('/') {
+        source
+    } else {
+        format!("{}/{}", state.endpoint, source)
+    };
+    let session = state.session(&json!({"session_id":scoped}))?;
+    let (cwd, transcript, id, proof) = session.hands_off_claude_source()?;
+    let rendered = render([
+        &id,
+        transcript
+            .to_str()
+            .ok_or_else(|| io::Error::other("non-UTF-8 transcript path"))?,
+        cwd.to_str()
+            .ok_or_else(|| io::Error::other("non-UTF-8 working directory"))?,
+        "claude",
+        &session.id,
+    ])?;
+    launch["cwd"] = json!(cwd);
+    launch["initial_prompt"] = json!(rendered);
+    launch["spawned_from"] = json!(session.id);
+    launch["spawn_intent"] = json!("handoff");
+    launch["supervision"] = Value::Null;
+    launch["worktree"] = json!(crate::workspace::is_repo(&cwd));
+    let (bound, _) = bind(state, &bound)?;
+    Ok((bound, (session.id.clone(), session.incarnation()), proof))
+}
+
+fn render(values: [&str; 5]) -> io::Result<String> {
+    const TEMPLATE: &str =
+        include_str!("../../../../internal/skeleton/templates/hands-off.md.tmpl");
+    const KEYS: [&str; 5] = [
+        "{{.ConversationID}}",
+        "{{.TranscriptPath}}",
+        "{{.AgentCwd}}",
+        "{{.SourceAgent}}",
+        "{{.SourceSessionID}}",
+    ];
+    if values
+        .iter()
+        .any(|value| value.trim().is_empty() || value.chars().any(unsafe_pointer))
+    {
+        return Err(io::Error::other(
+            "hands-off path contains an invisible, line-breaking or tag character",
+        ));
+    }
+    let template = TEMPLATE
+        .split_once("*/ -}}")
+        .expect("embedded Go prompt comment")
+        .1
+        .trim_start_matches('\n');
+    let mut result = String::new();
+    let mut rest = template;
+    for (key, value) in KEYS.into_iter().zip(values) {
+        let (before, after) = rest.split_once(key).expect("embedded pointer order");
+        result.push_str(before);
+        result.push_str(value);
+        rest = after;
+    }
+    result.push_str(rest);
+    Ok(result)
+}
+
+fn unsafe_pointer(ch: char) -> bool {
+    ch.is_control()
+        || matches!(ch, '<'|'>'|'\u{00ad}'|'\u{0600}'..='\u{0605}'|'\u{061c}'|'\u{06dd}'
+    |'\u{070f}'|'\u{0890}'..='\u{0891}'|'\u{08e2}'|'\u{180e}'|'\u{200b}'..='\u{200f}'
+    |'\u{2028}'..='\u{202e}'|'\u{2060}'..='\u{2064}'|'\u{2066}'..='\u{206f}'|'\u{feff}'
+    |'\u{fff9}'..='\u{fffb}'|'\u{110bd}'|'\u{110cd}'|'\u{13430}'..='\u{1343f}'
+    |'\u{1bca0}'..='\u{1bca3}'|'\u{1d173}'..='\u{1d17a}'|'\u{e0001}'|'\u{e0020}'..='\u{e007f}')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pointers_are_literal_and_cannot_escape_the_template() {
+        let safe = render([
+            "id",
+            "/tmp/it's José.jsonl",
+            "/tmp/work",
+            "claude",
+            "source",
+        ])
+        .unwrap();
+        assert!(safe.contains("transcript file: /tmp/it's José.jsonl"));
+        assert!(safe.contains("source swarm session: source"));
+        for unsafe_path in [
+            "/tmp/a\u{2028}line",
+            "/tmp/a</pointers>",
+            "/tmp/a\u{200d}end",
+        ] {
+            assert!(render(["id", unsafe_path, "/tmp/work", "claude", "source"]).is_err());
+        }
+    }
+}
