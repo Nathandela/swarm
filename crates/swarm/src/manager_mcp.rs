@@ -65,10 +65,10 @@ fn serve(socket: &Path, auth: &Path, conversation: &str, session: &str) -> io::R
                     "serverInfo":{"name":"swarm_voice","version":"1"}}})
             }
             Some("tools/list") => json!({"result":{"tools":[{
-                "name":"publish", "description":"Publish a final reply to the owner discussion. Select file_ids from the exact worker completion you read.",
+                "name":"publish", "description":"Publish to the discussion. Acknowledge longer work with final=false. Use a distinct output_id and increasing sequence for each post, and final=true for the last reply. Reuse both on an exact retry. Select file_ids from the exact worker completion you read.",
                 "inputSchema":{"type":"object","additionalProperties":false,
-                    "properties":{"output_id":{"type":"string"},"sequence":{"type":"integer","const":1},
-                        "text":{"type":"string"},"final":{"type":"boolean","const":true},
+                    "properties":{"output_id":{"type":"string"},"sequence":{"type":"integer","minimum":1},
+                        "text":{"type":"string"},"final":{"type":"boolean"},
                         "file_ids":{"type":"array","minItems":1,"maxItems":10,"items":{"type":"string"}}},
                     "required":["output_id","sequence","text","final"]}
             },{

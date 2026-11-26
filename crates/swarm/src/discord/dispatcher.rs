@@ -1,6 +1,8 @@
 //! One owner-personal discussion on the native supervisor's exact manager binding.
 use super::config::{Config, invalid};
-use super::receipt::{Inbox, Observation, hash, publication_nonce, verify_publication};
+use super::receipt::{
+    Inbox, Observation, hash, publication_args, publication_nonce, verify_publication,
+};
 use super::rest::{Discord, Post};
 use super::{mail_wake, manager::Manager};
 use crate::{
@@ -342,40 +344,44 @@ impl Dispatcher {
                     .owner
                     .send(field(input, "operation"), &input["composer"]);
             }
-            self.deliver(cfg, inbox, api, &state, millis()?)?;
-            if phase == "completed" {
-                let nonce = field(&state["input"], "final_nonce");
-                if nonce.is_empty() || inbox.publication(nonce)["state"] == "sent" {
-                    let input = &state["input"];
-                    let origin = if input["worker_wake"]["voice_origin"].is_object() {
-                        &input["worker_wake"]["voice_origin"]
-                    } else {
-                        &input["composer"]["origin"]
-                    };
-                    if let Some((_, driver)) = calls
-                        && !nonce.is_empty()
-                        && origin["voice"].is_object()
-                    {
-                        let entry = inbox.publication(nonce);
-                        let _ = driver
-                            .readout
-                            .try_send(super::call_runtime::Readout::Publication(
-                                nonce.into(),
-                                origin.clone(),
-                                field(&entry, "body").into(),
-                            ));
-                    }
-                    let publication = inbox.publication(nonce);
+            let publications = self.deliver(cfg, inbox, api, &state, millis()?)?;
+            if phase == "completed"
+                && publications
+                    .iter()
+                    .all(|nonce| inbox.publication(nonce)["state"] == "sent")
+            {
+                let input = &state["input"];
+                let nonce = field(input, "final_nonce");
+                let origin = if input["worker_wake"]["voice_origin"].is_object() {
+                    &input["worker_wake"]["voice_origin"]
+                } else {
+                    &input["composer"]["origin"]
+                };
+                if let Some((_, driver)) = calls
+                    && !nonce.is_empty()
+                    && origin["voice"].is_object()
+                {
+                    let entry = inbox.publication(nonce);
+                    let _ = driver
+                        .readout
+                        .try_send(super::call_runtime::Readout::Publication(
+                            nonce.into(),
+                            origin.clone(),
+                            field(&entry, "body").into(),
+                        ));
+                }
+                for nonce in publications {
+                    let publication = inbox.publication(&nonce);
                     if !publication["proof"]["file_source"].is_null() {
                         mail_store::release_publication(
                             &self.owner.supervisor_root()?,
                             &publication["proof"]["file_source"],
-                            nonce,
+                            &nonce,
                         )?;
                     }
-                    state["input"] = Value::Null;
-                    inbox.set_manager(state)?;
                 }
+                state["input"] = Value::Null;
+                inbox.set_manager(state)?;
             }
             return Ok(());
         }
@@ -828,28 +834,27 @@ impl Dispatcher {
         api: &impl Audience,
         state: &Value,
         now: u64,
-    ) -> io::Result<()> {
-        for nonce in inbox.pending_publications() {
-            let entry = inbox.publication(&nonce);
-            verify_publication(&nonce, &entry)?;
+    ) -> io::Result<Vec<String>> {
+        let order = inbox.turn_publications(state)?;
+        if inbox
+            .pending_publications()
+            .iter()
+            .any(|nonce| !order.contains(nonce))
+        {
+            return Err(invalid(
+                "queued publication is out of the current native input scope",
+            ));
+        }
+        for nonce in &order {
+            let entry = inbox.publication(nonce);
+            verify_publication(nonce, &entry)?;
+            match field(&entry, "state") {
+                "sent" => continue,
+                "prepared" if entry["retry_at"].as_u64().is_none_or(|at| now >= at) => {}
+                _ => break,
+            }
             let publication = &entry["proof"];
             let input = &state["input"];
-            if publication["binding"] != state["binding"]
-                || publication["turn_id"] != input["turn_id"]
-                || publication["source_id"] != input["source_id"]
-                || input["turn_id"].is_null()
-                || input["final_nonce"] != nonce
-                || publication["voice_worker"] != mail_wake::link(&input["worker_wake"])
-                || publication["call_receipt"]["native_input_id"]
-                    != input["composer"]["manager_admission"]["nonce"]
-            {
-                return Err(invalid(
-                    "queued publication is out of the current native input scope",
-                ));
-            }
-            if entry["retry_at"].as_u64().is_some_and(|at| now < at) {
-                continue;
-            }
             api.verify(cfg)?;
             let source_id = field(input, "source_id");
             let origin = &input["composer"]["origin"];
@@ -916,20 +921,23 @@ impl Dispatcher {
                         "queued publication no longer matches the selected worker note",
                     ));
                 }
-                mail_store::pin_publication(&self.owner.supervisor_root()?, file_source, &nonce)?
+                mail_store::pin_publication(&self.owner.supervisor_root()?, file_source, nonce)?
             };
-            inbox.publication_state(&nonce, "sending", None)?;
-            match api.post(cfg, &nonce, body, &files) {
+            inbox.publication_state(nonce, "sending", None)?;
+            match api.post(cfg, nonce, body, &files) {
                 Post::Acknowledged(receipt)
-                    if receipt["nonce"] == nonce
+                    if receipt["nonce"] == nonce.as_str()
                         && inbox.observe(&receipt, Observation::Rest)? => {}
                 Post::RateLimited(after) => {
-                    inbox.publication_state(&nonce, "prepared", Some(now.saturating_add(after)))?
+                    inbox.publication_state(nonce, "prepared", Some(now.saturating_add(after)))?
                 }
-                _ => inbox.publication_state(&nonce, "uncertain", None)?,
+                _ => inbox.publication_state(nonce, "uncertain", None)?,
+            }
+            if inbox.publication(nonce)["state"] != "sent" {
+                break;
             }
         }
-        Ok(())
+        Ok(order)
     }
 
     fn serve_tool(&self, cfg: &Config, inbox: &mut Inbox, api: &impl Audience) -> io::Result<()> {
@@ -1223,8 +1231,12 @@ impl Dispatcher {
             let _ = self.reconcile_input(inbox, &mut state)?;
         }
         let input = &state["input"];
-        if input["turn_id"].is_null() {
-            return Err(invalid("native manager input is not yet observed"));
+        if !input["turn_id"].is_string()
+            || input["composer"]["manager_admission"]["binding"] != state["binding"]
+        {
+            return Err(invalid(
+                "native manager input is not yet bound to this turn",
+            ));
         }
         let call = &request["call"];
         let mut args = call["arguments"].clone();
@@ -1326,44 +1338,30 @@ impl Dispatcher {
                 .as_object_mut()
                 .and_then(|result| result.shift_remove("file_binding"))
             {
-                if !state["input"]["final_nonce"].is_null() {
-                    return Err(invalid(
-                        "cannot change file selection after final publication",
-                    ));
-                }
-                state["input"]["selected_note"] = json!({
+                let selection = json!({
                     "id":result["id"],"binding":binding,"files":result["files"]
                 });
+                if selection != state["input"]["selected_note"]
+                    && inbox
+                        .turn_publications(&state)?
+                        .iter()
+                        .any(|nonce| !inbox.publication(nonce)["proof"]["file_source"].is_null())
+                    || !state["input"]["final_nonce"].is_null()
+                {
+                    return Err(invalid(
+                        "cannot change the worker note after a file or final publication",
+                    ));
+                }
+                state["input"]["selected_note"] = selection;
                 inbox.set_manager(state)?;
             }
             return Ok(result);
         }
-        let fields = args
-            .as_object()
-            .ok_or_else(|| invalid("invalid publication arguments"))?;
-        if fields.keys().any(|key| {
-            !matches!(
-                key.as_str(),
-                "output_id" | "sequence" | "text" | "final" | "file_ids"
-            )
-        }) || args["sequence"] != 1
-            || args["final"] != true
-        {
-            return Err(invalid(
-                "only one deliberate final text publication is supported",
-            ));
+        if !publication_args(&args) {
+            return Err(invalid("invalid publication arguments"));
         }
         let output = field(&args, "output_id").to_owned();
         let body = field(&args, "text").to_owned();
-        if output.is_empty()
-            || output.len() > 128
-            || output.chars().any(char::is_control)
-            || args["text"].as_str().is_none()
-            || body.trim().is_empty() && args["file_ids"].is_null()
-            || body.encode_utf16().count() > 1900
-        {
-            return Err(invalid("invalid final publication ID or body"));
-        }
         args.sort_all_objects();
         let proof = self.owner.prove_publication(
             &input["composer"],
@@ -1414,13 +1412,26 @@ impl Dispatcher {
                 json!({"id":selected_note["id"],"binding":selected_note["binding"],"files":picked});
         }
         let nonce = publication_nonce(&publication)?;
-        if input["final_nonce"]
-            .as_str()
-            .is_some_and(|saved| saved != nonce)
-        {
-            return Err(invalid("a final publication is already selected"));
+        let mut order = inbox.turn_publications(&state)?;
+        if !order.contains(&nonce) {
+            if !input["final_nonce"].is_null()
+                || order.last().is_some_and(|prior| {
+                    let prior = inbox.publication(prior);
+                    args["sequence"].as_u64() <= prior["proof"]["arguments"]["sequence"].as_u64()
+                })
+            {
+                return Err(invalid(
+                    "publication must advance the sequence before the final reply",
+                ));
+            }
+            if !order.is_empty() || args["final"] == false {
+                order.push(nonce.clone());
+                state["input"]["publication_nonces"] = json!(order);
+            }
+            if args["final"] == true {
+                state["input"]["final_nonce"] = json!(nonce);
+            }
         }
-        state["input"]["final_nonce"] = json!(nonce);
         inbox.prepare_publication(&nonce, publication, state)?;
         Ok(json!({"output_id":output,"state":inbox.publication(&nonce)["state"]}))
     }
@@ -1437,6 +1448,7 @@ fn quota_input_settled(state: &Value, turn: &Value) -> bool {
             && admission["expected_external_input"] == turn["external_input"]
             && (input["turn_id"].is_null() || input["turn_id"] == turn["native_turn_id"])
             && input["final_nonce"].is_null()
+            && input["publication_nonces"].is_null()
             && input["selected_note"].is_null()
             && origin["voice"].is_null()
             && input["worker_wake"]["voice_origin"].is_null();
@@ -1697,7 +1709,8 @@ mod tests {
                 .push((nonce.to_owned(), body.to_owned()));
             match self.outcome.replace(Post::Unconfirmed) {
                 Post::Acknowledged(_) => Post::Acknowledged(json!({
-                    "id":"102", "author":{"id":"200","bot":true},"channel_id":cfg.text("dm_channel_id"),
+                    "id":(101 + self.posted.borrow().len()).to_string(),
+                    "author":{"id":"200","bot":true},"channel_id":cfg.text("dm_channel_id"),
                     "nonce":nonce,"content":body
                 })),
                 result => result,
@@ -1816,7 +1829,8 @@ mod tests {
                     assert_eq!(request["manager_call"]["tool_name"], "publish");
                     json!({"op":"manager_resolve_call","session_id":self.row["id"],
                        "manager_call_proof":{"main":true, "native_input_id":self.composer["manager_admission"]["nonce"],
-                           "native_turn_id":if self.wrong_turn {"old-turn"} else {"authorized-turn"},"native_call_id":"provider-call"}})
+                           "native_turn_id":if self.wrong_turn {"old-turn"} else {"authorized-turn"},
+                           "native_call_id":request["manager_call"]["host_meta"]["callId"]}})
                 }
                 op => panic!("unsupported fixture operation {op}"),
             };
@@ -1856,15 +1870,195 @@ mod tests {
 
     #[test]
     fn owner_dm_runs_through_bound_manager_and_exact_reply_once() {
-        owner_dm_after_draft(false);
+        owner_dm_after_draft(false, None);
     }
 
     #[test]
     fn reconnected_owner_dm_drops_the_edited_source_without_sending() {
-        owner_dm_after_draft(true);
+        owner_dm_after_draft(true, None);
     }
 
-    fn owner_dm_after_draft(edited: bool) {
+    #[test]
+    fn ordered_publications_wait_for_exact_receipts_after_an_uncertain_send() {
+        owner_dm_after_draft(false, Some(true));
+    }
+
+    #[test]
+    fn ordered_publications_allow_a_completed_partial_only_turn_to_settle() {
+        owner_dm_after_draft(false, Some(false));
+    }
+
+    fn ordered_publications(
+        dispatcher: &Dispatcher,
+        cfg: &Config,
+        mut inbox: Inbox,
+        api: &MockDiscord,
+        native: &Mutex<Record>,
+        dir: &Path,
+        finish: bool,
+    ) {
+        let conversation = inbox.manager()["binding"]["conversation_id"].clone();
+        let call = |inbox: &mut Inbox,
+                    output: &str,
+                    sequence: u64,
+                    body: &str,
+                    final_reply: bool,
+                    tool_id: &str| {
+            let request = json!({
+                "version":1,"conversation_id":conversation,"session_id":"local",
+                "call":{"name":"publish","arguments":{"output_id":output,"sequence":sequence,"text":body,"final":final_reply},
+                    "meta":{"callId":tool_id,"threadId":"provider-thread","sessionId":"provider-thread",
+                        "x-codex-turn-metadata":{"turn_id":"authorized-turn","thread_id":"provider-thread","session_id":"provider-thread"}}}
+            });
+            let body = serde_json::to_vec(&request).unwrap();
+            let mut stream = std::os::unix::net::UnixStream::connect(&dispatcher.socket).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            write!(stream,
+                "POST /manager/call HTTP/1.0\r\nHost: voice\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                dispatcher.credential, body.len()
+            ).unwrap();
+            stream.write_all(&body).unwrap();
+            dispatcher.serve_tool(cfg, inbox, api).unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            serde_json::from_str::<Value>(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+        };
+        let saved = dir.join("rust-text-v1.json");
+        let first = ("progress", 2, "on it", false, "tool-one");
+        assert_eq!(
+            call(&mut inbox, first.0, first.1, first.2, first.3, first.4)["data"]["state"],
+            "prepared"
+        );
+        let prior = fs::read(&saved).unwrap();
+        for wrong in [
+            ("lower", 1, "wrong", false, "tool-low"),
+            ("equal", 2, "wrong", false, "tool-equal"),
+            ("progress", 2, "different", false, "tool-revision"),
+            ("stolen", 3, "wrong", false, "tool-one"),
+        ] {
+            assert_eq!(
+                call(&mut inbox, wrong.0, wrong.1, wrong.2, wrong.3, wrong.4)["error"],
+                "unconfirmed"
+            );
+            assert_eq!(fs::read(&saved).unwrap(), prior);
+        }
+        assert_eq!(
+            call(&mut inbox, first.0, first.1, first.2, first.3, "tool-retry")["data"]["state"],
+            "prepared"
+        );
+        assert_eq!(fs::read(&saved).unwrap(), prior);
+        if finish {
+            assert_eq!(
+                call(&mut inbox, "checking", 5, "checking", false, "tool-two")["data"]["state"],
+                "prepared"
+            );
+            assert_eq!(
+                call(&mut inbox, "final", 8, "done", true, "tool-final")["data"]["state"],
+                "prepared"
+            );
+            let prior = fs::read(&saved).unwrap();
+            assert_eq!(
+                call(&mut inbox, "late", 9, "wrong", false, "tool-late")["error"],
+                "unconfirmed"
+            );
+            assert_eq!(
+                call(
+                    &mut inbox,
+                    "checking",
+                    5,
+                    "checking",
+                    false,
+                    "tool-two-again"
+                )["data"]["state"],
+                "prepared"
+            );
+            assert_eq!(fs::read(&saved).unwrap(), prior);
+        }
+        let order = inbox.turn_publications(inbox.manager()).unwrap();
+        assert_eq!(order.len(), if finish { 3 } else { 1 });
+        let first_nonce = &order[0];
+        let decision = inbox.manager().clone();
+        dispatcher
+            .deliver(cfg, &mut inbox, api, &decision, 100)
+            .unwrap();
+        let retry_at = inbox.publication(first_nonce)["retry_at"].as_u64().unwrap();
+        dispatcher
+            .deliver(cfg, &mut inbox, api, &decision, retry_at - 1)
+            .unwrap();
+        assert_eq!(
+            api.posted.borrow().as_slice(),
+            &[(first_nonce.clone(), "on it".into())]
+        );
+        dispatcher
+            .deliver(cfg, &mut inbox, api, &decision, retry_at)
+            .unwrap();
+        assert_eq!(inbox.publication(first_nonce)["state"], "uncertain");
+        drop(inbox);
+
+        let mut inbox = Inbox::open(dir, cfg).unwrap();
+        native.lock().unwrap().completed = true;
+        dispatcher.tick(cfg, &mut inbox, api).unwrap();
+        assert_eq!(api.posted.borrow().len(), 2);
+        assert!(!inbox.manager()["input"].is_null());
+        let wrong = json!({"id":"102","author":{"id":"200","bot":true},
+            "channel_id":"401","nonce":first_nonce,"content":"on it"});
+        assert!(!inbox.observe(&wrong, Observation::Gateway).unwrap());
+        let mut correct = wrong;
+        correct["channel_id"] = json!("400");
+        assert!(inbox.observe(&correct, Observation::Gateway).unwrap());
+        if finish {
+            let prior = inbox.manager().clone();
+            let saved_order = fs::read(&saved).unwrap();
+            let mut reordered = prior.clone();
+            reordered["input"]["publication_nonces"]
+                .as_array_mut()
+                .unwrap()
+                .swap(0, 1);
+            assert!(
+                dispatcher
+                    .deliver(cfg, &mut inbox, api, &reordered, retry_at)
+                    .is_err()
+            );
+            assert_eq!(fs::read(&saved).unwrap(), saved_order);
+            api.source.set(LiveSource::Unavailable);
+            assert!(
+                dispatcher
+                    .deliver(cfg, &mut inbox, api, &prior, retry_at)
+                    .is_err()
+            );
+            assert_eq!(api.posted.borrow().len(), 2);
+            api.source.set(LiveSource::Exact);
+
+            // Simulate a process exit after claiming a POST and before its transport result.
+            inbox.publication_state(&order[1], "sending", None).unwrap();
+            drop(inbox);
+            inbox = Inbox::open(dir, cfg).unwrap();
+            dispatcher.tick(cfg, &mut inbox, api).unwrap();
+            assert_eq!(api.posted.borrow().len(), 2);
+            assert_eq!(inbox.publication(&order[2])["state"], "prepared");
+            correct["id"] = json!("103");
+            correct["nonce"] = json!(order[1]);
+            correct["content"] = json!("checking");
+            assert!(inbox.observe(&correct, Observation::History).unwrap());
+            api.outcome.replace(Post::Acknowledged(Value::Null));
+        }
+        dispatcher.tick(cfg, &mut inbox, api).unwrap();
+        assert!(inbox.manager()["input"].is_null());
+        let mut expected = vec![(first_nonce.clone(), "on it".into()); 2];
+        if finish {
+            expected.push((order[2].clone(), "done".into()));
+        }
+        assert_eq!(*api.posted.borrow(), expected);
+        for nonce in order {
+            assert_eq!(inbox.publication(&nonce)["state"], "sent");
+        }
+        drop(inbox);
+        assert!(Inbox::open(dir, cfg).unwrap().manager()["input"].is_null());
+    }
+
+    fn owner_dm_after_draft(edited: bool, sequence: Option<bool>) {
         let dir =
             crate::test_temp::root().join(format!("d-{}", &runtime::random_id().unwrap()[..12]));
         runtime::private_dir(&dir).unwrap();
@@ -2003,6 +2197,16 @@ mod tests {
         assert!(inbox.begin_draft_retry(&inbox.manager().clone()).is_err());
         state.lock().unwrap().input_observed = true;
         assert!(api.posted.borrow().is_empty());
+        if let Some(final_reply) = sequence {
+            ordered_publications(&dispatcher, &cfg, inbox, &api, &state, &dir, final_reply);
+            done.store(true, Ordering::Relaxed);
+            let _ = std::os::unix::net::UnixStream::connect(&socket).unwrap();
+            server.join().unwrap();
+            drop(dispatcher);
+            fs::remove_dir_all(dir).unwrap();
+            return;
+        }
+
         let publish = json!({"version":1, "conversation_id":inbox.manager()["binding"]["conversation_id"],
             "session_id":"local", "call":{"name":"publish","arguments":{
                 "output_id":"final","sequence":1,"text":"deliberate reply","final":true
@@ -2026,6 +2230,7 @@ mod tests {
         dispatcher.tool(&cfg, &mut inbox, &api, &publish).unwrap();
         dispatcher.tool(&cfg, &mut inbox, &api, &publish).unwrap();
         let nonce = field(&inbox.manager()["input"], "final_nonce").to_owned();
+        assert!(inbox.manager()["input"].get("publication_nonces").is_none());
         assert_eq!(inbox.pending_publications(), std::slice::from_ref(&nonce));
         let outbox = dir.join("rust-text-v1.json");
         let original = runtime::read_json(&outbox).unwrap();

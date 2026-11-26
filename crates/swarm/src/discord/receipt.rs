@@ -149,6 +149,9 @@ impl Inbox {
         }
         let inbox = Self { file, data };
         inbox.verify_team_gap_notices()?;
+        if inbox.manager()["input"].get("publication_nonces").is_some() {
+            inbox.turn_publications(inbox.manager())?;
+        }
         Ok(inbox)
     }
 
@@ -1180,6 +1183,30 @@ pub(super) fn publication_nonce(proof: &Value) -> io::Result<String> {
         .to_owned())
 }
 
+pub(super) fn publication_args(args: &Value) -> bool {
+    args.as_object().is_some_and(|object| {
+        object.keys().all(|key| {
+            matches!(
+                key.as_str(),
+                "output_id" | "sequence" | "text" | "final" | "file_ids"
+            )
+        })
+    }) && args["output_id"]
+        .as_str()
+        .is_some_and(|id| !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control))
+        && args["sequence"].as_u64().is_some_and(|n| n > 0)
+        && args["final"].is_boolean()
+        && args["text"].as_str().is_some_and(|body| {
+            (!body.trim().is_empty() || args.get("file_ids").is_some())
+                && body.encode_utf16().count() <= 1900
+        })
+        && args.get("file_ids").is_none_or(|files| {
+            files
+                .as_array()
+                .is_some_and(|ids| !ids.is_empty() && ids.len() <= 10)
+        })
+}
+
 pub(super) fn verify_publication(nonce: &str, entry: &Value) -> io::Result<()> {
     let proof = &entry["proof"];
     let args = &proof["arguments"];
@@ -1206,8 +1233,7 @@ pub(super) fn verify_publication(nonce: &str, entry: &Value) -> io::Result<()> {
         || publication_nonce(proof)? != nonce
         || entry["body"] != proof["body"]
         || !valid_files
-        || args["final"] != true
-        || args["sequence"] != 1
+        || !publication_args(args)
         || args["output_id"] != proof["output_id"]
         || args["text"] != proof["body"]
         || proof["arguments_hash"] != hash(&canonical)?
@@ -1418,6 +1444,74 @@ impl Inbox {
         self.data["outbox"][nonce].clone()
     }
 
+    pub(super) fn turn_publications(&self, manager: &Value) -> io::Result<Vec<String>> {
+        let input = &manager["input"];
+        let invalid_order = || invalid("Discord publication order does not match its bound turn");
+        let final_nonce = match input.get("final_nonce") {
+            Some(Value::String(nonce)) => Some(nonce.as_str()),
+            Some(_) => return Err(invalid_order()),
+            None => None,
+        };
+        let order: Vec<String> = match input.get("publication_nonces") {
+            Some(Value::Array(list)) if !list.is_empty() => list
+                .iter()
+                .map(|nonce| nonce.as_str().map(str::to_owned).ok_or_else(invalid_order))
+                .collect::<io::Result<_>>()?,
+            Some(_) => return Err(invalid_order()),
+            None => final_nonce.into_iter().map(str::to_owned).collect(),
+        };
+        let exact = |proof: &Value| {
+            input["turn_id"].is_string()
+                && input["composer"]["manager_admission"]["binding"] == manager["binding"]
+                && proof["binding"] == manager["binding"]
+                && proof["turn_id"] == input["turn_id"]
+                && proof["source_id"] == input["source_id"]
+                && proof["call_receipt"]["native_input_id"]
+                    == input["composer"]["manager_admission"]["nonce"]
+        };
+        let worker = super::mail_wake::link(&input["worker_wake"]);
+        let mut prior_sequence = 0;
+        let mut seen_final = None;
+        let mut awaiting = false;
+        for nonce in &order {
+            let entry = &self.data["outbox"][nonce];
+            let proof = &entry["proof"];
+            let args = &proof["arguments"];
+            let sequence = args["sequence"].as_u64().ok_or_else(invalid_order)?;
+            let state = entry["state"].as_str().ok_or_else(invalid_order)?;
+            let observed = ["gateway_seen", "history_seen", "rest_acknowledged"]
+                .iter()
+                .any(|kind| entry[*kind] == true);
+            if !exact(proof)
+                || proof["voice_worker"] != worker
+                || proof["audience"] != self.data["team_discussion"]
+                || !matches!(state, "prepared" | "sending" | "uncertain" | "sent")
+                || awaiting && state != "prepared"
+                || (state == "sent")
+                    != (observed && entry["message_id"].as_str().is_some_and(snowflake))
+                || sequence <= prior_sequence
+                || seen_final.is_some()
+            {
+                return Err(invalid_order());
+            }
+            prior_sequence = sequence;
+            awaiting |= state != "sent";
+            if args["final"] == true {
+                seen_final = Some(nonce.as_str());
+            }
+        }
+        if seen_final != final_nonce
+            || self.data["outbox"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .any(|(nonce, entry)| exact(&entry["proof"]) && !order.contains(nonce))
+        {
+            return Err(invalid_order());
+        }
+        Ok(order)
+    }
+
     pub(super) fn prepare_publication(
         &mut self,
         nonce: &str,
@@ -1428,28 +1522,42 @@ impl Inbox {
             "proof":proof, "proof_digest":hash(&proof)?, "body":proof["body"], "state":"prepared"
         });
         verify_publication(nonce, &entry_new)?;
+        if self.data["outbox"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .any(|(id, prior)| {
+                id != nonce
+                    && prior["proof"]["native_call_id"] == proof["native_call_id"]
+                    && prior["proof"]["binding"]["native_session_id"]
+                        == proof["binding"]["native_session_id"]
+            })
+        {
+            return Err(invalid(
+                "native manager publication call already belongs to another effect",
+            ));
+        }
         let entry = &self.data["outbox"][nonce];
         if !entry.is_null() {
-            if entry["proof"] == proof {
+            let original = &entry["proof"];
+            if [
+                "binding",
+                "turn_id",
+                "source_id",
+                "arguments",
+                "voice_worker",
+                "audience",
+                "file_source",
+            ]
+            .iter()
+            .all(|key| original[*key] == proof[*key])
+                && original["call_receipt"]["native_input_id"]
+                    == proof["call_receipt"]["native_input_id"]
+            {
                 return Ok(());
             }
             return Err(invalid(
                 "publication key conflicts with the original native publication",
-            ));
-        }
-        if let Some(call) = proof["native_call_id"].as_str()
-            && self.data["outbox"]
-                .as_object()
-                .unwrap()
-                .values()
-                .any(|prior| {
-                    prior["proof"]["native_call_id"] == call
-                        && prior["proof"]["binding"]["native_session_id"]
-                            == proof["binding"]["native_session_id"]
-                })
-        {
-            return Err(invalid(
-                "native manager publication call already belongs to another effect",
             ));
         }
         if self.data["outbox"].as_object().unwrap().len() >= MAX_RECORDS {

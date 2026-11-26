@@ -10,6 +10,14 @@ For an ordinary Rust-owned guild thread, reconnect repair records one restatemen
 
 The two-thread authenticated loopback witness staged a notice before recording repaired input, then withdrew read authority during both a 403 and a 404 lookup. Neither control advanced the cursor, admitted the recovered message or made a POST. Restoring rights after reopen recovered the source and used the same notice nonce. Its lost acknowledgment was never replayed. The matching Go v0.29.25 cases passed in the reference checkout. The Rust fault log SHA-256 is `4868b8a9b680ac5c19082b12d3e87579d3370a63d187e0082469cd231bc873ef`. [Go gap notice reference](https://github.com/Nathandela/swarm/blob/44d796734fc60f6f9b9d6705dca44736f0c5741b/internal/discord/teammate_noise_test.go)
 
+## Manager replies in order
+
+For a Rust-owned discussion, `publish` accepts a positive sequence and a distinct output ID for each authenticated native call. A turn can acknowledge work with `final=false` and finish with `final=true`. New outputs must increase the sequence, and a final reply closes it to new outputs. An exact retry returns the saved receipt. A turn with one final reply uses its existing stored shape and nonce. A multi-output turn records its ordered nonces and approved payloads in the connector ledger.
+
+Each send rechecks the exact native input, audience and source. A definitive rate limit can retry the same nonce. An earlier uncertain attempt holds later queued replies until exact delivery evidence arrives. A restart retains both the uncertain attempt and the queue position. Native completion can retire a partial-only turn after all its queued replies are confirmed. A call's final written reply remains the voice readout source.
+
+Run `cargo test --locked -p swarm --bin swarm ordered_publications` for the synthetic authenticated Unix bridge and receipt tests. The Go v0.29.25 reference accepts strictly increasing per-turn sequences and exact retries. Go's connector can walk past some unresolved outbox entries. Rust holds the queue at the first uncertain attempt. Automatic reply notices and worker-missing decisions remain separate. Older Rust builds can reopen copies of their original sequence-one final-only ledger. [Go Voice publication rules](https://github.com/Nathandela/swarm/blob/44d796734fc60f6f9b9d6705dca44736f0c5741b/internal/voice/store.go)
+
 ```sh
 cargo test --locked -p swarm --bin swarm discord::unit
 SWARM_NATIVE_UNIT_PARSER=1 cargo test --locked -p swarm --test discord service_activation_restores
