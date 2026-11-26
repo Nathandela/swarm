@@ -126,6 +126,14 @@ The test pauses only the TUI whose PID and birth match the private
 worker record. It checks the actual OpenCode database and fixture model
 requests independently of the Swarm receipt before accepting replay.
 
+Use `--shim-pause old`, `--shim-pause retry` and `--shim-pause exhaust`
+with the same staged scripts to fault the read-only shim handshake. This
+pauses the exact shim named by the private worker record. The retry case
+must complete the initial submission. The old and exhausted cases must
+observe zero native input and model requests before a separate explicit
+retry of the same operation. All three end with one native input and a
+durable terminal receipt.
+
 ### Lost terminal event
 
 The failed macOS native 24-hour run at `7202a48dd1eca0bb1c9f3ff422291ca7f871e74a` finished 255 marked turns. For turn 256, the Rust prompt receipt stayed `native_accepted` after both native input requests resolved. The retained OpenCode SQLite database and WAL show the exact admitted user message and its terminal assistant reply. Native completion did not reach the durable Swarm receipt. The earlier worker relied on an individual SSE update or an explicit operation status query to do that reconciliation.
