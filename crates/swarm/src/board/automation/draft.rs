@@ -241,15 +241,14 @@ impl Draft {
         }
         let spec = Box::new(spec);
         let Some(job) = &self.target else {
-            if enable.is_some() {
-                return Err("Save the draft first, then use Enable…".into());
-            }
             if self.operation.is_none() {
                 self.operation = Some(automation_invocation().map_err(|error| error.to_string())?);
             }
-            return Ok(Change::Create {
-                operation: self.operation.clone().unwrap(),
-                spec,
+            let operation = self.operation.clone().expect("saved draft operation");
+            return Ok(if enable.is_some() {
+                Change::CreateEnabled { operation, spec }
+            } else {
+                Change::Create { operation, spec }
             });
         };
         let id = job.id.clone();
@@ -265,7 +264,13 @@ impl Draft {
                 spec,
                 install_timer,
             },
-            ("active", Some(_)) => return Err("Save paused to update this automation.".into()),
+            ("active", Some(_)) => Change::SaveActive {
+                id,
+                revision,
+                generation,
+                updated_at,
+                spec,
+            },
             ("active", None) => Change::SaveDraft {
                 id,
                 revision,

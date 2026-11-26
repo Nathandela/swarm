@@ -494,7 +494,7 @@ fn board(path: &Path) -> io::Result<()> {
                             needs_paint = true;
                             continue;
                         }
-                        if matches!(change, CatalogChange::Enable { .. })
+                        if change.checks_activation()
                             && let Some(client) = &connection
                         {
                             view.enable(path, client.endpoint(), change);

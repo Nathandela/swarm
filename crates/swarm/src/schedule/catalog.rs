@@ -727,6 +727,10 @@ pub(crate) enum Change {
         operation: String,
         spec: Box<Spec>,
     },
+    CreateEnabled {
+        operation: String,
+        spec: Box<Spec>,
+    },
     Edit {
         id: String,
         revision: String,
@@ -735,6 +739,13 @@ pub(crate) enum Change {
         paused: Option<(u64, jiff::Timestamp)>,
     },
     SaveDraft {
+        id: String,
+        revision: String,
+        generation: u64,
+        updated_at: jiff::Timestamp,
+        spec: Box<Spec>,
+    },
+    SaveActive {
         id: String,
         revision: String,
         generation: u64,
@@ -760,6 +771,13 @@ pub(crate) enum Change {
 }
 
 impl Change {
+    pub(crate) fn checks_activation(&self) -> bool {
+        matches!(
+            self,
+            Self::Enable { .. } | Self::CreateEnabled { .. } | Self::SaveActive { .. }
+        )
+    }
+
     pub(crate) fn remote(self, client: &mut Client) -> io::Result<Option<Records>> {
         if !client.supports(CONTROL) {
             return Err(io::Error::other(
@@ -767,7 +785,7 @@ impl Change {
             ));
         }
         let request = json!({"op":CHANGE,"change":self});
-        let reply = if matches!(self, Self::Enable { .. }) {
+        let reply = if self.checks_activation() {
             client.exchange(request, CHANGE, std::time::Duration::from_secs(60))?
         } else {
             client.request_body(request, CHANGE)?
@@ -789,10 +807,13 @@ impl Change {
         }
         let job: Job = serde_json::from_value(reply["job"].clone())?;
         let target = match &self {
-            Self::Create { operation, .. } => operation == &job.id,
+            Self::Create { operation, .. } => operation == &job.id && job.state == "paused",
+            Self::CreateEnabled { operation, .. } => operation == &job.id && job.state == "active",
             Self::Edit { id, .. } => id == &job.id,
             Self::SaveDraft { id, .. } => id == &job.id && job.state == "paused",
-            Self::Enable { id, .. } => id == &job.id && job.state == "active",
+            Self::Enable { id, .. } | Self::SaveActive { id, .. } => {
+                id == &job.id && job.state == "active"
+            }
             Self::State { id, value, .. } => id == &job.id && job.state == value.token(),
         };
         if !target {
@@ -811,21 +832,56 @@ pub(crate) fn change(
     conflict: impl Fn(&Path) -> Option<String>,
 ) -> Result<Value> {
     let change: Change = serde_json::from_value(request["change"].clone())?;
-    if matches!(&change, Change::Create { operation, .. } if !super::valid_id(operation)) {
+    if matches!(&change, Change::Create { operation, .. } | Change::CreateEnabled { operation, .. } if !super::valid_id(operation))
+    {
         return Err("invalid automation creation operation ID".into());
     }
     if matches!(&change,
-        Change::Edit { id, revision, .. } | Change::SaveDraft { id, revision, .. } | Change::Enable { id, revision, .. }
+        Change::Edit { id, revision, .. } | Change::SaveDraft { id, revision, .. } | Change::SaveActive { id, revision, .. } | Change::Enable { id, revision, .. }
             | Change::State { id, revision, .. }
             if !super::valid_id(id) || !super::valid_id(revision))
     {
         return Err("invalid automation job or revision ID".into());
     }
-    let store = Store::open(root, Path::new("/etc/localtime"))?;
+    let host_zone = Path::new("/etc/localtime");
+    if let Change::CreateEnabled {
+        operation,
+        mut spec,
+    } = change
+    {
+        spec.prepare(host_zone)?;
+        let store = Store::existing(root, host_zone)?;
+        if let Some(store) = &store
+            && let Some(saved) = store.creation_receipt(&operation, &spec, "active")?
+        {
+            return Ok(json!({"op":CHANGE,"job":saved}));
+        }
+        Store::check_future_at(host_zone, &spec, jiff::Timestamp::now())?;
+        let active = store
+            .as_ref()
+            .map(Store::active)
+            .transpose()?
+            .unwrap_or_default();
+        qualify_enabled_save(root, &operation, &spec, &active, readiness, conflict)?;
+        let store = match store {
+            Some(store) => store,
+            None => Store::open(root, host_zone)?,
+        };
+        let job = store.create_bound(*spec, jiff::Timestamp::now(), false, Some(&operation))?;
+        return Ok(json!({"op":CHANGE,"job":job}));
+    }
+    let store = if matches!(change, Change::SaveActive { .. }) {
+        Store::existing(root, host_zone)?.ok_or("automation catalog is unavailable")?
+    } else {
+        Store::open(root, host_zone)?
+    };
     let now = jiff::Timestamp::now();
     let job = match change {
         Change::Create { operation, spec } => {
             store.create_bound(*spec, now, true, Some(&operation))?
+        }
+        Change::CreateEnabled { .. } => {
+            unreachable!("enabled create handled before opening catalog")
         }
         Change::Edit {
             id,
@@ -852,6 +908,34 @@ pub(crate) fn change(
             Some(("active", generation, updated_at, "paused")),
             now,
         )?,
+        Change::SaveActive {
+            id,
+            revision,
+            generation,
+            updated_at,
+            mut spec,
+        } => {
+            let target = store.job(&id)?;
+            if target.revision_id != revision
+                || target.state != "active"
+                || target.lifecycle_generation != generation
+                || target.updated_at != updated_at
+            {
+                return Err("automation revision or state changed".into());
+            }
+            spec.prepare(Path::new("/etc/localtime"))?;
+            if spec.calendar != target.spec.calendar {
+                store.check_future(&spec, now)?;
+            }
+            qualify_enabled_save(root, &id, &spec, &store.active()?, readiness, conflict)?;
+            store.edit_bound(
+                &id,
+                Some(&revision),
+                *spec,
+                Some(("active", generation, updated_at, "active")),
+                jiff::Timestamp::now(),
+            )?
+        }
         Change::Enable {
             id,
             revision,
@@ -912,6 +996,23 @@ pub(crate) fn change(
         )?,
     };
     Ok(json!({"op":CHANGE,"job":job}))
+}
+
+fn qualify_enabled_save(
+    root: &Path,
+    id: &str,
+    spec: &Spec,
+    active: &[super::Occurrence],
+    readiness: impl FnOnce(&Spec) -> Result<()>,
+    conflict: impl Fn(&Path) -> Option<String>,
+) -> Result<()> {
+    readiness(spec)?;
+    super::workspace::preview(root, id, spec, active, conflict)?;
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    if super::timer::board_status(&cancel)? != "installed, active" {
+        return Err("Enable the timer from Automations before saving enabled.".into());
+    }
+    Ok(())
 }
 
 pub(crate) const MANUAL_CAP: &str = "schedule-board-manual-v1";

@@ -392,7 +392,7 @@ impl Store {
         };
         self.write(|tx| {
             if let Some(existing) = get::<Job>(tx, JOBS, &job.id)? {
-                if operation.is_some() && job.spec == existing.spec {
+                if operation.is_some() && job.spec == existing.spec && job.state == existing.state {
                     return Ok(existing);
                 }
                 return Err(
@@ -401,6 +401,21 @@ impl Store {
             }
             self.set_revision(tx, &job, now)?;
             Ok(job)
+        })
+    }
+
+    pub(super) fn creation_receipt(
+        &self,
+        operation: &str,
+        spec: &Spec,
+        state: &str,
+    ) -> Result<Option<Job>> {
+        self.view(|tx| match get::<Job>(tx, JOBS, operation)? {
+            Some(job) if &job.spec == spec && job.state == state => Ok(Some(job)),
+            Some(_) => {
+                Err("automation creation operation already belongs to a different job".into())
+            }
+            None => Ok(None),
         })
     }
 
@@ -438,8 +453,8 @@ impl Store {
                 return Err(CONFLICT.into());
             }
             let next_state = transition.map(|(_, _, _, state)| state);
-            if next_state == Some("active")
-                || transition.is_none() && spec.calendar != job.spec.calendar
+            if next_state == Some("active") && job.state != "active"
+                || next_state != Some("paused") && spec.calendar != job.spec.calendar
             {
                 self.check_future(&spec, now)?;
             }
@@ -512,7 +527,11 @@ impl Store {
     }
 
     pub(super) fn check_future(&self, spec: &Spec, now: Timestamp) -> Result<()> {
-        if Rule::compile(&spec.calendar, &self.host)?
+        Self::check_future_at(&self.host, spec, now)
+    }
+
+    pub(super) fn check_future_at(host: &Path, spec: &Spec, now: Timestamp) -> Result<()> {
+        if Rule::compile(&spec.calendar, host)?
             .find(before(now)?, false)
             .is_none()
         {

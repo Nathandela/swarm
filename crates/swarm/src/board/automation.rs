@@ -1515,4 +1515,20 @@ mod pointer_tests {
         view.update(key, (40, 8));
         assert_eq!(view.draft.unwrap().focus, 1);
     }
+
+    #[test]
+    fn a_draft_keeps_the_catalog_owner_until_reopened() {
+        let mut view = Automation {
+            records: Some(Records::List(vec![])),
+            ..Automation::default()
+        };
+        view.catalog_owner("original");
+        view.update(Key::Text('n'), (80, 24));
+        assert!(view.accepts_change_owner("original"));
+        view.catalog_owner("replacement");
+        assert!(!view.accepts_change_owner("replacement"));
+        view.back(true);
+        view.update(Key::Text('n'), (80, 24));
+        assert!(view.accepts_change_owner("replacement"));
+    }
 }
