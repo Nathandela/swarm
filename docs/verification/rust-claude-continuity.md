@@ -16,7 +16,7 @@ python3 scripts/verification/rust_claude_resume.py --candidate "$PWD/target/debu
 python3 scripts/verification/rust_claude_resume.py --candidate "$PWD/target/debug/swarm" --provider /path/to/claude --board --worktree
 ```
 
-The [Linux fixture launcher](../../scripts/verification/provider_native_linux.sh) accepts `rust_claude_resume.py`. The installed executable is exposed read-only, and the fixture uses a scratch-only profile and loopback inference. These runs did not reuse an installed login or test an externally managed profile. External Claude acquisition passed on Linux. Cross-provider handoff and macOS external acquisition have separate gates. [External Claude evidence](rust-claude-reattach.md) · [Codex resume evidence](rust-codex-resume.md)
+The [Linux fixture launcher](../../scripts/verification/provider_native_linux.sh) accepts `rust_claude_resume.py`. The installed executable is exposed read-only, and the fixture uses a scratch-only profile and loopback inference. These runs did not reuse an installed login or test an externally managed profile. External Claude acquisition passed on Linux. The installed Claude-to-Codex route has [separate evidence](rust-cross-provider-handoff.md). macOS external acquisition has a separate gate. [External Claude evidence](rust-claude-reattach.md) · [Codex resume evidence](rust-codex-resume.md)
 
 
 ## Explicit relocation after the original checkout disappears
