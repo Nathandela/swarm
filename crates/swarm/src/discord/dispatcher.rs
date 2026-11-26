@@ -346,6 +346,7 @@ impl Dispatcher {
         if cfg.0["calls"].is_object()
             || status["ready_for_input"] != true
             || status["turn"]["state"] != "completed"
+            || status["binding"]["provider"] == "claude" && status["retirement_ready"] != true
         {
             self.idle_since.set(None);
             return Ok(());

@@ -110,8 +110,11 @@ impl Session {
                 let ready = evidence["owned_ingress_ready"] == true
                     && evidence["thread_state"] == "idle"
                     && matches!(field(&status, "state"), "idle" | "completed");
+                let retirement_ready = self.agent != "claude"
+                    || field(&status, "state") == "completed"
+                        && self.claude_park_resume_record(binding).is_ok();
                 json!({"op":"manager_runtime","session_id":session,"manager_runtime":{
-                    "binding":binding,"ready_for_input":ready,"turn":status,
+                    "binding":binding,"ready_for_input":ready,"turn":status,"retirement_ready":retirement_ready,
                     "bridge_socket":self.manager["launch"]["manager"]["bridge_socket"],
                     "auth_file":self.manager["launch"]["manager"]["auth_file"]
                 }})

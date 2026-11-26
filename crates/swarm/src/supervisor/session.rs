@@ -122,11 +122,6 @@ impl Prepared {
         });
         let predecessor = &scope["resume_request"]["binding"];
         if !predecessor.is_null() {
-            if claude {
-                return Err(io::Error::other(
-                    "Claude manager resume requires native transcript custody proof",
-                ));
-            }
             let native = field(predecessor, "native_session_id");
             if predecessor["login_epoch"] != scope["account"]
                 || !codex_receipt::canonical_thread(native)
@@ -135,9 +130,24 @@ impl Prepared {
                     "manager successor cannot resume a different native account or thread",
                 ));
             }
-            self.provider
-                .argv
-                .splice(0..0, ["resume".to_owned(), native.to_owned()]);
+            if claude {
+                let retained = scope["claude_resume"].clone();
+                if retained["conversation_id"] != native
+                    || retained["resumed_from"] != predecessor["session"]
+                {
+                    return Err(io::Error::other(
+                        "Claude successor lacks its exact retained transcript",
+                    ));
+                }
+                self.claude_resume = retained;
+                self.provider
+                    .argv
+                    .extend(["--resume".to_owned(), native.to_owned()]);
+            } else {
+                self.provider
+                    .argv
+                    .splice(0..0, ["resume".to_owned(), native.to_owned()]);
+            }
         }
         scope["account_home"] = json!(home);
         self.manager = scope;

@@ -28,7 +28,11 @@ class Model(http.server.BaseHTTPRequestHandler):
         tools = [tool.get("name") for tool in request.get("tools", [])]
         content = json.dumps(request.get("messages", []))
         main = "[SWARM_MANAGER_INPUT_V1:" in content and "mcp__swarm_voice__publish" in tools
-        publish = main and "toolu_fixture_swarm_publish" not in content
+        wake = main and "Fixture worker retained across parking." in content
+        read_note = wake and "toolu_fixture_swarm_read_note" not in content
+        call_id = "toolu_fixture_parked_publish" if wake else "toolu_fixture_swarm_publish"
+        publish = main and not read_note and call_id not in content
+        tool = publish or read_note
         usage = dict(input_tokens=1, output_tokens=1)
         model = request.get("model")
         message = dict(id="msg_fixture", type="message", role="assistant", model=model,
@@ -45,11 +49,13 @@ class Model(http.server.BaseHTTPRequestHandler):
                 self.send_error(401)
                 return
             self.server.main_requests.append((publish, content, tools))
-        if publish:
-            block = dict(type="tool_use", name="mcp__swarm_voice__publish",
-                         id="toolu_fixture_swarm_publish", input={})
-            args = dict(output_id="native-claude", sequence=1, final=True,
-                        text="Bounded native Claude reply.")
+        if tool:
+            name = "swarm_read_note" if read_note else "publish"
+            block = dict(type="tool_use", name=f"mcp__swarm_voice__{name}",
+                         id="toolu_fixture_swarm_read_note" if read_note else call_id, input={})
+            args = {} if read_note else dict(
+                output_id="native-parked" if wake else "native-claude", sequence=1, final=True,
+                text="Restored worker note reached Claude." if wake else "Bounded native Claude reply.")
             delta = dict(type="input_json_delta", partial_json=json.dumps(args))
         else:
             block = dict(type="text", text="")
@@ -59,10 +65,14 @@ class Model(http.server.BaseHTTPRequestHandler):
             ("content_block_start", dict(index=0, content_block=block)),
             ("content_block_delta", dict(index=0, delta=delta)),
             ("content_block_stop", dict(index=0)),
-            ("message_delta", dict(delta=dict(stop_reason="tool_use" if publish else "end_turn",
+            ("message_delta", dict(delta=dict(stop_reason="tool_use" if tool else "end_turn",
                                               stop_sequence=None), usage=usage)),
             ("message_stop", {}),
         ]
+        if self.server.park and main and not wake and not tool:
+            end = time.monotonic() + 12
+            while not self.server.release.is_file() and time.monotonic() < end:
+                time.sleep(0.04)
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
@@ -72,6 +82,7 @@ class Model(http.server.BaseHTTPRequestHandler):
 
 
 def verify(swarm, provider, test, root, server):
+    server.release = root / ".fixture-release-turn"
     check_guards(root, [server.server_port])
     home, project, tools, state = [root / name for name in ("h", "work", "bin", "s")]
     place = state / "discord"
@@ -90,7 +101,10 @@ def verify(swarm, provider, test, root, server):
                TERM="xterm-256color", LANG="en_US.UTF-8", DISABLE_AUTOUPDATER="1",
                CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", CLAUDE_CODE_MAX_RETRIES="0",
                SWARM_DAEMON_STATE=str(state), SWARM_DAEMON_SOCK=str(endpoint),
-               SWARM_DAEMON_LOCK=str(root / "lock"), SWARM_CLAUDE_MANAGER_FIXTURE_ROOT=str(root))
+               SWARM_DAEMON_LOCK=str(root / "lock"), SWARM_CLAUDE_MANAGER_FIXTURE_ROOT=str(root),
+               SWARM_CLAUDE_MANAGER_FIXTURE_BINARY=str(swarm))
+    if server.park:
+        env["SWARM_CLAUDE_MANAGER_FIXTURE_PARK"] = "1"
     version = subprocess.check_output(guarded([str(wrapper), "--version"], root, [server.server_port]),
                                       env=env, text=True).split()[0]
     save(home / ".claude.json", dict(hasCompletedOnboarding=True, lastOnboardingVersion=version,
@@ -117,11 +131,12 @@ def verify(swarm, provider, test, root, server):
                 assert daemon.poll() is None and time.monotonic() < deadline, "isolated owner socket absent"
                 time.sleep(0.05)
             subprocess.run(run([test, "discord::manager::tests::installed_claude_manager_producer",
-                                "--ignored", "--nocapture"]), cwd=project, env=env, check=True, timeout=48)
-            assert sum(1 for publish, _, _ in server.main_requests if publish) == 1
+                                "--ignored", "--nocapture"]), cwd=project, env=env, check=True, timeout=75 if server.park else 48)
+            assert sum(1 for publish, _, _ in server.main_requests if publish) == (2 if server.park else 1)
             assert all("Bash" not in tools for _, _, tools in server.main_requests)
             print(json.dumps(dict(version=version, private_loopback=True, original_envelope=True,
-                                  exact_main_mcp_tool=True, observed_reply=True, disabled_shell_tools=True)))
+                                  exact_main_mcp_tool=True, observed_reply=True, disabled_shell_tools=True,
+                                  parked_worker_return=server.park)))
         except Exception:
             log.flush()
             log.seek(0)
@@ -162,10 +177,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for arg in ("swarm", "claude", "test"):
         parser.add_argument(arg, type=Path)
+    parser.add_argument("--park", action="store_true")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="clmgr-", dir="/tmp") as name, \
             http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model) as server:
         server.main_requests = []
+        server.park = args.park
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
             verify(args.swarm.resolve(), args.claude.resolve(), args.test.resolve(), Path(name).resolve(), server)

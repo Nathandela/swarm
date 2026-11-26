@@ -237,10 +237,12 @@ fn serve(dir: &Path) -> io::Result<()> {
         environment.push(("SWARM_DAEMON_SOCK".into(), owner_socket.into()));
         environment.push(("SWARM_SESSION_ID".into(), field(&config, "id").into()));
         if !config["manager"].is_null() {
-            environment.push((
-                "SWARM_DISPATCHER_SPAWN_PROOF".into(),
-                crate::supervisor::mail::proof(token, "spawn"),
-            ));
+            if provider["name"] != "claude" {
+                environment.push((
+                    "SWARM_DISPATCHER_SPAWN_PROOF".into(),
+                    crate::supervisor::mail::proof(token, "spawn"),
+                ));
+            }
         } else {
             environment.push((crate::teammate::SOCKET_ENV.into(), owner_socket.into()));
             environment.push((
@@ -1130,13 +1132,31 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         "manager park lacks persisted connector custody",
                     ));
                 }
-                let observed = runtime::read_json(&state.dir.join("observation.json"))?;
-                let native = providers::codex_proof::Ledger::snapshot(&state.dir, binding)?;
+                let (native, quiescent) = if state.provider == "claude" {
+                    let broker = state
+                        .claude_broker
+                        .as_ref()
+                        .ok_or_else(|| io::Error::other("Claude manager broker is unavailable"))?;
+                    let native = broker.manager_snapshot()?;
+                    let quiescent = native["binding"] == *binding
+                        && native["thread_state"] == "idle"
+                        && native["externally_steered"] != true
+                        && providers::claude::manager_empty_composer(
+                            state.screen.lock().unwrap().parser.screen(),
+                        );
+                    (native, quiescent)
+                } else {
+                    let observed = runtime::read_json(&state.dir.join("observation.json"))?;
+                    let native = providers::codex_proof::Ledger::snapshot(&state.dir, binding)?;
+                    let quiescent =
+                        observation_is_quiescent(&observed, &state.token, binding, &native);
+                    (native, quiescent)
+                };
                 let turn = providers::codex_proof::input_status(
                     &native,
                     field(&request["expected_turn"], "native_input_id"),
                 );
-                if observation_is_quiescent(&observed, &state.token, binding, &native)
+                if quiescent
                     && native["current"] == turn["native_turn_id"]
                     && turn == request["expected_turn"]
                 {

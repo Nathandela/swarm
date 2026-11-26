@@ -452,7 +452,20 @@ impl State {
                     "manager cannot inherit an ordinary handoff scope",
                 ));
             }
-            prepared.bind_manager(scope.clone())?;
+            let mut binding = scope.clone();
+            let previous = &scope["resume_request"];
+            if scope["launch"]["agent"] == "claude" && !previous.is_null() {
+                let predecessor =
+                    self.session(&json!({"session_id":previous["binding"]["session"]}))?;
+                if !predecessor.manager_parked(previous)? {
+                    return Err(io::Error::other(
+                        "Claude manager predecessor is not proved parked",
+                    ));
+                }
+                binding["claude_resume"] =
+                    predecessor.claude_park_resume_record(&previous["binding"])?;
+            }
+            prepared.bind_manager(binding)?;
         }
         if self.stopped_go.is_some() {
             prepared.bind_go_rollback(&bound)?;

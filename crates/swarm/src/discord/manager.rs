@@ -115,9 +115,6 @@ impl Manager {
     }
 
     pub(super) fn can_retire(&self) -> bool {
-        if self.cfg.text("manager_cli") != "codex" {
-            return false;
-        }
         let caps = ["manager-retire", "manager-retire-resume-v1"];
         Client::dial(Path::new(self.cfg.text("daemon_socket")), &caps)
             .is_ok_and(|client| self.cfg.check_supervisor(&client, &caps).is_ok())
@@ -564,6 +561,121 @@ mod tests {
             entry["proof"]["native_call_id"],
             "toolu_fixture_swarm_publish"
         );
+        drop(posts);
+        if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_PARK").is_some() {
+            let binary = std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_BINARY").unwrap();
+            let local = session.rsplit('/').next().unwrap();
+            let state = root.join("s/rust-v1");
+            let manager_meta = runtime::read_json(&state.join(local).join("session.json")).unwrap();
+            let task = root.join("work/fixture-delegation.md");
+            fs::write(
+                &task,
+                "Perform the bounded fixture task and await owner observation.",
+            )
+            .unwrap();
+            // The synthetic owner establishes a prior association without granting
+            // the restricted Claude manager an ambient VM shell credential.
+            let launch = Command::new(&binary)
+                .env("SWARM_SESSION_ID", local)
+                .env(
+                    "SWARM_DISPATCHER_SPAWN_PROOF",
+                    crate::supervisor::mail::proof(field(&manager_meta, "token"), "spawn"),
+                )
+                .arg("spawn")
+                .args(["--cli", "claude", "--worktree=false", "--delegate"])
+                .arg(&task)
+                .args(["--dir", cfg.text("work_dir")])
+                .output()
+                .unwrap();
+            assert!(
+                launch.status.success(),
+                "{}",
+                String::from_utf8_lossy(&launch.stderr)
+            );
+            let worker = String::from_utf8(launch.stdout).unwrap().trim().to_owned();
+            let worker_local = worker.rsplit('/').next().unwrap();
+            fs::write(root.join(".fixture-release-turn"), "").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(18);
+            loop {
+                dispatcher.fixture_idle_elapsed();
+                dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+                let retire = &inbox.manager()["retirement"];
+                if !retire.is_null() && manager.retirement(retire, true).unwrap() == "retired" {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "Claude did not park: {}, status {:?}",
+                    inbox.manager(),
+                    manager.runtime(session, instance, &inbox.manager()["launch"])
+                );
+                std::thread::sleep(Duration::from_millis(40));
+            }
+            assert!(
+                manager
+                    .dial()
+                    .unwrap()
+                    .sessions()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["id"] == worker && row["status"]["Process"] == "running")
+            );
+            drop(dispatcher);
+            let worker_meta =
+                runtime::read_json(&state.join(worker_local).join("session.json")).unwrap();
+            let note = Command::new(&binary)
+                .env(crate::teammate::SOCKET_ENV, cfg.text("daemon_socket"))
+                .env(
+                    crate::teammate::PROOF_ENV,
+                    crate::supervisor::mail::proof(field(&worker_meta, "token"), "worker"),
+                )
+                .env("SWARM_SESSION_ID", worker_local)
+                .args([
+                    "teammate",
+                    "message",
+                    "--kind",
+                    "complete",
+                    "--text",
+                    "Fixture worker retained across parking.",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                note.status.success(),
+                "{}",
+                String::from_utf8_lossy(&note.stderr)
+            );
+            let note: Value = serde_json::from_slice(&note.stdout).unwrap();
+            assert_eq!(note["state"], "queued");
+            let dispatcher = super::super::dispatcher::Dispatcher::open(&cfg, &place)
+                .unwrap()
+                .unwrap();
+            let mut inbox = super::super::receipt::Inbox::open(&place, &cfg).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while api.posts.borrow().len() < 2 {
+                dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+                assert!(
+                    Instant::now() < deadline,
+                    "Claude did not resume and publish its original worker's note: {}",
+                    inbox.manager()
+                );
+                std::thread::sleep(Duration::from_millis(45));
+            }
+            let posts = api.posts.borrow();
+            assert_eq!(posts.len(), 2);
+            assert_eq!(posts[1].1, "Restored worker note reached Claude.");
+            let reply = inbox.publication(&posts[1].0);
+            assert_eq!(reply["rest_acknowledged"], true);
+            assert_eq!(
+                reply["proof"]["binding"]["native_session_id"],
+                runtime["binding"]["native_session_id"]
+            );
+            assert_ne!(
+                reply["proof"]["binding"]["session_instance"],
+                runtime["binding"]["session_instance"]
+            );
+            assert_eq!(inbox.manager()["generation"], 2);
+        }
     }
 
     #[test]
