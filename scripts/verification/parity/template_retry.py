@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Use one private catalog across an unacknowledged Rust create and Go deletion."""
+"""Exercise signed Go and Rust template replay, streaming, and dashboard saves in one private catalog."""
 import argparse
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,18 +15,55 @@ import tempfile
 from test_board import owner_request, p
 
 
+def send(conn, value):
+    body = json.dumps(value).encode()
+    conn.sendall(struct.pack(">IB", len(body) + 1, 1) + body)
+
+
+def read(stream):
+    size, = struct.unpack(">I", stream.read(4))
+    assert 1 < size <= 1 << 20
+    payload = stream.read(size)
+    assert len(payload) == size and payload[0] == 1
+    return json.loads(payload[1:])
+
+
+def upload_template(path, target, name, prompt, *, complete=True, before_complete=None, discard=False, busy=False):
+    with socket.socket(socket.AF_UNIX) as conn, conn.makefile("rb") as stream:
+        conn.settimeout(8)
+        conn.connect(path)
+        capability = "schedule-template-upload-v1"
+        send(conn, {"op":"hello", "protocol_version":1, "capabilities":[capability]})
+        hello = read(stream)
+        assert capability in hello["capabilities"]
+        endpoint = hello["endpoint_id"]
+        if busy:
+            error = read(stream)
+            assert error["endpoint_id"] == endpoint and "another oversized" in error["error"], error
+            return error
+        text = name.encode() + prompt.encode()
+        send(conn, dict(op="schedule_template_upload", endpoint_id=endpoint, name_bytes=len(name.encode()),
+                        encoded_bytes=len(text), **target))
+        assert read(stream) == {"op":"schedule_template_upload", "endpoint_id":endpoint, "ready":True}
+        sequence = 0
+        for start in range(0, len(text), 64 << 10):
+            data = base64.b64encode(text[start:start + (64 << 10)]).decode()
+            send(conn, dict(op="schedule_template_chunk", endpoint_id=endpoint, sequence=sequence, data=data))
+            sequence += 1
+        if before_complete is not None:
+            before_complete()
+        if complete:
+            send(conn, dict(op="schedule_template_chunk", endpoint_id=endpoint, sequence=sequence, complete=True))
+        conn.shutdown(socket.SHUT_WR)
+        if discard:
+            assert conn.recv(1, socket.MSG_PEEK), "server never published the committed acknowledgement"
+            return None
+        reply = read(stream)
+        assert reply["endpoint_id"] == endpoint
+        return reply
+
+
 def read_template_snapshot(path, after_header):
-    def send(conn, value):
-        body = json.dumps(value).encode()
-        conn.sendall(struct.pack(">IB", len(body) + 1, 1) + body)
-
-    def read(stream):
-        size, = struct.unpack(">I", stream.read(4))
-        assert 1 < size <= 1 << 20
-        payload = stream.read(size)
-        assert len(payload) == size and payload[0] == 1
-        return json.loads(payload[1:])
-
     with socket.socket(socket.AF_UNIX) as conn, conn.makefile("rb") as stream:
         conn.settimeout(8)
         conn.connect(path)
@@ -150,6 +188,19 @@ def run(root, rust, go):
             all_templates = json.loads(cli(go, "list").stdout)
             small, = [item for item in all_templates if item["name"] == "A small template"]
             assert small["prompt"] == "Small instructions"
+            step(b"\x1b[B\x1b[B\r", b"Personal templates / Edit")
+            step(b"!\r", b"Automations / Personal templates")
+            edited = json.loads(cli(go, "show", large["id"]).stdout)
+            assert edited["name"] == large["name"] + "!" and edited["prompt"] == big_prompt
+            assert edited["created_at"] == large["created_at"]
+            step(b"\x1b[27u", b"Automations")
+            step(b"n", b"New automation")
+            step(b"\x14", b"Large retained Go template!")
+            step(b"\x1b[B\x1b[B\r", b"New automation")
+            step(b"\x05", b"Personal templates / Edit")
+            step(b" Copy\r", b"New automation")
+            copied, = [row for row in json.loads(cli(go, "list").stdout) if row["name"] == edited["name"] + " Copy"]
+            assert copied["id"] != edited["id"] and copied["prompt"] == big_prompt
             board.send(b"\x1b[27u\x1b[27u\x1b[27u")
 
             def exited():
@@ -160,6 +211,37 @@ def run(root, rust, go):
             assert board.child.returncode == 0
         finally:
             board.close()
+
+        uploaded_id = "01M8C694P5EA2PJDV268PQ74XY"
+        target = {"create_id":uploaded_id}
+        snapshot = database.read_bytes()
+        error = upload_template(socket, target, "Truncated", big_prompt, complete=False,
+                                before_complete=lambda: upload_template(socket, target, "Busy", big_prompt, busy=True))
+        assert error["op"] == "error" and database.read_bytes() == snapshot, error
+        changed = []
+        def competing_edit():
+            prompt.write_text("Go edit won during the Rust upload")
+            cli(go, "edit", edited["id"], "Go won", prompt)
+            changed.append(database.read_bytes())
+        cas = {"id":edited["id"], "expected_updated_at":edited["updated_at"]}
+        stale = upload_template(socket, cas, "Stale Rust edit", big_prompt, before_complete=competing_edit)
+        assert stale["op"] == "error" and "changed; refresh" in stale["error"], stale
+        assert database.read_bytes() == changed[0]
+        upload_template(socket, target, "Lost oversized acknowledgement", big_prompt, discard=True)
+        stored = json.loads(cli(go, "show", uploaded_id).stdout)
+        assert stored["prompt"] == big_prompt
+        committed = database.read_bytes()
+        owner.terminate()
+        owner.wait(timeout=8)
+        owner = daemon()
+        p.wait_for(lambda: ready(owner), "Rust owner after lost oversized acknowledgement")
+        duplicate = upload_template(socket, target, "Lost oversized acknowledgement", big_prompt)["saved"]
+        assert {key:duplicate[key] for key in ("id", "created_at", "updated_at")} == {
+            key:stored[key] for key in ("id", "created_at", "updated_at")}
+        fingerprint = hashlib.sha256(json.dumps([stored["name"], stored["prompt"]],
+            ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+        assert set(duplicate) == {"id", "created_at", "updated_at", "fingerprint"}
+        assert duplicate["fingerprint"] == fingerprint and database.read_bytes() == committed
     finally:
         if owner.poll() is None:
             owner.terminate()
@@ -169,6 +251,8 @@ def run(root, rust, go):
     print("Go reopened and deleted the Rust template. Exact retry after restart made no write.")
     print("The board read an over-frame Go template and saved another without changing it.")
     print("A Go edit during a Rust stream preserved the original snapshot and the later edit.")
+    print("The dashboard edited and copied an over-frame legacy Go template; signed Go reopened both.")
+    print("Truncation and concurrent Go edits caused no Rust write; a lost oversized acknowledgement replayed exactly once.")
 
 
 if __name__ == "__main__":

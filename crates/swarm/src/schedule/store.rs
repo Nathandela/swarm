@@ -31,6 +31,8 @@ const NOT_FOUND: &str = "schedule record not found";
 const ARCHIVED: &str = "schedule job is archived";
 const CONFLICT: &str = "schedule job revision changed";
 const ZERO: &str = "0001-01-01T00:00:00Z";
+// Go bbolt v1.3.11 and bbolt-rs v1.3.10 share this per-value limit.
+pub(super) const MAX_TEMPLATE_VALUE: usize = (1 << 31) - 2;
 
 pub(super) struct Store {
     dir: PathBuf,
@@ -40,6 +42,12 @@ pub(super) struct Store {
 pub(super) enum TemplateTarget<'a> {
     Create(Option<&'a str>),
     Edit(&'a str, Option<Timestamp>),
+}
+
+enum TemplateReply<'a> {
+    Local,
+    Inline(&'a str),
+    Upload,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -346,13 +354,22 @@ impl Store {
     }
 
     fn write<T>(&self, f: impl FnOnce(&mut dyn WriteBucket) -> Result<T>) -> Result<T> {
+        self.write_deciding(|tx| Ok((f(tx)?, true)))
+    }
+
+    fn write_deciding<T>(
+        &self,
+        f: impl FnOnce(&mut dyn WriteBucket) -> Result<(T, bool)>,
+    ) -> Result<T> {
         let _lock = self.lock(libc::LOCK_EX)?;
         let path = self.dir.join("state.db");
         private_file(&path, false)?.ok_or("schedule database disappeared")?;
         let mut db = Bolt::open(&path)?;
         let mut tx = db.begin_rw()?;
-        let result = f(&mut tx)?;
-        tx.commit()?;
+        let (result, commit) = f(&mut tx)?;
+        if commit {
+            tx.commit()?;
+        }
         Ok(result)
     }
 
@@ -581,7 +598,7 @@ impl Store {
         let target = existing.map_or(TemplateTarget::Create(None), |id| {
             TemplateTarget::Edit(id, None)
         });
-        self.save_template_inner(target, name, prompt, None, now)
+        self.save_template_inner(target, name, prompt, TemplateReply::Local, now)
     }
 
     pub fn save_template_if_current(
@@ -592,7 +609,23 @@ impl Store {
         endpoint_id: &str,
         now: Timestamp,
     ) -> Result<Template> {
-        self.save_template_inner(target, name, prompt, Some(endpoint_id), now)
+        self.save_template_inner(
+            target,
+            name,
+            prompt,
+            TemplateReply::Inline(endpoint_id),
+            now,
+        )
+    }
+
+    pub(super) fn save_uploaded_template(
+        &self,
+        target: TemplateTarget<'_>,
+        name: String,
+        prompt: String,
+        now: Timestamp,
+    ) -> Result<Template> {
+        self.save_template_inner(target, name, prompt, TemplateReply::Upload, now)
     }
 
     fn save_template_inner(
@@ -600,14 +633,14 @@ impl Store {
         target: TemplateTarget<'_>,
         name: String,
         prompt: String,
-        endpoint_id: Option<&str>,
+        reply: TemplateReply<'_>,
         now: Timestamp,
     ) -> Result<Template> {
         validate_text(&name, &prompt)?;
-        self.write(|tx| {
+        self.write_deciding(|tx| {
             let receipt = match target {
                 TemplateTarget::Create(Some(id)) => {
-                    let fingerprint = digest(serde_json::to_vec(&(&name, &prompt))?);
+                    let fingerprint = template_fingerprint(&name, &prompt)?;
                     tx.ensure_bucket(TEMPLATE_CREATES)?;
                     if let Some(saved) = tx.get_raw(TEMPLATE_CREATES, id)? {
                         if saved != fingerprint.as_bytes() {
@@ -615,15 +648,18 @@ impl Store {
                                 "personal template ID already belongs to another request".into()
                             );
                         }
-                        let current = get::<Template>(tx, TEMPLATES, id)?
-                            .ok_or("the previously saved personal template was deleted")?;
+                        let current = match reply {
+                            TemplateReply::Upload => uploaded_record::<Template>(tx, id)?,
+                            _ => get::<Template>(tx, TEMPLATES, id)?,
+                        }
+                        .ok_or("the previously saved personal template was deleted")?;
                         if current.name != name || current.prompt != prompt {
                             return Err("the previously saved personal template was edited".into());
                         }
-                        if let Some(endpoint_id) = endpoint_id {
+                        if let TemplateReply::Inline(endpoint_id) = reply {
                             check_template_reply(&current, endpoint_id)?;
                         }
-                        return Ok(current);
+                        return Ok((current, false));
                     }
                     Some((id, fingerprint))
                 }
@@ -631,7 +667,23 @@ impl Store {
             };
             let mut template: Template = match target {
                 TemplateTarget::Edit(id, expected_updated_at) => {
-                    let template: Template = require(tx, TEMPLATES, id)?;
+                    let template: Template = match reply {
+                        TemplateReply::Upload => {
+                            // The old prompt can itself be a large Bolt value. Only its identity and times survive an edit.
+                            let saved: TemplateTimes = uploaded_record(tx, id)?.ok_or(NOT_FOUND)?;
+                            if saved.id != id {
+                                return Err("personal template ID does not match its record".into());
+                            }
+                            Template {
+                                id: saved.id,
+                                name: String::new(),
+                                prompt: String::new(),
+                                created_at: saved.created_at,
+                                updated_at: saved.updated_at,
+                            }
+                        }
+                        _ => require(tx, TEMPLATES, id)?,
+                    };
                     if expected_updated_at.is_some_and(|expected| expected != template.updated_at) {
                         return Err("personal template changed; refresh before editing".into());
                     }
@@ -659,14 +711,31 @@ impl Store {
             template.name = name;
             template.prompt = prompt;
             template.updated_at = now;
-            if let Some(endpoint_id) = endpoint_id {
+            if let TemplateReply::Inline(endpoint_id) = reply {
                 check_template_reply(&template, endpoint_id)?;
             }
-            put(tx, TEMPLATES, &template.id, &template)?;
+            if matches!(reply, TemplateReply::Upload) {
+                let size = template_size(
+                    &template.id,
+                    &template.name,
+                    &template.prompt,
+                    template.created_at,
+                    template.updated_at,
+                )?;
+                let mut bytes = Vec::new();
+                bytes.try_reserve_exact(size)?;
+                template.serialize(&mut serde_json::Serializer::with_formatter(
+                    &mut bytes,
+                    GoTemplateJson,
+                ))?;
+                tx.put_raw(TEMPLATES, &template.id, &bytes)?;
+            } else {
+                put(tx, TEMPLATES, &template.id, &template)?;
+            }
             if let Some((id, fingerprint)) = receipt {
                 tx.put_raw(TEMPLATE_CREATES, id, fingerprint.as_bytes())?;
             }
-            Ok(template)
+            Ok((template, true))
         })
     }
 
@@ -1049,6 +1118,134 @@ fn check_template_reply(template: &Template, endpoint_id: &str) -> Result<()> {
         return Err("personal template reply exceeds the owner socket frame limit".into());
     }
     Ok(())
+}
+
+pub(super) fn template_fingerprint(name: &str, prompt: &str) -> io::Result<String> {
+    let mut digest = Sha256::new();
+    serde_json::to_writer(&mut digest, &(name, prompt))?;
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+#[derive(Deserialize)]
+struct TemplateTimes {
+    id: String,
+    #[serde(rename = "name")]
+    _name: ExistingText,
+    #[serde(rename = "prompt")]
+    _prompt: ExistingText,
+    created_at: Timestamp,
+    updated_at: Timestamp,
+}
+
+struct ExistingText;
+
+impl<'de> Deserialize<'de> for ExistingText {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        deserializer.deserialize_str(Self)
+    }
+}
+
+impl serde::de::Visitor<'_> for ExistingText {
+    type Value = ExistingText;
+
+    fn expecting(&self, format: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        format.write_str("stored template text")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, _: &str) -> std::result::Result<Self, E> {
+        Ok(self)
+    }
+}
+
+fn uploaded_record<T: DeserializeOwned>(tx: &dyn ReadBucket, id: &str) -> Result<Option<T>> {
+    let mut result = None;
+    tx.walk(TEMPLATES, Some(id), &mut |key, value| {
+        if key == id.as_bytes() {
+            result = Some(serde_json::from_slice(value)?);
+        }
+        Ok(())
+    })?;
+    Ok(result)
+}
+
+#[derive(Default)]
+pub(super) struct ByteCount(pub usize);
+
+impl io::Write for ByteCount {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        self.0 = self
+            .0
+            .checked_add(data.len())
+            .ok_or_else(|| io::Error::other("encoded size overflow"))?;
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+struct GoTemplateJson;
+
+impl serde_json::ser::Formatter for GoTemplateJson {
+    fn write_string_fragment<W: ?Sized + io::Write>(
+        &mut self,
+        writer: &mut W,
+        text: &str,
+    ) -> io::Result<()> {
+        let mut start = 0;
+        for (index, ch) in text.char_indices() {
+            let escape = match ch {
+                '<' => b"\\u003c",
+                '>' => b"\\u003e",
+                '&' => b"\\u0026",
+                '\u{2028}' => b"\\u2028",
+                '\u{2029}' => b"\\u2029",
+                _ => continue,
+            };
+            writer.write_all(&text.as_bytes()[start..index])?;
+            writer.write_all(escape)?;
+            start = index + ch.len_utf8();
+        }
+        writer.write_all(&text.as_bytes()[start..])
+    }
+}
+
+pub(super) fn template_size(
+    id: &str,
+    name: &str,
+    prompt: &str,
+    created_at: Timestamp,
+    updated_at: Timestamp,
+) -> io::Result<usize> {
+    #[derive(Serialize)]
+    struct BorrowedTemplate<'a> {
+        id: &'a str,
+        name: &'a str,
+        prompt: &'a str,
+        created_at: Timestamp,
+        updated_at: Timestamp,
+    }
+    let mut count = ByteCount::default();
+    BorrowedTemplate {
+        id,
+        name,
+        prompt,
+        created_at,
+        updated_at,
+    }
+    .serialize(&mut serde_json::Serializer::with_formatter(
+        &mut count,
+        GoTemplateJson,
+    ))?;
+    if count.0 > MAX_TEMPLATE_VALUE {
+        return Err(io::Error::other(
+            "personal template exceeds the Go Bolt encoded value limit",
+        ));
+    }
+    Ok(count.0)
 }
 
 fn private_file(path: &Path, create: bool) -> Result<Option<File>> {

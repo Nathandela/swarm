@@ -462,7 +462,7 @@ fn board(path: &Path) -> io::Result<()> {
                                     "template owner changed; reopen templates before saving",
                                 )
                             })
-                            .and_then(|client| change.remote(client));
+                            .and_then(|client| change.remote(client, path));
                         if view.complete_template_change(result) {
                             view.receive_templates(read_templates(path, connection.as_ref()));
                         }

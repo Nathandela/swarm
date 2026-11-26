@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{io, path::Path};
 
+mod upload;
+pub(crate) use upload::{UPLOAD_CAP, serve_upload};
+
 pub(crate) const CAP: &str = "schedule-catalog-v1";
 const OP: &str = "schedule_catalog";
 
@@ -154,6 +157,16 @@ struct TemplateChunks<'a, W> {
     sequence: u64,
 }
 
+impl<W: io::Write> TemplateChunks<'_, W> {
+    fn finish(self) -> io::Result<()> {
+        crate::supervisor::runtime::write_control(
+            self.output,
+            &json!({"op":TEMPLATE_CHUNK,"endpoint_id":self.endpoint,
+                "sequence":self.sequence,"complete":true}),
+        )
+    }
+}
+
 impl<W: io::Write> io::Write for TemplateChunks<'_, W> {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
         use base64::{Engine, engine::general_purpose::STANDARD};
@@ -195,11 +208,7 @@ pub(crate) fn stream_templates(
     serde_json::to_writer(&mut buffered, templates)?;
     buffered.flush()?;
     drop(buffered);
-    write_control(
-        chunks.output,
-        &json!({"op":TEMPLATE_CHUNK,"endpoint_id":endpoint,
-        "sequence":chunks.sequence,"complete":true}),
-    )
+    chunks.finish()
 }
 
 pub(crate) fn templates(root: &Path) -> Result<Vec<Template>> {
@@ -251,11 +260,14 @@ pub(crate) enum TemplateChange {
 }
 
 impl TemplateChange {
-    pub(crate) fn remote(self, client: &mut Client) -> io::Result<Option<Template>> {
+    pub(crate) fn remote(self, client: &mut Client, path: &Path) -> io::Result<Option<Template>> {
         if !client.supports(CONTROL) {
             return Err(io::Error::other(
                 "selected supervisor does not support template changes",
             ));
+        }
+        if let Some(length) = upload::required_size(&self, client.endpoint())? {
+            return upload::remote(self, path, client.endpoint(), length).map(Some);
         }
         let reply =
             client.request_body(json!({"op":TEMPLATE_CHANGE,"change":self}), TEMPLATE_CHANGE)?;
@@ -299,6 +311,26 @@ impl TemplateChange {
     }
 }
 
+fn template_target<'a>(
+    id: Option<&'a str>,
+    create_id: Option<&'a str>,
+    expected_updated_at: Option<jiff::Timestamp>,
+) -> Result<super::store::TemplateTarget<'a>> {
+    use super::store::TemplateTarget;
+    if id.or(create_id).is_some_and(|id| !super::valid_id(id)) {
+        return Err("invalid personal template ID".into());
+    }
+    if id.is_some() != expected_updated_at.is_some() {
+        return Err("editing a personal template requires its current updated_at".into());
+    }
+    if id.is_some() && create_id.is_some() {
+        return Err("a personal template change cannot create and edit together".into());
+    }
+    Ok(id.map_or(TemplateTarget::Create(create_id), |id| {
+        TemplateTarget::Edit(id, expected_updated_at)
+    }))
+}
+
 pub(crate) fn change_template(root: &Path, request: &Value, endpoint_id: &str) -> Result<Value> {
     let change: TemplateChange = serde_json::from_value(request["change"].clone())?;
     let store = Store::open(root, Path::new("/etc/localtime"))?;
@@ -310,25 +342,7 @@ pub(crate) fn change_template(root: &Path, request: &Value, endpoint_id: &str) -
             prompt,
             expected_updated_at,
         } => {
-            if id
-                .as_ref()
-                .or(create_id.as_ref())
-                .is_some_and(|id| !super::valid_id(id))
-            {
-                return Err("invalid personal template ID".into());
-            }
-            if id.is_some() != expected_updated_at.is_some() {
-                return Err("editing a personal template requires its current updated_at".into());
-            }
-            if id.is_some() && create_id.is_some() {
-                return Err("a personal template change cannot create and edit together".into());
-            }
-            use super::store::TemplateTarget;
-            let target = id
-                .as_deref()
-                .map_or(TemplateTarget::Create(create_id.as_deref()), |id| {
-                    TemplateTarget::Edit(id, expected_updated_at)
-                });
+            let target = template_target(id.as_deref(), create_id.as_deref(), expected_updated_at)?;
             let template = store.save_template_if_current(
                 target,
                 name,
@@ -489,9 +503,10 @@ mod tests {
         };
         let first = change(&temp, &change_body("same prompt")).unwrap();
         assert_eq!(first["template"]["id"], id);
-        assert_eq!(change(&temp, &change_body("same prompt")).unwrap(), first);
         let database = temp.0.join("schedules/state.db");
         let unchanged = fs::read(&database).unwrap();
+        assert_eq!(change(&temp, &change_body("same prompt")).unwrap(), first);
+        assert_eq!(fs::read(&database).unwrap(), unchanged);
         let large_endpoint = "e".repeat(crate::ipc::wire::MAX_FRAME);
         assert!(
             change_template(&temp.0, &change_body("same prompt"), &large_endpoint)

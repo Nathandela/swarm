@@ -1,10 +1,26 @@
 //! Deadline reads must drain a Unix peer's final buffered frame even after it exits.
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::time::Instant;
 
 pub(crate) struct DeadlineReader<'a>(pub &'a UnixStream, pub Instant);
+pub(crate) struct DeadlineWriter<'a>(pub &'a UnixStream, pub Instant);
+
+impl Write for DeadlineWriter<'_> {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        let remaining = self.1.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        self.0.set_write_timeout(Some(remaining))?;
+        self.0.write(data)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
 
 impl Read for DeadlineReader<'_> {
     fn read(&mut self, data: &mut [u8]) -> io::Result<usize> {

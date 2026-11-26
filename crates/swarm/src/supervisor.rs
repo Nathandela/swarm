@@ -1083,7 +1083,8 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 )
                 || (state.schedule_socket.is_some() && scheduling::CAPS.contains(cap)
                     || *cap == crate::schedule::catalog::CAP
-                    || *cap == crate::schedule::catalog::CONTROL)
+                    || *cap == crate::schedule::catalog::CONTROL
+                    || *cap == crate::schedule::catalog::UPLOAD_CAP)
         })
         .collect();
     let mut welcome = json!({
@@ -1094,6 +1095,13 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         welcome["capabilities"] = json!(caps);
     }
     reply(&writer, state, welcome)?;
+    if caps.contains(&crate::schedule::catalog::UPLOAD_CAP) {
+        let root = state
+            .root
+            .parent()
+            .ok_or_else(|| io::Error::other("missing owner state root"))?;
+        return crate::schedule::catalog::serve_upload(root, &stream, &state.endpoint);
+    }
     stream.set_read_timeout(None)?;
     let mut subscribed = None;
     let mut peek_offer = None;
