@@ -6,6 +6,9 @@ use sha2::{Digest, Sha256};
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[path = "receipt_quiet.rs"]
+mod quiet_reply;
+
 const VERSION: u64 = 2;
 const VOICE_VERSION: u64 = 3;
 const MAX_RECORDS: usize = 2048;
@@ -1596,6 +1599,16 @@ impl Inbox {
         self.save(next)
     }
 
+    fn check_source_without_writing(
+        &mut self,
+        check: impl FnOnce(&mut Self) -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.checking_publication = true;
+        let result = check(self);
+        self.checking_publication = false;
+        result
+    }
+
     pub(super) fn claim_publication(
         &mut self,
         nonce: &str,
@@ -1624,10 +1637,8 @@ impl Inbox {
             )));
         }
         verify_publication(nonce, entry).map_err(BeforeWrite)?;
-        self.checking_publication = true;
-        let verified = check_source(self);
-        self.checking_publication = false;
-        verified.map_err(BeforeWrite)?;
+        self.check_source_without_writing(check_source)
+            .map_err(BeforeWrite)?;
 
         let mut next = disk;
         next["outbox"][nonce]["state"] = json!("sending");

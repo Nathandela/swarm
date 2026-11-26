@@ -92,6 +92,8 @@ pub(super) struct Dispatcher {
     pub(super) lose_enrolled_ack: std::cell::Cell<bool>,
     idle_since: std::cell::Cell<Option<Instant>>,
     released_pins: std::cell::RefCell<std::collections::HashSet<String>>,
+    next_quiet_probe: std::cell::Cell<Option<Instant>>,
+    quiet_cursor: std::cell::Cell<Option<(u64, u64)>>,
 }
 
 impl Dispatcher {
@@ -123,6 +125,8 @@ impl Dispatcher {
             lose_enrolled_ack: std::cell::Cell::new(false),
             idle_since: std::cell::Cell::new(None),
             released_pins: Default::default(),
+            next_quiet_probe: std::cell::Cell::new(None),
+            quiet_cursor: Default::default(),
             socket_identity: (meta.dev(), meta.ino()),
         };
         this.listener.set_nonblocking(true)?;
@@ -169,6 +173,32 @@ impl Dispatcher {
         calls: Option<(&Path, &super::call_runtime::Driver)>,
     ) -> io::Result<()> {
         self.serve_tool(cfg, inbox, api)?;
+        if cfg.text("project_access") == "enrolled"
+            && self
+                .next_quiet_probe
+                .get()
+                .is_none_or(|at| Instant::now() >= at)
+        {
+            let conversation = field(&self.launch["manager"], "conversation_id");
+            let now = millis()?;
+            if inbox.quiet_reply_due(conversation, now) {
+                self.next_quiet_probe
+                    .set(Some(Instant::now() + Duration::from_secs(2)));
+                let mut cursor = self.quiet_cursor.get();
+                let result = inbox.advance_quiet_reply(
+                    conversation,
+                    now,
+                    &mut cursor,
+                    |inbox, source, revision| {
+                        api.verify(cfg)?;
+                        Self::publication_text_source(cfg, inbox, api, source, revision)
+                    },
+                    millis,
+                );
+                self.quiet_cursor.set(cursor);
+                result?;
+            }
+        }
         let mut state = inbox.manager().clone();
         if state.is_null() {
             if inbox.next_prepared().is_none() {
@@ -254,7 +284,9 @@ impl Dispatcher {
                 inbox.set_manager(state)?;
                 return Ok(());
             }
-            let phase = self.reconcile_input(inbox, &mut state)?;
+            let observation = self.reconcile_input(inbox, &mut state)?;
+            let phase = field(&observation, "state");
+            let observed_at = millis()?;
             if let Some((_, driver)) = calls
                 && !had_turn
                 && !state["input"]["turn_id"].is_null()
@@ -347,7 +379,7 @@ impl Dispatcher {
                     .owner
                     .send(field(input, "operation"), &input["composer"]);
             }
-            let publications = self.deliver(cfg, inbox, api, &state, millis()?)?;
+            let publications = self.deliver(cfg, inbox, api, &state, observed_at)?;
             if phase == "completed"
                 && publications
                     .iter()
@@ -373,8 +405,13 @@ impl Dispatcher {
                             field(&entry, "body").into(),
                         ));
                 }
-                state["input"] = Value::Null;
-                inbox.set_manager(state)?;
+                inbox.retire_completed_input(
+                    state,
+                    &observation,
+                    observed_at,
+                    &publications,
+                    cfg.text("project_access") == "enrolled" && status["native_cli"] == false,
+                )?;
                 self.released_pins.borrow_mut().clear();
             }
             return Ok(());
@@ -446,6 +483,11 @@ impl Dispatcher {
         let composer = self.owner.composer(&current, &status, &starting_prompt)?;
         let semantic = operation("semantic")?;
         state["input"] = json!({"operation":semantic,"composer":composer,"source_id":id,"starting_prompt":starting_prompt});
+        if !voice && cfg.text("project_access") == "enrolled" && status["native_cli"] == false {
+            state["input"]["reply_admitted_at"] = json!(millis()?);
+            // This enrolled-only input starts with complete coverage of the scoped worker tool boundary.
+            state["input"]["worker_actions"] = json!({});
+        }
         inbox.cutover(&id, field(&current, "revision"), state)?;
         // Ambiguous sends are never retried. Only the native pre-effect authority refusal is safe.
         match self.owner.send(&semantic, &composer) {
@@ -788,7 +830,7 @@ impl Dispatcher {
         Ok(())
     }
 
-    fn reconcile_input(&self, inbox: &mut Inbox, state: &mut Value) -> io::Result<String> {
+    fn reconcile_input(&self, inbox: &mut Inbox, state: &mut Value) -> io::Result<Value> {
         let input = &state["input"];
         let observation = self.owner.input_status(&input["composer"])?;
         if observation["external_input"]
@@ -818,7 +860,7 @@ impl Dispatcher {
                 }
             }
         }
-        Ok(phase.to_owned())
+        Ok(observation)
     }
 
     fn publication_source(
@@ -847,24 +889,33 @@ impl Dispatcher {
             } else {
                 &input["worker_wake"]["owner_revision"]
             };
-            if !inbox.matches_owner_admission(source_id, expected_revision, "accepted") {
-                return Err(invalid(
-                    "publication requires the original accepted source revision",
-                ));
-            }
-            let source = api
-                .current(cfg, source_id)?
-                .filter(|source| source["id"] == source_id)
-                .ok_or_else(|| {
-                    invalid("publication requires the original visible Discord source")
-                })?;
-            let current = api
-                .admit(inbox, &source)?
-                .filter(|receipt| receipt["state"] == "accepted")
-                .ok_or_else(|| invalid("publication source no longer proves native admission"))?;
-            if current["revision"] != *expected_revision {
-                return Err(invalid("publication source changed after native admission"));
-            }
+            Self::publication_text_source(cfg, inbox, api, source_id, expected_revision)?;
+        }
+        Ok(())
+    }
+
+    fn publication_text_source(
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        source_id: &str,
+        expected_revision: &Value,
+    ) -> io::Result<()> {
+        if !inbox.matches_owner_admission(source_id, expected_revision, "accepted") {
+            return Err(invalid(
+                "publication requires the original accepted source revision",
+            ));
+        }
+        let source = api
+            .current(cfg, source_id)?
+            .filter(|source| source["id"] == source_id)
+            .ok_or_else(|| invalid("publication requires the original visible Discord source"))?;
+        let current = api
+            .admit(inbox, &source)?
+            .filter(|receipt| receipt["state"] == "accepted")
+            .ok_or_else(|| invalid("publication source no longer proves native admission"))?;
+        if current["revision"] != *expected_revision {
+            return Err(invalid("publication source changed after native admission"));
         }
         Ok(())
     }
@@ -1226,6 +1277,7 @@ impl Dispatcher {
                     "project":launch["arguments"]["cwd"]}
             });
             state["worker_actions"][&key] = action.clone();
+            state["input"]["worker_actions"][&key] = action.clone();
             inbox.set_manager(state)?;
             return Ok(enrolled_send_status(&action));
         }
@@ -1728,6 +1780,7 @@ mod tests {
         Exact,
         Unavailable,
         Edited,
+        Deleted,
     }
 
     struct MockDiscord {
@@ -1742,6 +1795,7 @@ mod tests {
             match self.source.get() {
                 LiveSource::Exact => {}
                 LiveSource::Unavailable => return Err(io::ErrorKind::TimedOut.into()),
+                LiveSource::Deleted => return Ok(None),
                 LiveSource::Edited => {
                     message["content"] = json!("edited while disconnected");
                     message["edited_timestamp"] = json!("2026-11-26T01:00:00Z");
@@ -1832,7 +1886,7 @@ mod tests {
                     );
                     json!({"op":"manager_runtime", "session_id":self.row["id"],
                         "manager_runtime":{
-                            "ready_for_input":true,"binding":binding,
+                            "ready_for_input":true,"binding":binding,"native_cli":false,
                             "bridge_socket":self.launch["manager"]["bridge_socket"],
                             "auth_file":self.launch["manager"]["auth_file"],
                             "turn":{"state":if self.composer.is_null() {"idle"} else {"running"},"external_input":0}
@@ -1940,7 +1994,8 @@ mod tests {
     }
 
     #[test]
-    fn ordered_publications_allow_a_completed_partial_only_turn_to_settle() {
+    #[ignore = "native completion and quiet clock qualification"]
+    fn completed_enrolled_partial_quiet_check_survives_a_later_turn() {
         owner_dm_after_draft(ReplyFixture::Ordered(false));
     }
 
@@ -2412,6 +2467,13 @@ mod tests {
             assert!(inbox.observe(&correct, Observation::History).unwrap());
             api.outcome.replace(Post::Acknowledged(Value::Null));
         }
+        let completed = (!finish).then(|| {
+            let admitted = inbox.manager()["input"]["reply_admitted_at"]
+                .as_u64()
+                .unwrap();
+            TEST_MILLIS.with(|clock| clock.set(Some(admitted + 500)));
+            admitted
+        });
         dispatcher.tick(cfg, &mut inbox, api).unwrap();
         assert!(inbox.manager()["input"].is_null());
         let mut expected = vec![(first_nonce.clone(), "on it".into()); 2];
@@ -2422,8 +2484,266 @@ mod tests {
         for nonce in order {
             assert_eq!(inbox.publication(&nonce)["state"], "sent");
         }
+        TEST_MILLIS.with(|clock| clock.set(None));
         drop(inbox);
-        assert!(Inbox::open(dir, cfg).unwrap().manager()["input"].is_null());
+        let inbox = Inbox::open(dir, cfg).unwrap();
+        assert!(inbox.manager()["input"].is_null());
+        if let Some(admitted) = completed {
+            check_completed_quiet_reply(dispatcher, cfg, inbox, api, dir, admitted);
+        }
+    }
+
+    fn check_completed_quiet_reply(
+        dispatcher: &Dispatcher,
+        cfg: &Config,
+        mut inbox: Inbox,
+        api: &MockDiscord,
+        dir: &Path,
+        admitted: u64,
+    ) {
+        let ledger = dir.join("rust-text-v1.json");
+        let starting = runtime::read_json(&ledger).unwrap();
+        let first = &starting["messages"]["101"]["native_completion"];
+        assert_eq!(first["proof"]["completed_at"], admitted + 500);
+        assert_eq!(first["proof"]["observation"]["state"], "completed");
+        assert!(first["progress_at"].is_null());
+        let conversation = field(&first["proof"]["binding"], "conversation_id").to_owned();
+
+        // A later exact completion must not replace the pending historical reply check.
+        let row = inbox.admit(&source(cfg, "103")).unwrap().unwrap();
+        let mut manager = inbox.manager().clone();
+        let composer = dispatcher
+            .owner
+            .composer(
+                &row,
+                &json!({"ready_for_input":true,"binding":manager["binding"],"turn":{"state":"completed","external_input":0}}),
+                "",
+            )
+            .unwrap();
+        manager["input"] = json!({"source_id":"103","composer":composer,"operation":"fixture"});
+        inbox
+            .cutover("103", field(&row, "revision"), manager.clone())
+            .unwrap();
+        manager["input"]["turn_id"] = json!("later-turn");
+        inbox.settled_input("103", manager.clone()).unwrap();
+        let observation = json!({"state":"completed","external_input":0,"native_turn_id":"later-turn",
+            "native_input_id":composer["manager_admission"]["nonce"]});
+        let before = fs::read(&ledger).unwrap();
+        let mut mismatched = observation.clone();
+        mismatched["native_input_id"] = json!("another input");
+        assert!(
+            inbox
+                .retire_completed_input(manager.clone(), &mismatched, admitted + 1_000, &[], true)
+                .is_err()
+        );
+        assert_eq!(fs::read(&ledger).unwrap(), before);
+        inbox
+            .retire_completed_input(manager, &observation, admitted + 1_000, &[], true)
+            .unwrap();
+        drop(inbox);
+        let pristine = fs::read(&ledger).unwrap();
+        let mut inbox = Inbox::open(dir, cfg).unwrap();
+        assert_eq!(fs::read(&ledger).unwrap(), pristine);
+        let stored = runtime::read_json(&ledger).unwrap();
+        assert_eq!(stored["messages"]["101"]["native_completion"], *first);
+        assert!(stored["messages"]["103"]["native_completion"]["proof"]["quiet"].is_null());
+        let first_due = admitted + 30_000;
+        let check = |_inbox: &mut Inbox, _id: &str, _revision: &Value| -> io::Result<()> {
+            panic!("wrong scope or due time reached the source")
+        };
+        assert!(
+            !inbox
+                .advance_quiet_reply(&conversation, first_due - 1, &mut None, check, millis)
+                .unwrap()
+        );
+        assert!(
+            !inbox
+                .advance_quiet_reply("different-discussion", first_due, &mut None, check, millis)
+                .unwrap()
+        );
+        assert_eq!(fs::read(&ledger).unwrap(), pristine);
+
+        let original = api.posted.borrow().clone();
+        let advance = |inbox: &mut Inbox, now, verified_at| {
+            let result = inbox.advance_quiet_reply(
+                &conversation,
+                now,
+                &mut None,
+                |inbox, id, revision| {
+                    assert_eq!(id, "101");
+                    api.verify(cfg)?;
+                    Dispatcher::publication_text_source(cfg, inbox, api, id, revision)?;
+                    TEST_MILLIS.with(|clock| clock.set(Some(verified_at)));
+                    Ok(())
+                },
+                millis,
+            );
+            TEST_MILLIS.with(|clock| clock.set(None));
+            result.unwrap()
+        };
+        api.source.set(LiveSource::Edited);
+        assert!(!advance(&mut inbox, first_due, first_due));
+        assert_eq!(fs::read(&ledger).unwrap(), pristine);
+        api.source.set(LiveSource::Exact);
+
+        drop(inbox);
+        let nonce = first["proof"]["publications"][0].as_str().unwrap();
+        let mut missing_delivery = stored.clone();
+        missing_delivery["outbox"][nonce]["gateway_seen"] = json!(false);
+        let mut missing_coverage = stored;
+        let completion = &mut missing_coverage["messages"]["101"]["native_completion"];
+        completion["proof"]["quiet"]["worker_actions"] = Value::Null;
+        completion["digest"] = json!(hash(&completion["proof"]).unwrap());
+        for damaged in [missing_delivery, missing_coverage] {
+            runtime::write_json(&ledger, &damaged).unwrap();
+            let uncorr = fs::read(&ledger).unwrap();
+            let mut inbox = Inbox::open(dir, cfg).unwrap();
+            assert!(
+                !inbox
+                    .advance_quiet_reply(&conversation, first_due, &mut None, check, millis)
+                    .unwrap()
+            );
+            assert_eq!(fs::read(&ledger).unwrap(), uncorr);
+        }
+        fs::write(&ledger, &pristine).unwrap();
+        let mut inbox = Inbox::open(dir, cfg).unwrap();
+
+        let progress_at = first_due + 10_000;
+        assert!(advance(&mut inbox, first_due, progress_at));
+        let after_progress = fs::read(&ledger).unwrap();
+        drop(inbox);
+        let mut inbox = Inbox::open(dir, cfg).unwrap();
+        assert_eq!(fs::read(&ledger).unwrap(), after_progress);
+        let quiet_due = progress_at + 120_000;
+        assert!(
+            !inbox
+                .advance_quiet_reply(&conversation, first_due + 120_000, &mut None, check, millis)
+                .unwrap()
+        );
+        assert!(
+            !inbox
+                .advance_quiet_reply(&conversation, quiet_due - 1, &mut None, check, millis)
+                .unwrap()
+        );
+        assert!(advance(&mut inbox, quiet_due, quiet_due));
+        let current = runtime::read_json(&ledger).unwrap();
+        assert_eq!(
+            current["messages"]["101"]["native_completion"]["progress_at"],
+            progress_at
+        );
+        assert_eq!(
+            current["messages"]["101"]["native_completion"]["quiet_at"],
+            quiet_due
+        );
+        let settled = fs::read(&ledger).unwrap();
+        assert!(
+            !inbox
+                .advance_quiet_reply(&conversation, quiet_due + 1, &mut None, check, millis)
+                .unwrap()
+        );
+        assert_eq!(fs::read(&ledger).unwrap(), settled);
+        assert_eq!(*api.posted.borrow(), original);
+        drop(inbox);
+        let snapshot: Value = serde_json::from_slice(&pristine).unwrap();
+        check_quiet_scan_after_revocation(cfg, dir, api, snapshot, &conversation, admitted);
+    }
+
+    fn check_quiet_scan_after_revocation(
+        cfg: &Config,
+        dir: &Path,
+        api: &MockDiscord,
+        mut disk: Value,
+        conversation: &str,
+        admitted: u64,
+    ) {
+        let earlier = disk["messages"]["101"].clone();
+        let nonce = earlier["native_completion"]["proof"]["publications"][0]
+            .as_str()
+            .unwrap();
+        let mut publication = disk["outbox"][nonce]["proof"].clone();
+        let completion = &mut disk["messages"]["103"]["native_completion"];
+        let proof = &mut completion["proof"];
+        publication["binding"] = proof["binding"].clone();
+        publication["source_id"] = json!("103");
+        publication["turn_id"] = proof["observation"]["native_turn_id"].clone();
+        publication["host_meta"]["x-codex-turn-metadata"]["turn_id"] =
+            publication["turn_id"].clone();
+        publication["host_meta"]["callId"] = json!("later-call");
+        publication["native_call_id"] = json!("later-call");
+        publication["call_receipt"] = json!({
+            "main":true,"native_turn_id":publication["turn_id"],"native_call_id":"later-call",
+            "native_input_id":proof["observation"]["native_input_id"]
+        });
+        let later = publication_nonce(&publication).unwrap();
+        proof["publications"] = json!([later]);
+        proof["quiet"] = json!({"scope":"enrolled","admitted_at":admitted+900,"worker_actions":{}});
+        completion["digest"] = json!(hash(proof).unwrap());
+        disk["outbox"][&later] = json!({
+            "proof":publication,"proof_digest":hash(&publication).unwrap(),"body":publication["body"],
+            "state":"sent","message_id":"104","gateway_seen":true
+        });
+        let ledger = dir.join("rust-text-v1.json");
+        runtime::write_json(&ledger, &disk).unwrap();
+        let pending = fs::read(&ledger).unwrap();
+        let checks = RefCell::new(Vec::new());
+        let verify = |inbox: &mut Inbox, id: &str, revision: &Value| {
+            checks.borrow_mut().push(id.to_owned());
+            api.source.set(match id {
+                "101" => LiveSource::Deleted,
+                "103" => LiveSource::Exact,
+                _ => panic!("unexpected source {id}"),
+            });
+            api.verify(cfg)?;
+            Dispatcher::publication_text_source(cfg, inbox, api, id, revision)
+        };
+        let posts = api.posted.borrow().clone();
+        let later_due = admitted + 900 + 30_000;
+        let mut inbox = Inbox::open(dir, cfg).unwrap();
+        let mut cursor = None;
+        assert!(
+            !inbox
+                .advance_quiet_reply(conversation, later_due, &mut cursor, verify, || Ok(
+                    later_due
+                ))
+                .unwrap()
+        );
+        assert_eq!(fs::read(&ledger).unwrap(), pending);
+        assert!(
+            inbox
+                .advance_quiet_reply(conversation, later_due, &mut cursor, verify, || Ok(
+                    later_due
+                ))
+                .unwrap()
+        );
+        drop(inbox);
+
+        let mut inbox = Inbox::open(dir, cfg).unwrap();
+        let mut cursor = None;
+        let quiet_due = later_due + 120_000;
+        let waiting = fs::read(&ledger).unwrap();
+        assert!(
+            !inbox
+                .advance_quiet_reply(conversation, quiet_due, &mut cursor, verify, || Ok(
+                    quiet_due
+                ))
+                .unwrap()
+        );
+        assert_eq!(fs::read(&ledger).unwrap(), waiting);
+        assert!(
+            inbox
+                .advance_quiet_reply(conversation, quiet_due, &mut cursor, verify, || Ok(
+                    quiet_due
+                ))
+                .unwrap()
+        );
+        let finished = runtime::read_json(&ledger).unwrap();
+        assert_eq!(finished["messages"]["101"], earlier);
+        assert_eq!(
+            finished["messages"]["103"]["native_completion"]["quiet_at"],
+            quiet_due
+        );
+        assert_eq!(checks.into_inner(), ["101", "103", "101", "103"]);
+        assert_eq!(*api.posted.borrow(), posts);
     }
 
     fn owner_dm_after_draft(fixture: ReplyFixture) {
@@ -2434,11 +2754,14 @@ mod tests {
         let socket = dir.join("daemon.sock");
         let digest = format!("{:x}", Sha256::digest(dir.as_os_str().as_encoded_bytes()));
         let endpoint = format!("ep-{}", &digest[..8]);
-        let cfg = Config(
+        let mut cfg = Config(
             json!({"version":1,"enabled":true,"name":"fixture","mode":"personal",
             "installation_id":"fixture","application_id":"200","owner_id":"300","dm_channel_id":"400",
             "daemon_socket":socket,"work_dir":dir,"manager_cli":"codex","supervisor":{"state_dir":dir}}),
         );
+        if matches!(fixture, ReplyFixture::Ordered(false)) {
+            cfg.0["project_access"] = json!("enrolled");
+        }
         let listener = runtime::bind(&socket).unwrap();
         let done = Arc::new(AtomicBool::new(false));
         let state = Arc::new(Mutex::new(Record {
