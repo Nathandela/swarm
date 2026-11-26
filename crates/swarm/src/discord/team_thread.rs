@@ -130,6 +130,37 @@ pub(super) struct ThreadAudience<'a> {
     pub(super) api: &'a Discord,
 }
 
+impl ThreadAudience<'_> {
+    pub(super) fn history(&self, cfg: &Config, before: &str) -> io::Result<Vec<Value>> {
+        self.verify(cfg)?;
+        let suffix = if before.is_empty() {
+            String::new()
+        } else if snowflake(before) {
+            format!("&before={before}")
+        } else {
+            return Err(invalid("invalid thread history cursor"));
+        };
+        let data = self.api.request(
+            &format!("/channels/{}/messages?limit=100{suffix}", self.route.thread),
+            None,
+        )?;
+        let mut rows = data
+            .as_array()
+            .ok_or_else(|| invalid("invalid thread history page"))?
+            .clone();
+        for row in &mut rows {
+            if row["channel_id"] != self.route.thread
+                || !row["guild_id"].is_null() && row["guild_id"] != self.route.guild
+                || !row["id"].as_str().is_some_and(snowflake)
+            {
+                return Err(invalid("thread history returned another audience"));
+            }
+            row["guild_id"] = json!(self.route.guild);
+        }
+        Ok(rows)
+    }
+}
+
 impl Audience for ThreadAudience<'_> {
     fn current(&self, cfg: &Config, id: &str) -> io::Result<Option<Value>> {
         if !snowflake(id) {

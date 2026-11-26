@@ -27,6 +27,7 @@ pub(crate) mod provenance;
 mod receipt;
 mod rest;
 mod service;
+mod team_history;
 mod team_thread;
 mod worker;
 mod worker_proof;

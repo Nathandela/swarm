@@ -46,6 +46,10 @@ impl Inbox {
             || !data["outbox"].is_object()
             || !valid_boundary(&data["consent_floor"])
             || !valid_boundary(&data["history_cursor"])
+            || !valid_boundary(&data["team_history_cursor"])
+            || !valid_boundary(&data["team_consent_floor"])
+            || data["team_history_cursor"].is_null() != data["team_consent_floor"].is_null()
+            || boundary(&data["team_consent_floor"]) > boundary(&data["team_history_cursor"])
             || data["consent_floor"].is_null() != data["history_cursor"].is_null()
             || boundary(&data["consent_floor"]) > boundary(&data["history_cursor"])
         {
@@ -132,7 +136,15 @@ impl Inbox {
         route: &super::team_thread::Route,
         source: &Value,
     ) -> io::Result<Option<Value>> {
-        if !route.matches(source) || self.data["team_discussion"] != route.identity() {
+        if !route.matches(source)
+            || self.data["team_discussion"] != route.identity()
+            || source["id"].as_str().is_some_and(|id| {
+                !self.has_team_source(id)
+                    && id
+                        .parse::<u64>()
+                        .is_ok_and(|id| id <= boundary(&self.data["team_consent_floor"]))
+            })
+        {
             return Ok(None);
         }
         self.admit_scoped(source, &route.guild, &route.thread, "", None, true)
@@ -448,6 +460,34 @@ impl Inbox {
             self.save(next)?;
         }
         Ok(())
+    }
+
+    pub(super) fn team_cursor(&self) -> Option<&str> {
+        self.data["team_history_cursor"].as_str()
+    }
+
+    pub(super) fn checkpoint_team(&mut self, id: &str) -> io::Result<()> {
+        if !id.is_empty() && !snowflake(id) || self.data["team_discussion"].is_null() {
+            return Err(invalid("invalid linked team checkpoint"));
+        }
+        if self.team_cursor().is_none()
+            || boundary(&json!(id)) > boundary(&self.data["team_history_cursor"])
+        {
+            let mut next = self.data.clone();
+            if self.team_cursor().is_none() {
+                next["team_consent_floor"] = json!(id);
+            }
+            next["team_history_cursor"] = json!(id);
+            self.save(next)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn pending_team(&self) -> std::collections::BTreeSet<u64> {
+        self.pending_ids()
+            .into_iter()
+            .filter(|id| self.has_team_source(&id.to_string()))
+            .collect()
     }
 
     pub(super) fn pending_ids(&self) -> Vec<u64> {

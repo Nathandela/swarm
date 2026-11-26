@@ -145,7 +145,6 @@ fn run_guild(
     if inbox.cursor().is_none() {
         inbox.checkpoint("")?;
     }
-    let (gateway_socket, cursor) = gateway::open(cfg)?;
     let _guild_authority = {
         let verifier = Discord::connect(cfg)?;
         super::worker_proof::Service::bind(
@@ -167,19 +166,10 @@ fn run_guild(
     } else {
         None
     };
-    let call_start = cfg.0["calls"].is_object().then(|| place.lock()).transpose();
-    let scope = call_start
-        .as_ref()
-        .ok()
-        .and_then(|_| dispatcher.as_ref().map(|dispatcher| dispatcher.scope(cfg)));
-    let driver =
-        super::call_runtime::Driver::start(gateway_socket, cursor, cfg, &place.dir, scope.clone());
-    drop(call_start);
+    let scope = dispatcher.as_ref().map(|dispatcher| dispatcher.scope(cfg));
+    let mut driver = guild_gateway(place, cfg, &mut inbox, thread.as_ref(), scope.clone())?;
     use super::call_runtime::Ingress;
     use std::sync::atomic::Ordering;
-    driver
-        .discussion_ready
-        .store(!inbox.manager()["binding"].is_null(), Ordering::Release);
     loop {
         if worker_send
             .as_ref()
@@ -227,10 +217,36 @@ fn run_guild(
                 }
                 continue;
             }
-            Ok(Err(err)) => return Err(err),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(invalid("Discord Gateway owner exited"));
+            Ok(Err(_)) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                // Retire the only Gateway owner before reconnecting. A disputed
+                // native effect remains in its original ledger entry.
+                drop(driver);
+                if let Some(flight) = worker_send.take() {
+                    super::worker_proof::invalidate(&place.dir, Some(&flight.operation))?;
+                    let _ = flight.join.join();
+                }
+                guild_events.clear();
+                driver = loop {
+                    if bridge.serve(cfg, &mut inbox, 0, false, "unavailable")? {
+                        return Ok(());
+                    }
+                    match guild_gateway(place, cfg, &mut inbox, thread.as_ref(), scope.clone()) {
+                        Ok(connected) => break connected,
+                        Err(_) => {
+                            eprintln!(
+                                "discord: guild repair is waiting for a scoped Gateway and thread readback"
+                            );
+                            for _ in 0..10 {
+                                if bridge.serve(cfg, &mut inbox, 0, false, "unavailable")? {
+                                    return Ok(());
+                                }
+                                std::thread::sleep(Duration::from_millis(100));
+                            }
+                        }
+                    }
+                };
+                continue;
             }
         };
         if let Some(flight) = &worker_send {
@@ -267,6 +283,28 @@ fn run_guild(
     }
 }
 
+fn guild_gateway(
+    place: &Place,
+    cfg: &Config,
+    inbox: &mut Inbox,
+    thread: Option<&super::team_thread::ThreadAudience<'_>>,
+    scope: Option<Value>,
+) -> io::Result<super::call_runtime::Driver> {
+    let (socket, cursor) = gateway::open(cfg)?;
+    if let Some(thread) = thread {
+        super::team_history::repair(cfg, inbox, thread)?;
+    }
+    let call_start = cfg.0["calls"].is_object().then(|| place.lock()).transpose();
+    let scope = if call_start.is_ok() { scope } else { None };
+    let driver = super::call_runtime::Driver::start(socket, cursor, cfg, &place.dir, scope);
+    drop(call_start);
+    driver.discussion_ready.store(
+        !inbox.manager()["binding"].is_null(),
+        std::sync::atomic::Ordering::Release,
+    );
+    Ok(driver)
+}
+
 fn ingest_guild(
     cfg: &Config,
     inbox: &mut Inbox,
@@ -274,18 +312,26 @@ fn ingest_guild(
     thread: Option<&super::team_thread::ThreadAudience<'_>>,
     event: &Value,
 ) -> io::Result<()> {
-    if let Some(thread) = thread
-        && super::team_thread::ingest(cfg, inbox, thread, event)?
-    {
-        return Ok(());
+    let handled = match thread {
+        Some(thread) => super::team_thread::ingest(cfg, inbox, thread, event)?,
+        None => false,
+    };
+    if !handled {
+        super::guild::ingest(
+            cfg,
+            inbox,
+            event,
+            crate::ipc::spawn::now_ms(),
+            |guild, channel, id| super::guild::current(api, cfg, guild, channel, id),
+        )?;
     }
-    super::guild::ingest(
-        cfg,
-        inbox,
-        event,
-        crate::ipc::spawn::now_ms(),
-        |guild, channel, id| super::guild::current(api, cfg, guild, channel, id),
-    )
+    if event["t"] == "MESSAGE_CREATE"
+        && thread.is_some_and(|thread| thread.route.matches(&event["d"]))
+        && let Some(id) = event["d"]["id"].as_str().filter(|id| snowflake(id))
+    {
+        inbox.checkpoint_team(id)?;
+    }
+    Ok(())
 }
 
 fn repair(
