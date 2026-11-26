@@ -368,10 +368,24 @@ pub(crate) fn pin_publication(
     source: &Value,
     nonce: &str,
 ) -> io::Result<Vec<Captured>> {
+    let mut db = Bolt::open(open_path(root, false)?).map_err(io_error)?;
+    pin_in(&mut db, source, nonce)
+}
+
+pub(crate) fn pin_original_publication(
+    root: &Path,
+    source: &Value,
+    nonce: &str,
+    identity: (u64, u64),
+) -> io::Result<Vec<Captured>> {
+    let (_pin, mut db) = open_original_writer(root, identity)?;
+    pin_in(&mut db, source, nonce)
+}
+
+fn pin_in(db: &mut Bolt, source: &Value, nonce: &str) -> io::Result<Vec<Captured>> {
     let binding = &source["binding"];
     let id = source["id"].as_str().ok_or_else(absent)?;
     let key = key(binding, id)?;
-    let mut db = Bolt::open(open_path(root, false)?).map_err(io_error)?;
     let mut tx = db.begin_rw().map_err(io_error)?;
     let files = publication_files(&tx, &key, binding, id, &source["files"])?;
     let mut root_bucket = tx.bucket_mut(b"note-files").ok_or_else(absent)?;
@@ -393,6 +407,64 @@ pub(crate) fn pin_publication(
         .map_err(io_error)?;
     tx.commit().map_err(io_error)?;
     Ok(files)
+}
+
+fn open_original_writer(root: &Path, identity: (u64, u64)) -> io::Result<(File, Bolt)> {
+    let path = open_path(root, false)?;
+    let pin = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)?;
+    let metadata = pin.metadata()?;
+    if (metadata.dev(), metadata.ino()) != identity
+        || !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o777 != 0o600
+        || !(4096..=256 << 20).contains(&metadata.len())
+    {
+        return Err(io_error("original worker mailbox identity changed"));
+    }
+    let (pin, db) = super::runtime::bounded_bolt_writer(pin)?;
+    let current = std::fs::symlink_metadata(path)?;
+    if (current.dev(), current.ino()) != identity {
+        return Err(io_error("original worker mailbox identity changed"));
+    }
+    Ok((pin, db))
+}
+
+pub(crate) fn release_prepared_publication(
+    root: &Path,
+    source: &Value,
+    publication_id: &str,
+    identity: (u64, u64),
+) -> io::Result<()> {
+    let (_pin, mut db) = open_original_writer(root, identity)?;
+    let id = source["id"].as_str().ok_or_else(absent)?;
+    let key = key(&source["binding"], id)?;
+    let mut tx = db.begin_rw().map_err(io_error)?;
+    let files = publication_files(&tx, &key, &source["binding"], id, &source["files"])?;
+    let mut root = tx.bucket_mut(b"note-files").ok_or_else(absent)?;
+    let mut note = root.bucket_mut(&key).ok_or_else(absent)?;
+    let mut manifest: Value = serde_json::from_slice(note.get(b"manifest").ok_or_else(absent)?)?;
+    if manifest["Pins"].is_null() {
+        return Ok(());
+    }
+    let pins = manifest["Pins"].as_object_mut().ok_or_else(absent)?;
+    let Some(saved) = pins.get(publication_id) else {
+        return Ok(());
+    };
+    let expected = json!(files.iter().map(|file| &file.file.id).collect::<Vec<_>>());
+    if saved != &expected {
+        return Err(io_error(
+            "original worker publication pin selection changed",
+        ));
+    }
+    pins.shift_remove(publication_id);
+    note.put(b"manifest", serde_json::to_vec(&manifest)?)
+        .map_err(io_error)?;
+    tx.commit().map_err(io_error)
 }
 
 pub(crate) fn release_publication(root: &Path, source: &Value, nonce: &str) -> io::Result<()> {

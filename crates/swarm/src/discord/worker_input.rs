@@ -1,5 +1,5 @@
 //! The connector records the worker effect before the supervisor can perform it.
-use super::config::{Config, Place, invalid, snowflake};
+use super::config::{Config, Place, PlaceLock, invalid, snowflake};
 use super::receipt::{boundary, hash, valid_boundary};
 use crate::ipc::field;
 use crate::providers::codex_receipt;
@@ -82,6 +82,8 @@ pub(crate) fn verify_connector_worker_input(
     )
 }
 
+pub(crate) type ConnectorWorkerInputGuard = (File, PlaceLock);
+
 pub(crate) fn lock_connector_worker_input(
     supervisor: &Path,
     socket: &str,
@@ -89,10 +91,10 @@ pub(crate) fn lock_connector_worker_input(
     provider: &str,
     operation: &str,
     composer: &Value,
-) -> io::Result<(File, File, File)> {
+) -> io::Result<ConnectorWorkerInputGuard> {
     let (place, _) = owned(supervisor, socket, Some(installation))?;
     // Match configure/disconnect order, then serialize worker ledger changes.
-    let (supervisor_lock, connector_lock) = place.lock()?;
+    let configuration = place.lock()?;
     let ledger_lock = lock_ledger(&place.dir)?;
     place.verify_selection()?;
     let config = place.load()?;
@@ -109,7 +111,7 @@ pub(crate) fn lock_connector_worker_input(
     if !field(&composer["origin"], "guild_id").is_empty() {
         super::worker_proof::recheck(&place, installation, provider, operation, composer)?;
     }
-    Ok((supervisor_lock, connector_lock, ledger_lock))
+    Ok((ledger_lock, configuration))
 }
 
 const LEDGER_LOCK: &str = ".rust-text-worker.lock";

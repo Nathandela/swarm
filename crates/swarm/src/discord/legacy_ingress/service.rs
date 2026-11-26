@@ -32,6 +32,8 @@ struct Final {
     text: String,
     #[serde(rename = "final")]
     final_reply: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    file_ids: Option<Vec<String>>,
 }
 
 struct Bridge {
@@ -43,8 +45,8 @@ struct Bridge {
 }
 
 impl Bridge {
-    fn open(place: &Place, cfg: &Config, row: &Candidate) -> io::Result<Self> {
-        let (directory, id, _) = voice_location(place, cfg, &row.binding)?;
+    fn open(place: &Place, cfg: &Config, binding: &Value) -> io::Result<Self> {
+        let (directory, id, _) = voice_location(place, cfg, binding)?;
         let auth = open_owner_file(&directory.join("bridge.auth"))?;
         let mut credential = String::new();
         auth.take(65).read_to_string(&mut credential)?;
@@ -85,6 +87,18 @@ impl Bridge {
         c: &Candidate,
         source: impl FnOnce() -> io::Result<Value>,
     ) -> io::Result<Option<String>> {
+        self.accept_request(|request| {
+            if original_revision(&source()?, &c.origin)? != c.origin["revision"] {
+                return Err(invalid());
+            }
+            manager_publication::accept(place, cfg, lease, c, &request)
+        })
+    }
+
+    fn accept_request(
+        &self,
+        handle: impl FnOnce(Value) -> io::Result<Value>,
+    ) -> io::Result<Option<String>> {
         let mut connection = match self.listener.accept() {
             Ok((connection, _)) => connection,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
@@ -93,10 +107,7 @@ impl Bridge {
         let result = read_tool_bytes(&connection, &self.credential).and_then(|raw| {
             let request: ManagerRequest = serde_json::from_slice(&raw)?;
             let request = serde_json::to_value(request)?;
-            if original_revision(&source()?, &c.origin)? != c.origin["revision"] {
-                return Err(invalid());
-            }
-            manager_publication::accept(place, cfg, lease, c, &request)
+            handle(request)
         });
         let output = result
             .as_ref()
@@ -329,6 +340,72 @@ impl Room for Discord {
     }
 }
 
+pub(in crate::discord) fn stage_vm_wake(place: &Place, deliver: bool) -> io::Result<bool> {
+    let cfg = personal_config(place, true)?;
+    let api = Discord::connect(&cfg)?;
+    with_vm_wake(place, &api, deliver, || {})
+}
+
+pub(super) fn with_vm_wake(
+    place: &Place,
+    room: &impl Room,
+    deliver: bool,
+    opened: impl FnOnce(),
+) -> io::Result<bool> {
+    let cfg = personal_config(place, true)?;
+    let expected = fs::symlink_metadata(place.dir.join("discord.db"))?;
+    let mut lease = ConnectorLease::acquire(place, &cfg, &expected, true)?;
+    let binding = {
+        let tx = lease.db.begin().map_err(io::Error::other)?;
+        let key = format!(
+            "{}\0{}",
+            cfg.text("installation_id"),
+            cfg.text("dm_channel_id")
+        );
+        value(&tx, "teammate_discussions", key.as_bytes())?.ok_or_else(invalid)?
+    };
+    if wake_intent::reconcile(place, &cfg, &binding, &lease)? {
+        return Ok(true);
+    }
+    activation::ready(place, &cfg, &lease.db)?;
+    room.verify(&cfg)?;
+    let bridge = Bridge::open(place, &cfg, &binding)?;
+    opened();
+    let until = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < until {
+        let mut result = Ok(true);
+        if bridge
+            .accept_request(|request| {
+                let output = manager_publication::accept_wake(
+                    place,
+                    &cfg,
+                    &mut lease,
+                    &binding,
+                    &request,
+                    |message| room.message(&cfg, message),
+                )?;
+                if deliver {
+                    result =
+                        publication::deliver_admitted_vm(place, &cfg, &mut lease, &output, room);
+                }
+                Ok(output)
+            })?
+            .is_some()
+        {
+            if !deliver {
+                println!(
+                    "Staged the original Go VM file publication using the original connector nonce format."
+                );
+            }
+            return result;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    Err(io::Error::other(
+        "no authorized original Go VM file publication was staged",
+    ))
+}
+
 pub(in crate::discord) fn run(place: &Place) -> io::Result<bool> {
     let cfg = personal_enrollment(place)?;
     let api = Discord::connect(&cfg)?;
@@ -411,7 +488,7 @@ where
             return Ok(true);
         }
         let row = pending_dispatch(&lease.db, &cfg, &message)?;
-        let bridge = Bridge::open(place, &cfg, &row)?;
+        let bridge = Bridge::open(place, &cfg, &row.binding)?;
         dispatch_under_lease(place, &cfg, &message, &mut lease, |_| fetch())?;
         settle_under_lease(place, &cfg, &message, &mut lease)?;
         let deadline = Instant::now() + Duration::from_secs(120);

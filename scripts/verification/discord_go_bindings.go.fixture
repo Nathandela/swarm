@@ -3,7 +3,11 @@ package discord
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"errors"
+
 	"fmt"
 	"path/filepath"
 	"time"
@@ -113,6 +117,61 @@ func (s *Store) FixtureQueueFinal(d TeammateDiscussion, source string, attached 
 		return s.teammateQueueOutput(d, publication, time.Now().UTC(), data)
 	}
 	return s.teammateQueueOutput(d, publication, time.Now().UTC())
+}
+
+// FixtureResumeVMFile runs Go's normal outbox resume without a transport. A
+// settled file or an uncertain authentic receipt must never reach a sender.
+func (s *Store) FixtureResumeVMFile(cfg Config, d TeammateDiscussion, uncertain bool) error {
+	connector := teammateConnector{service: &Service{Config: cfg, Store: s, Now: time.Now}}
+	err := connector.sendPending(context.Background(), d)
+	if uncertain && errors.Is(err, ErrDeliveryUncertain) {
+		return nil
+	}
+	if !uncertain && err == nil {
+		return nil
+	}
+	return fmt.Errorf("unexpected Go file recovery outcome: %v", err)
+}
+
+// FixtureReadStagedVMFile reopens the ordinary old-Go outbox and its media payload.
+func (s *Store) FixtureReadStagedVMFile(d TeammateDiscussion, phase string) ([][]byte, error) {
+	var out teammateOutput
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(teammateOutboxBucket))
+		prefix := []byte(d.InstallationID + "\x00" + d.ID + "\x00")
+		c := bucket.Cursor()
+		for key, raw := c.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, raw = c.Next() {
+			var row teammateOutput
+			if err := json.Unmarshal(raw, &row); err != nil {
+				return err
+			}
+			if row.Publication.AttemptID == "" || len(row.Publication.Files) == 0 {
+				continue
+			}
+			if out.Publication.ID != "" || !row.ExportAck || len(row.Chunks) != 1 || row.Chunks[0].State != phase {
+				return ErrConflict
+			}
+			out = row
+		}
+		if out.Publication.ID == "" {
+			return ErrNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if phase == "sent" {
+		err := s.db.View(func(tx *bolt.Tx) error {
+			key := teammateOutputKey(d.InstallationID, d.ID, out.Publication.ID)
+			if tx.Bucket([]byte(teammateFilePayloadBucket)).Get(key) != nil {
+				return ErrConflict
+			}
+			return nil
+		})
+		return nil, err
+	}
+	return s.readFilePayload(d.InstallationID, out)
 }
 
 func (s *Store) FixtureFinalPayload(d TeammateDiscussion, damage bool) (int, error) {

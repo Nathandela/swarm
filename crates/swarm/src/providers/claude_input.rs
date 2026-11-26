@@ -61,8 +61,12 @@ impl Joined {
 }
 
 enum Effect {
-    Worker { _locks: (File, File, File) },
-    Manager { _lock: File },
+    Worker {
+        _locks: crate::discord::ConnectorWorkerInputGuard,
+    },
+    Manager {
+        _lock: File,
+    },
 }
 
 struct Pending {

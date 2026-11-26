@@ -77,6 +77,40 @@ func main() {
 		}
 		return
 	}
+	if action == "vm-pin-count" {
+		pinned, err := bolt.Open(filepath.Join(dir, "dispatcher-mail.db"), 0600,
+			&bolt.Options{ReadOnly: true, Timeout: time.Second})
+		check(err)
+		defer pinned.Close()
+		count := 0
+		check(pinned.View(func(tx *bolt.Tx) error {
+			return tx.Bucket([]byte("note-files")).ForEach(func(k, v []byte) error {
+				if v != nil {
+					return nil
+				}
+				raw := tx.Bucket([]byte("note-files")).Bucket(k).Get([]byte("manifest"))
+				var row struct{ Pins map[string][]string }
+				if err := json.Unmarshal(raw, &row); err != nil {
+					return err
+				}
+				if ids := row.Pins[os.Args[3]]; len(ids) != 0 {
+					if len(ids) != 1 || ids[0] != os.Args[4] {
+						return fmt.Errorf("unexpected worker file pin")
+					}
+					count++
+				}
+				return nil
+			})
+		}))
+		fmt.Println(count)
+		return
+	}
+	if action == "vm-validate-staged-wake" {
+		data, err := voice.FixtureValidateStagedFileWake(dir, os.Args[3])
+		check(err)
+		check(json.NewEncoder(os.Stdout).Encode(data))
+		return
+	}
 	if action == "vm-read-admitted-wake" {
 		data, err := voice.FixtureAdmittedFileWake(dir, os.Args[3])
 		check(err)
@@ -251,6 +285,20 @@ func main() {
 			time.Sleep(40 * time.Millisecond)
 		}
 		check(ctx.Err())
+	case "vm-resume-publication":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
+		check(err)
+		check(store.FixtureResumeVMFile(cfg, row, os.Args[4] == "uncertain"))
+	case "vm-read-staged-publication":
+		cfg, err := discord.LoadConfig(dir)
+		check(err)
+		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
+		check(err)
+		payload, err := store.FixtureReadStagedVMFile(row, os.Args[4])
+		check(err)
+		check(json.NewEncoder(os.Stdout).Encode(payload))
 	case "publication-queue", "publication-read", "publication-phases", "publication-payload", "publication-damage":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)

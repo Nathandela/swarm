@@ -414,7 +414,7 @@ where
     F: FnOnce(&Publication) -> Post,
 {
     let tx = lease.db.begin_rw().map_err(io::Error::other)?;
-    let Some(mut out) = publication(&tx, cfg, id, false)? else {
+    let Some(out) = publication(&tx, cfg, id, false)? else {
         return Ok(true);
     };
     let (directory, scope, endpoint) = voice_location(place, cfg, &out.binding)?;
@@ -432,6 +432,81 @@ where
         || !identity(&lease.pin, &lease.source)?
         || !identity(&voice_pin, &directory.join("voice.db"))?
     {
+        return Err(invalid());
+    }
+    drop(tx);
+    send_prepared(lease, cfg, out, post)
+}
+
+pub(super) fn deliver_admitted_vm(
+    place: &Place,
+    cfg: &Config,
+    lease: &mut ConnectorLease,
+    output: &Value,
+    room: &impl service::Room,
+) -> io::Result<bool> {
+    let tx = lease.db.begin().map_err(io::Error::other)?;
+    let Some(out) = publication(&tx, cfg, field(output, "id"), false)? else {
+        return Ok(true);
+    };
+    let (path, id, endpoint) = voice_location(place, cfg, &out.binding)?;
+    let source = path.join("voice.db");
+    let (voice_pin, voice) = open_bolt(&source, 64 << 20)?;
+    let voice_tx = voice.begin().map_err(io::Error::other)?;
+    let first = wake::inspect(place, cfg, &tx, &voice_tx, &out.binding, &id, &endpoint)?;
+    room.verify(cfg)?;
+    let current = room.message(cfg, field(&first.origin, "message_id"))?;
+    if !current["message_snapshots"].is_null()
+        || original_revision(&current, &first.origin)? != first.origin["revision"]
+        || personal_config(place, true)?.0 != cfg.0
+    {
+        return Err(invalid());
+    }
+    let latest = wake::inspect(place, cfg, &tx, &voice_tx, &out.binding, &id, &endpoint)?;
+    let conversation = field(&latest.receipt.binding, "conversation_id");
+    let reference = serde_json::to_string(&[conversation, field(output, "id")])?;
+    let key = format!("publications\0{reference}");
+    let root = voice_tx.bucket(b"controller").ok_or_else(invalid)?;
+    let records = root.bucket(b"records").ok_or_else(invalid)?;
+    let original: Value = serde_json::from_slice(records.get(key.as_bytes()).ok_or_else(invalid)?)?;
+    let publication_row = &out.row["Publication"];
+    if output != &original
+        || output["exported"] != true
+        || output["discussion_source"] != latest.output_source
+        || latest.origin != first.origin
+        || latest.source != first.source
+        || latest.checkout_identity != first.checkout_identity
+        || publication_row["AdmissionID"] != latest.output_source["admission_id"]
+        || publication_row["JobID"] != latest.output_source["job_id"]
+        || publication_row["AttemptID"] != latest.output_source["attempt_id"]
+        || publication_row["Sequence"] != original["output_sequence"]
+        || out.body != field(&original, "text")
+        || !manifest_matches(&original["discussion_files"], &publication_row["Files"])
+        || out.files.is_empty()
+        || !latest.source["files"].as_array().is_some_and(|files| {
+            publication_row["Files"]
+                .as_array()
+                .is_some_and(|selected| selected.iter().all(|file| files.contains(file)))
+        })
+        || !identity(&voice_pin, &source)?
+        || !lease.source_unchanged()?
+    {
+        return Err(invalid());
+    }
+    drop(tx);
+    send_prepared(lease, cfg, out, |out| {
+        room.post(cfg, &out.nonce, &out.body, &out.files)
+    })
+}
+
+fn send_prepared(
+    lease: &mut ConnectorLease,
+    cfg: &Config,
+    mut out: Publication,
+    post: impl FnOnce(&Publication) -> Post,
+) -> io::Result<bool> {
+    let tx = lease.db.begin_rw().map_err(io::Error::other)?;
+    if value(&tx, "teammate_outbox", &out.key)?.as_ref() != Some(&out.row) {
         return Err(invalid());
     }
     out.row["Attempted"] = json!(Timestamp::now().to_string());

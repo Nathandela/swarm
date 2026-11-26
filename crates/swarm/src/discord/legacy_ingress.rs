@@ -7,9 +7,10 @@ pub(super) mod publication;
 pub(super) mod service;
 pub(super) mod source_attachment;
 mod wake;
+mod wake_intent;
 
 use super::{
-    config::{Config, Place, open_owner_file, snowflake},
+    config::{Config, LockDescription, Place, PlaceLock, open_owner_file, snowflake},
     legacy_discussions::operation,
     legacy_state::{bounded_writer, verify_controls_place, writable_pin},
 };
@@ -366,11 +367,11 @@ fn personal_config(place: &Place, vm: bool) -> io::Result<Config> {
 }
 
 struct ConnectorLease {
-    _configuration: (fs::File, fs::File),
-    _bridge: fs::File,
+    db: Bolt,
     source: PathBuf,
     pin: fs::File,
-    db: Bolt,
+    _bridge: LockDescription,
+    _configuration: PlaceLock,
 }
 
 impl ConnectorLease {
@@ -385,9 +386,9 @@ impl ConnectorLease {
         foreground: bool,
     ) -> io::Result<Self> {
         let configuration = place.lock()?;
-        let bridge = runtime::lock(&place.dir.join("bridge.lock"))?;
+        let bridge = LockDescription(runtime::lock(&place.dir.join("bridge.lock"))?);
         let current = if foreground {
-            personal_enrollment(place)?
+            personal_config(place, cfg.text("project_access") == "vm")?
         } else {
             retained_config(place)?
         };
@@ -1076,7 +1077,8 @@ mod tests {
             ("semantic_send", json!({"op":"ok","operation_id":operation})),
         ];
         for (op, mut response) in expected {
-            let (tag, bytes) = wire::read_frame(&mut stream).unwrap();
+            let (tag, bytes) = wire::read_frame(&mut stream)
+                .unwrap_or_else(|error| panic!("original owner fixture expected {op}: {error}"));
             assert_eq!(tag, wire::CONTROL);
             let actual: Value = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(actual["op"], op);
@@ -1190,7 +1192,9 @@ mod tests {
             });
             let result = dispatch_with(&place, "701", false, |_| Ok(current));
             assert_eq!(result.is_ok(), acknowledge, "{result:?}");
-            owner.join().unwrap();
+            owner.join().unwrap_or_else(|_| {
+                panic!("original owner fixture failed; dispatch returned {result:?}")
+            });
             drop(owner_lock);
             assert!(
                 dispatch_with(&place, "701", false, |_| panic!(
@@ -1318,6 +1322,52 @@ mod tests {
             before,
             [fs::read(&connector).unwrap(), fs::read(&voice).unwrap()]
         );
+    }
+
+    #[test]
+    fn retained_original_go_stages_native_vm_file_call() {
+        let Some(root) = std::env::var_os("SWARM_TEST_DISCORD_ADMITTED_FILE_WAKE_ROOT") else {
+            return;
+        };
+        let root = Path::new(&root);
+        let place = Place::for_supervisor(root).unwrap();
+        let cfg = place.load().unwrap();
+        let port = std::env::var("SWARM_TEST_DISCORD_REST_PORT")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let api = super::super::rest::Discord::loopback_fixture(&cfg, port).unwrap();
+        let marker = root.join("rust-wake-ready");
+        let deliver = std::env::var("SWARM_TEST_DISCORD_WAKE_DELIVERY").unwrap_or_default();
+        let run = service::with_vm_wake(&place, &api, !deliver.is_empty(), || {
+            fs::write(marker, b"ready").unwrap()
+        });
+        if std::env::var("SWARM_TEST_DISCORD_WAKE_RECOVER")
+            .is_ok_and(|fault| fault == "after-voice")
+        {
+            assert!(
+                run.unwrap_err()
+                    .to_string()
+                    .contains("durable or ambiguous referent")
+            );
+        } else if std::env::var_os("SWARM_TEST_DISCORD_WAKE_REPLAY").is_some() {
+            assert!(run.unwrap_err().to_string().contains("unconfirmed effects"));
+        } else if deliver == "revoked" {
+            assert!(
+                run.unwrap_err()
+                    .to_string()
+                    .contains("outside the enrolled owner DM")
+            );
+        } else if deliver == "uncertain" {
+            assert!(
+                run.unwrap_err()
+                    .to_string()
+                    .contains("outcome remains unresolved")
+            );
+        } else {
+            assert!(run.unwrap());
+        }
+        assert!(!activation::selected(&place).unwrap());
     }
 
     #[test]

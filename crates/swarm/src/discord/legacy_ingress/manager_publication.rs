@@ -1,6 +1,7 @@
 //! Persist one plain final native manager tool call in the original Go ledgers.
 use super::*;
 use crate::discord::provenance;
+use crate::supervisor::mail_files::Captured;
 use jiff::Timestamp;
 
 const EMPTY_TIME: &str = "0001-01-01T00:00:00Z";
@@ -136,25 +137,59 @@ fn native_proof(
     Ok(turn.to_owned())
 }
 
+struct Speech<'a> {
+    logical: &'a str,
+    text: &'a str,
+    source: Value,
+    files: &'a [Captured],
+    checkout: Option<&'a str>,
+}
+
+impl Speech<'_> {
+    fn metadata(&self) -> io::Result<Value> {
+        if self.files.is_empty() {
+            return Ok(Value::Null);
+        }
+        Ok(serde_json::to_value(
+            self.files.iter().map(|file| &file.file).collect::<Vec<_>>(),
+        )?)
+    }
+}
+
+pub(super) fn publication_id(
+    conversation: &str,
+    sequence: u64,
+    turn: &str,
+    logical: &str,
+) -> io::Result<String> {
+    Ok(format!(
+        "publication:{sequence}:{}",
+        digest(&json!({
+            "Conversation":conversation,"Admission":sequence,"Turn":turn,"Logical":logical
+        }))?
+    ))
+}
+
 fn stage_records<'tx>(
     tx: impl TxRwApi<'tx>,
     mut original: Receipt,
     turn: &str,
-    logical: &str,
-    text: &str,
-    origin: &Value,
+    speech: &Speech<'_>,
 ) -> io::Result<Value> {
+    let logical = speech.logical;
+    let text = speech.text;
+    let files = speech.metadata()?;
+    let manifest = if files.is_null() {
+        Value::Null
+    } else {
+        json!(crate::ipc::escape_json(serde_json::to_string(&files)?))
+    };
     let conversation = field(&original.binding, "conversation_id").to_owned();
     let seq = original.admission["sequence"]
         .as_u64()
         .ok_or_else(invalid)?;
     let nonce = field(&original.admission, "native_input_id").to_owned();
-    let pub_ref = format!(
-        "publication:{seq}:{}",
-        digest(&json!({
-            "Conversation":conversation,"Admission":seq,"Turn":turn,"Logical":logical
-        }))?
-    );
+    let pub_ref = publication_id(&conversation, seq, turn, logical)?;
     let publication_key = key("publications", &conversation, &pub_ref)?;
     let permit_key = key("permits", &conversation, turn)?;
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
@@ -167,6 +202,8 @@ fn stage_records<'tx>(
             && saved["admission"] == seq
             && saved["native_turn_id"] == turn
             && saved["final"] == true
+            && saved["discussion_files"] == manifest
+            && saved["discussion_source"] == speech.source
         {
             return Ok(saved);
         }
@@ -207,8 +244,13 @@ fn stage_records<'tx>(
     let mut result = json!({"id":pub_ref,"conversation_id":conversation,"admission":seq,
         "speech_epoch":epoch,"native_turn_id":turn,"sequence":1,"output_sequence":output,
         "text":text,"text_hash":format!("{:x}",Sha256::digest(text.as_bytes())),"final":true,"speak":true,
-        "discussion_source":{"admission_id":origin["request_id"]}});
-    let project = field(&original.admission, "project");
+        "discussion_source":speech.source});
+    if !manifest.is_null() {
+        result["discussion_files"] = manifest;
+    }
+    let project = speech
+        .checkout
+        .unwrap_or_else(|| field(&original.admission, "project"));
     if !project.is_empty() {
         result["discussion_projects"] =
             json!(crate::ipc::escape_json(serde_json::to_string(&[project])?));
@@ -226,24 +268,36 @@ fn stage_records<'tx>(
     Ok(result)
 }
 
+fn output_hash(text: &Value, files: &Value) -> io::Result<String> {
+    if files.is_null() {
+        digest(text)
+    } else {
+        digest(&json!([text, files, ""]))
+    }
+}
+
 fn queue(
     cfg: &Config,
     lease: &mut ConnectorLease,
-    candidate: &Candidate,
+    binding: &Value,
     output: &Value,
+    speech: &Speech<'_>,
 ) -> io::Result<()> {
     let install = cfg.text("installation_id");
     let id = field(output, "id");
-    let discussion = field(&candidate.binding, "ID");
+    let discussion = field(binding, "ID");
     let key = format!("{install}\0{discussion}\0{id}");
     let nonce = &digest(&json!([install, discussion, id, 0]))?[..24];
     let nonce_key = format!("{install}\0nonce:{nonce}");
     let count_key = format!("{install}\0outbox_count");
     let hash = digest(&output["text"])?;
+    let files = speech.metadata()?;
+    let body_hash = output_hash(&output["text"], &files)?;
     let mut tx = lease.db.begin_rw().map_err(io::Error::other)?;
     if let Some(old) = value(&tx, "teammate_outbox", key.as_bytes())? {
         if old["Publication"]["ID"] == id
-            && old["BodyHash"] == hash
+            && old["BodyHash"] == body_hash
+            && old["Publication"]["Files"] == files
             && old["Chunks"][0]["id"] == nonce
         {
             return Ok(());
@@ -267,14 +321,33 @@ fn queue(
     if count >= 2048 {
         return Err(invalid());
     }
-    let record = json!({
+    let mut record = json!({
         "ExportAck":false,"Internal":false,"SettledAt":EMPTY_TIME,"Created":Timestamp::now().to_string(),
-        "Publication":{"SystemCause":"","ID":id,"Body":"","AdmissionID":candidate.origin["request_id"],
-            "JobID":"","AttemptID":"","QuestionID":"","QuestionHash":"","Sequence":output["output_sequence"]},
-        "Route":candidate.binding["Route"],"DiscussionID":discussion,"BodyHash":hash,
+        "Publication":{"SystemCause":"","ID":id,"Body":"","AdmissionID":speech.source["admission_id"],
+            "JobID":field(&speech.source,"job_id"),"AttemptID":field(&speech.source,"attempt_id"),
+            "QuestionID":"","QuestionHash":"","Sequence":output["output_sequence"]},
+        "Route":binding["Route"],"DiscussionID":discussion,"BodyHash":body_hash,
         "Chunks":[{"id":nonce,"body":output["text"],"state":"prepared"}],
         "ChunkHashes":[hash],"Attempted":EMPTY_TIME,"Error":""
     });
+    if !files.is_null() {
+        record["Publication"]["Files"] = files;
+        let payload: Vec<_> = speech
+            .files
+            .iter()
+            .flat_map(|file| file.data.iter().copied())
+            .collect();
+        let mut bucket = tx
+            .bucket_mut(b"teammate_file_payloads")
+            .ok_or_else(invalid)?;
+        let used: usize = bucket.iter_entries().map(|(_, value)| value.len()).sum();
+        if used.saturating_add(payload.len()) > 64 << 20 {
+            return Err(invalid());
+        }
+        bucket
+            .put(key.as_bytes(), payload)
+            .map_err(io::Error::other)?;
+    }
     tx.bucket_mut(b"teammate_outbox")
         .ok_or_else(invalid)?
         .put(key.as_bytes(), go_json(&record)?)
@@ -292,18 +365,20 @@ fn queue(
 fn acknowledge_export(
     cfg: &Config,
     lease: &mut ConnectorLease,
-    candidate: &Candidate,
+    binding: &Value,
     output: &Value,
 ) -> io::Result<()> {
     let key = format!(
         "{}\0{}\0{}",
         cfg.text("installation_id"),
-        field(&candidate.binding, "ID"),
+        field(binding, "ID"),
         field(output, "id")
     );
     let mut tx = lease.db.begin_rw().map_err(io::Error::other)?;
     let mut row = value(&tx, "teammate_outbox", key.as_bytes())?.ok_or_else(invalid)?;
-    if row["BodyHash"] != digest(&output["text"])? || row["Publication"]["ID"] != output["id"] {
+    if row["BodyHash"] != output_hash(&output["text"], &row["Publication"]["Files"])?
+        || row["Publication"]["ID"] != output["id"]
+    {
         return Err(invalid());
     }
     if row["ExportAck"] == true {
@@ -378,8 +453,15 @@ pub(super) fn accept(
     if !project.is_empty() && !grants::project(cfg, project) {
         return Err(invalid());
     }
-    let mut output = stage_records(tx, receipt, &turn, logical, text, &candidate.origin)?;
-    queue(cfg, lease, candidate, &output)?;
+    let speech = Speech {
+        logical,
+        text,
+        source: json!({"admission_id":candidate.origin["request_id"]}),
+        files: &[],
+        checkout: None,
+    };
+    let mut output = stage_records(tx, receipt, &turn, &speech)?;
+    queue(cfg, lease, &candidate.binding, &output, &speech)?;
     if output["exported"] != true {
         let tx = voice.begin_rw().map_err(io::Error::other)?;
         let receipt = inspect_voice(
@@ -397,8 +479,153 @@ pub(super) fn accept(
         output["exported"] = json!(true);
         apply_voice(tx, receipt.header, &[(publication, output.clone())])?;
     }
-    acknowledge_export(cfg, lease, candidate, &output)?;
+    acknowledge_export(cfg, lease, &candidate.binding, &output)?;
     Ok(output)
+}
+
+pub(super) fn accept_wake(
+    place: &Place,
+    cfg: &Config,
+    lease: &mut ConnectorLease,
+    binding: &Value,
+    request: &Value,
+    current: impl FnOnce(&str) -> io::Result<Value>,
+) -> io::Result<Value> {
+    let call = &request["call"];
+    let args = &call["arguments"];
+    let logical = field(args, "output_id");
+    let text = field(args, "text");
+    let ids = args["file_ids"]
+        .as_array()
+        .filter(|files| (1..=10).contains(&files.len()))
+        .ok_or_else(invalid)?;
+    if request["version"] != 1
+        || call["name"] != "publish"
+        || args.as_object().is_none_or(|fields| fields.len() != 5)
+        || args["sequence"] != 1
+        || args["final"] != true
+        || !args["text"].is_string()
+        || text.trim() != text
+        || text.encode_utf16().count() > 1800
+        || text.contains('\0')
+        || logical.is_empty()
+        || logical.len() > 64
+        || logical.starts_with("publication:")
+        || !logical.bytes().all(|b| (33..=126).contains(&b))
+    {
+        return Err(invalid());
+    }
+    let (directory, id, endpoint) = voice_location(place, cfg, binding)?;
+    open_owner_file(&directory.join("voice.initialized"))?;
+    let path = directory.join("voice.db");
+    let (pin, mut db) = bounded_writer(writable_pin(&path)?)?;
+    let tx = db.begin_rw().map_err(io::Error::other)?;
+    let proof = {
+        let conn = lease.db.begin().map_err(io::Error::other)?;
+        wake::inspect(place, cfg, &conn, &tx, binding, &id, &endpoint)?
+    };
+    let origin = &proof.origin;
+    let parent = current(field(origin, "message_id"))?;
+    if !parent["message_snapshots"].is_null()
+        || request["conversation_id"] != proof.receipt.binding["conversation_id"]
+        || request["session_id"]
+            != field(&proof.receipt.binding, "session_id")
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+        || original_revision(&parent, origin)? != origin["revision"]
+        || personal_config(place, true)?.0 != cfg.0
+        || !identity(&pin, &path)?
+        || !lease.source_unchanged()?
+    {
+        return Err(invalid());
+    }
+    let turn = native_proof(place, cfg, &proof.receipt, args, &call["meta"])?;
+    let sequence = proof.receipt.admission["sequence"]
+        .as_u64()
+        .ok_or_else(invalid)?;
+    let conversation = field(&proof.receipt.binding, "conversation_id").to_owned();
+    let publication = publication_id(&conversation, sequence, &turn, logical)?;
+    let mut selection = proof.source;
+    let candidates = selection["files"].as_array().ok_or_else(invalid)?;
+    let mut files = Vec::with_capacity(ids.len());
+    for id in ids {
+        let file = candidates
+            .iter()
+            .find(|file| id.is_string() && file["id"] == *id)
+            .ok_or_else(invalid)?;
+        if files.contains(file) {
+            return Err(invalid());
+        }
+        files.push(file.clone());
+    }
+    selection["files"] = json!(files);
+    let checkout = Path::new(field(&selection["binding"], "Project"));
+    let physical = fs::symlink_metadata(checkout)?;
+    if !physical.is_dir()
+        || fs::canonicalize(checkout)? != checkout
+        || (physical.dev(), physical.ino()) != proof.checkout_identity
+        || personal_config(place, true)?.0 != cfg.0
+    {
+        return Err(invalid());
+    }
+    let mailbox = wake_intent::prepare(
+        place,
+        cfg,
+        binding,
+        &path,
+        json!({
+            "conversation":conversation, "sequence":sequence, "turn":turn,"logical":logical,
+            "publication":publication,"native_input":proof.receipt.admission["native_input_id"],
+            "wake":proof.receipt.admission["source_id"],
+            "admission_hash":format!("{:x}",Sha256::digest(&proof.receipt.raw)),
+            "text_hash":format!("{:x}",Sha256::digest(text.as_bytes())),
+            "output_source":proof.output_source,"source":selection
+        }),
+    )?;
+    wake_fault("before-pin");
+    let captures = supervisor::mail_store::pin_original_publication(
+        place.supervisor_root(),
+        &selection,
+        &publication,
+        mailbox,
+    )?;
+    wake_fault("after-pin");
+    let speech = Speech {
+        logical,
+        text,
+        source: proof.output_source,
+        files: &captures,
+        checkout: checkout.to_str(),
+    };
+    let mut output = stage_records(tx, proof.receipt, &turn, &speech)?;
+    wake_fault("after-voice");
+    queue(cfg, lease, binding, &output, &speech)?;
+    if output["exported"] != true {
+        let tx = db.begin_rw().map_err(io::Error::other)?;
+        let root = tx.bucket(b"controller").ok_or_else(invalid)?;
+        let header: Value = serde_json::from_slice(root.get(b"state").ok_or_else(invalid)?)?;
+        output["exported"] = json!(true);
+        apply_voice(
+            tx,
+            header,
+            &[(
+                key("publications", &conversation, &publication)?,
+                output.clone(),
+            )],
+        )?;
+    }
+    acknowledge_export(cfg, lease, binding, &output)?;
+    wake_fault("after-outbox");
+    wake_intent::clear(place)?;
+    Ok(output)
+}
+
+fn wake_fault(_point: &str) {
+    #[cfg(test)]
+    if std::env::var("SWARM_TEST_DISCORD_WAKE_FAULT").is_ok_and(|point| point == _point) {
+        std::process::exit(86);
+    }
 }
 
 pub(super) fn complete(

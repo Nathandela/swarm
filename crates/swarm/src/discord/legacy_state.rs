@@ -1,7 +1,7 @@
 //! Offline-only adoption of retained Go connector evidence.
 use super::config::{Config, Place, open_owner_file};
 use crate::{checkout::state::receipts::open_bolt, ipc::field, supervisor::runtime};
-use bbolt_rs::{Bolt, BucketApi, BucketRwApi, DbApi, DbRwAPI, TxApi, TxRwApi, TxRwRefApi};
+use bbolt_rs::{BucketApi, BucketRwApi, DbApi, DbRwAPI, TxApi, TxRwApi, TxRwRefApi};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -9,10 +9,7 @@ use std::{
     collections::BTreeMap,
     fs,
     io::{self, Read},
-    os::{
-        fd::AsRawFd,
-        unix::fs::{MetadataExt, OpenOptionsExt},
-    },
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::Path,
     time::{Duration, Instant},
 };
@@ -471,24 +468,7 @@ pub(super) fn writable_pin(path: &Path) -> io::Result<fs::File> {
     Ok(file)
 }
 
-pub(super) fn bounded_writer(pin: fs::File) -> io::Result<(fs::File, Bolt)> {
-    let (send, recv) = std::sync::mpsc::sync_channel(1);
-    // Bolt::open waits for the flock. Keep that wait bounded at this CLI entry
-    // point, and do not let the waiting thread perform any mutation.
-    std::thread::Builder::new().spawn(move || {
-        let alias = if cfg!(target_os = "macos") {
-            "/dev/fd"
-        } else {
-            "/proc/self/fd"
-        };
-        let db = Bolt::open(format!("{alias}/{}", pin.as_raw_fd()))
-            .map(|db| (pin, db))
-            .map_err(io::Error::other);
-        let _ = send.send(db);
-    })?;
-    recv.recv_timeout(Duration::from_secs(2))
-        .map_err(|_| io::Error::other("original connector database is locked or unavailable"))?
-}
+pub(super) use runtime::bounded_bolt_writer as bounded_writer;
 
 pub(super) fn audience(
     place: &Place,

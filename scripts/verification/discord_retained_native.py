@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Original Go managed personal room with an installed, loopback-only Codex."""
 import base64
+import email.parser
+import email.policy
+import hashlib
 import http.server
 import json
 import shlex
@@ -25,8 +28,9 @@ def run(bin, env, *args):
 
 
 
-def discord_fixture(acknowledge):
+def discord_fixture(acknowledge, wake=False, expected_file=None, revoke=False):
     posts = []
+    app_reads = 0
     messages = {
         id: dict(id=id, type=0, channel_id="400", author=dict(id="200", username="synthetic owner"),
                  attachments=[], content=text)
@@ -34,6 +38,10 @@ def discord_fixture(acknowledge):
                          ("701", "Use project former. Retained real native loopback input."),
                          ("702", "Switch to secondary. Second retained real native loopback input.")]
     }
+
+    if wake:
+        messages["701"]["content"] = "offline original owner prompt"
+        messages["701"]["author"]["username"] = "offline fixture"
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -48,11 +56,14 @@ def discord_fixture(acknowledge):
             self.wfile.write(raw)
 
         def do_GET(self):
+            nonlocal app_reads
             assert self.headers["Authorization"] == "Bot synthetic-unused-credential"
             if self.path == "/api/v10/users/@me":
+                app_reads += 1
                 self.payload(dict(id="100", username="fixturebot", bot=True))
             elif self.path == "/api/v10/channels/400":
-                self.payload(dict(id="400", type=1, recipients=[dict(id="200", bot=False)]))
+                actor = "300" if revoke and app_reads > 1 else "200"
+                self.payload(dict(id="400", type=1, recipients=[dict(id=actor, bot=False)]))
             elif self.path == "/api/v10/channels/400/messages?limit=100":
                 self.payload([messages["702"], messages["701"]] if posts else [messages["501"]])
             elif self.path.startswith("/api/v10/channels/400/messages/"):
@@ -63,15 +74,34 @@ def discord_fixture(acknowledge):
         def do_POST(self):
             assert self.path == "/api/v10/channels/400/messages"
             assert self.headers["Authorization"] == "Bot synthetic-unused-credential"
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            raw = self.rfile.read(int(self.headers["Content-Length"]))
+            attachments = []
+            if wake:
+                content_type = self.headers["Content-Type"].encode()
+                envelope = b"Content-Type: " + content_type + b"\r\nMIME-Version: 1.0\r\n\r\n" + raw
+                multipart = email.parser.BytesParser(policy=email.policy.default).parsebytes(envelope)
+                assert multipart.is_multipart()
+                parts = {part.get_param("name", header="content-disposition"): part
+                         for part in multipart.iter_parts()}
+                assert set(parts) == {"payload_json", "files[0]"}
+                body = json.loads(parts["payload_json"].get_payload(decode=True))
+                file_part = parts["files[0]"]
+                assert file_part.get_filename() == "completion.csv"
+                assert file_part.get_content_type() == "text/csv"
+                assert file_part.get_payload(decode=True) == expected_file
+                assert body["attachments"] == [{"id": 0, "filename": "completion.csv"}]
+                assert body["content"] == "Verified retained worker file."
+                attachments = [dict(id="987", filename="completion.csv", size=len(expected_file))]
+            else:
+                body = json.loads(raw)
+                assert body["content"] == "Verified native final reply."
             assert body["enforce_nonce"] is True and body["allowed_mentions"] == {"parse": []}
-            assert body["content"] == "Verified native final reply."
             nonce = body["nonce"]
             assert len(nonce) == 24 and nonce not in posts
             posts.append(nonce)
             if acknowledge:
                 self.payload(dict(id=str(899 + len(posts)), channel_id="400", author=dict(id="100"),
-                                  content=body["content"], nonce=nonce, attachments=[]))
+                                  content=body["content"], nonce=nonce, attachments=attachments))
             else:
                 self.close_connection = True
                 self.connection.shutdown(socket.SHUT_RDWR)
@@ -171,7 +201,7 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge, vm=False):
         source.server_close()
 
 
-def admit_vm_worker_wake(go, fixture, codex, rust_test, base):
+def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
     assert os.environ.get("SWARM_NATIVE_FIXTURE_OS_ISOLATED") == "1"
     assert os.stat("/proc/self/ns/net").st_ino != int(os.environ["SWARM_NATIVE_FIXTURE_HOST_NETNS"])
     for part in ("home", "home/.codex", "bin", "work", "state"):
@@ -189,38 +219,59 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base):
     stop = base / "stop-original-controller"
     waiting = threading.Event()
     release = threading.Event()
+    worker_release = threading.Event()
     selected = set()
     lock = threading.Lock()
-    problems = []
     capture = []
     tool_outputs = []
+    file_calls = []
+    file_sha = hashlib.sha256(original_bytes).hexdigest()
+    file_id = hashlib.sha256(f"completion.csv\0{file_sha}".encode()).hexdigest()
 
     def choose(body):
         observed = json.dumps(body["input"], ensure_ascii=False)
         tool_outputs.extend(item["output"] for item in body["input"]
                             if item.get("type") == "function_call_output")
         if "Worker message and identity" in observed:
+            names = [(tool.get("name"), child.get("name"))
+                     for tool in body.get("tools", []) for child in tool.get("tools", [])
+                     if child.get("name") == "publish"]
+            if not names:
+                return None
+            assert len(names) == 1, names
             capture.append(observed)
             waiting.set()
-            release.wait(timeout=30)
+            if not release.wait(timeout=60) or len(file_calls) >= 3:
+                return None
+            namespace, name = names[0]
+            selected_files = [[file_id, file_id], ["0" * 64], [file_id]][len(file_calls)]
+            file_calls.append(selected_files)
+            return namespace, name, dict(output_id="retained-worker-file", sequence=1,
+                                         text="Verified retained worker file.", final=True,
+                                         file_ids=selected_files)
+        shell = next((tool["name"] for tool in body.get("tools", [])
+                      if tool.get("name") in ("exec_command", "shell_command")), None)
+        if shell is None:
             return None
+        is_worker = "rollover-worker-file-fixture" in observed and "offline original owner prompt" not in observed
+        command = None
         with lock:
-            if "rollover-worker-file-fixture" in observed and "offline original owner prompt" not in observed and "worker" not in selected and "spawn" in selected:
+            if is_worker and "worker" not in selected and "spawn" in selected:
                 selected.add("worker")
                 command = f"swarm teammate message --kind complete --file {shlex.quote(str(worker_file))}"
             elif "offline original owner prompt" in observed and "spawn" not in selected:
                 selected.add("spawn")
                 command = f"swarm spawn --cli codex --dir {shlex.quote(str(project))} --prompt rollover-worker-file-fixture"
-            else:
-                return None
-        for tool in body["tools"]:
-            if tool.get("name") in ("exec_command", "shell_command"):
-                field = "cmd" if tool["name"] == "exec_command" else "command"
-                return None, tool["name"], {field: command}
-        problems.append([tool.get("name") for tool in body["tools"]])
-        return None
+        if command is None:
+            if is_worker:
+                worker_release.wait(timeout=90)
+            return None
+        field = "cmd" if shell == "exec_command" else "command"
+        return None, shell, {field: command}
 
     model, _ = model_fixture(base, False, fixture_tool=choose)
+    discord, posts = discord_fixture(mode != "uncertain", wake=True,
+                                     expected_file=original_bytes, revoke=mode == "revoked")
     try:
         place = base / "connector"
         run(fixture, env, "create", place, base / "state", "personal", "true", project)
@@ -242,10 +293,10 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base):
                                        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 try:
                     deadline = time.monotonic() + 45
-                    while not waiting.wait(0.2) and ctl.poll() is None and not problems:
+                    while not waiting.wait(0.2) and ctl.poll() is None:
                         if time.monotonic() > deadline:
                             break
-                    assert waiting.is_set(), (selected, problems, model.history, listed(env),
+                    assert waiting.is_set(), (selected, model.history, listed(env),
                                               tool_outputs[-4:],
                                               ctl.stderr.read() if ctl.poll() is not None else "running")
                     stop.touch()
@@ -263,8 +314,80 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base):
                         "--nocapture")
                     restored, = json.loads(run(fixture, env, "vm-read-admitted-wake", ledger.parent, base / "state"))
                     assert restored == stored
+                    rust_env["SWARM_TEST_DISCORD_REST_PORT"] = str(discord.server_port)
+                    fault = mode in ("before-pin", "after-pin", "after-voice", "after-outbox")
+                    if fault:
+                        rust_env["SWARM_TEST_DISCORD_WAKE_FAULT"] = mode
+                    elif mode != "prepared":
+                        rust_env["SWARM_TEST_DISCORD_WAKE_DELIVERY"] = mode
+                    intent = place / ".rust-vm-file-intent-v1.json"
+                    connector = place / "discord.db"
+                    before_crash = (connector.read_bytes(), ledger.read_bytes())
+                    stager = subprocess.Popen([rust_test, "retained_original_go_stages_native_vm_file_call", "--nocapture"],
+                                              env=rust_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    try:
+                        await_value(lambda: (base / "state/rust-wake-ready").exists() or stager.poll() is not None)
+                        assert stager.poll() is None, stager.communicate()
+                        release.set()
+                        output, errors = stager.communicate(timeout=32)
+                        if fault:
+                            assert stager.returncode == 86, (output, errors, tool_outputs)
+                            proposal = json.loads(intent.read_text())
+                            publication = proposal["request"]["publication"]
+                            assert proposal["request"]["source"]["files"][0]["id"] == file_id
+                            assert len(proposal["nonce"]) == 24
+                            old_pin = lambda: run(fixture, env, "vm-pin-count", base / "state",
+                                                  publication, file_id).strip()
+                            assert old_pin() == ("0" if mode == "before-pin" else "1")
+                            state_after_fault = (connector.read_bytes(), ledger.read_bytes())
+                            assert (state_after_fault[0] != before_crash[0]) == (mode == "after-outbox")
+                            assert (state_after_fault[1] != before_crash[1]) == (mode in ("after-voice", "after-outbox"))
+                            replay = rust_env.copy()
+                            del replay["SWARM_TEST_DISCORD_WAKE_FAULT"]
+                            replay["SWARM_TEST_DISCORD_WAKE_RECOVER"] = mode
+                            run(rust_test, replay, "retained_original_go_stages_native_vm_file_call", "--nocapture")
+                            assert posts == []
+                            assert old_pin() == ("1" if mode in ("after-voice", "after-outbox") else "0")
+                            assert intent.exists() == (mode == "after-voice")
+                            assert (connector.read_bytes(), ledger.read_bytes()) == state_after_fault
+                            if mode == "after-outbox":
+                                old = json.loads(run(fixture,env,"vm-read-staged-publication",place,"original-room","prepared"))
+                                assert len(old) == 1 and base64.b64decode(old[0]) == original_bytes
+                            return
+                        assert stager.returncode == 0, (output, errors, tool_outputs)
+                        assert not intent.exists()
+                        assert len(file_calls) == 3
+                        states = json.loads(run(fixture, env, "publication-phases", place, "original-room"))
+                        phase = "prepared" if mode == "revoked" else mode
+                        assert len(states) == 1 and states[0].startswith(f"{phase} true "), states
+                        nonce = states[0].split()[-1]
+                        assert posts == ([] if phase == "prepared" else [nonce])
+                        staged = json.loads(run(fixture, env, "vm-read-staged-publication", place, "original-room", phase))
+                        if mode == "sent":
+                            assert staged is None
+                        else:
+                            assert len(staged) == 1 and base64.b64decode(staged[0]) == original_bytes
+                        voice_staged, = json.loads(run(fixture, env, "vm-validate-staged-wake", ledger.parent, base / "state"))
+                        assert base64.b64decode(voice_staged) == original_bytes
+                        if mode == "uncertain":
+                            replay = rust_env | {"SWARM_TEST_DISCORD_WAKE_REPLAY": "1"}
+                            run(rust_test, replay, "retained_original_go_stages_native_vm_file_call", "--nocapture")
+                            assert posts == [nonce]
+                            assert json.loads(run(fixture, env, "publication-phases", place, "original-room")) == states
+                        if mode in ("sent", "uncertain"):
+                            reopened = json.loads(run(fixture, env, "activate", place, "original-room"))
+                            assert reopened.pop("generation") >= initial.pop("generation") + 1
+                            assert reopened == initial
+                            run(fixture, env, "vm-resume-publication", place, "original-room", mode)
+                            assert json.loads(run(fixture, env, "publication-phases", place, "original-room")) == states
+                            assert posts == [nonce]
+                    finally:
+                        if stager.poll() is None:
+                            stager.terminate()
+                            stager.communicate(timeout=10)
                 finally:
                     release.set()
+                    worker_release.set()
                     if ctl.poll() is None:
                         ctl.terminate()
                         _stdout, stderr = ctl.communicate(timeout=10)
@@ -274,16 +397,20 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base):
                 for row in listed(env):
                     owner(env, {"op": "kill", "session_id": row["id"]})
     finally:
+        discord.shutdown()
+        discord.server_close()
         model.shutdown()
         model.server_close()
 
 
 if __name__ == "__main__":
     go, fixture, codex, rust_test = (str(Path(arg).resolve(strict=True)) for arg in sys.argv[1:])
-    if os.environ.get("SWARM_DISCORD_ADMITTED_WAKE") == "1":
-        with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
-            admit_vm_worker_wake(go, fixture, codex, rust_test, Path(directory))
-        print("PASS original Go admitted native worker wake fixture")
+    if modes := os.environ.get("SWARM_DISCORD_ADMITTED_WAKE"):
+        for mode in ("prepared", "sent", "uncertain", "revoked") if modes == "1" else modes.split(","):
+            assert mode in ("prepared", "sent", "uncertain", "revoked", "before-pin", "after-pin", "after-voice", "after-outbox")
+            with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
+                admit_vm_worker_wake(go, fixture, codex, rust_test, Path(directory), mode)
+            print(f"PASS original Go admitted native worker wake fixture ({mode})")
         sys.exit(0)
     for acknowledge in (True, False):
         with tempfile.TemporaryDirectory(prefix="dn-", dir="/tmp") as directory:

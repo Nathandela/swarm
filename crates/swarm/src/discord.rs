@@ -1,7 +1,8 @@
 mod worker_input;
 pub(crate) use worker_input::{
-    lock_connector_worker_input, verify_connector_worker_input, worker_input_available,
-    worker_input_guild_available, worker_input_installation, worker_installation_enrolled,
+    ConnectorWorkerInputGuard, lock_connector_worker_input, verify_connector_worker_input,
+    worker_input_available, worker_input_guild_available, worker_input_installation,
+    worker_installation_enrolled,
 };
 mod call_live;
 
@@ -399,6 +400,8 @@ impl<'a> Request<'a> {
                     "controls",
                     "activate-personal",
                     "inspect-personal-vm",
+                    "stage-personal-vm-wake",
+                    "deliver-personal-vm-wake",
                 ];
                 &[
                     "settle-personal-ingress",
@@ -556,10 +559,18 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
             ];
             let export = req.get("read-personal-publication-file");
             let source = req.get("read-personal-source-attachment");
-            if req.on("inspect-personal-vm") {
-                if req.on("controls")
+            let vm_modes = [
+                "inspect-personal-vm",
+                "stage-personal-vm-wake",
+                "deliver-personal-vm-wake",
+            ];
+            let selected_vm = vm_modes.iter().filter(|flag| req.on(flag)).count();
+            if selected_vm > 0 {
+                if selected_vm != 1
+                    || req.on("controls")
                     || req.on("rollback")
                     || req.on("activate-personal")
+                    || (!req.on("inspect-personal-vm") && req.on("dry-run"))
                     || export.is_some()
                     || source.is_some()
                     || ["file-id", "file-sha256", "offset"]
@@ -569,7 +580,14 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                 {
                     return Err(invalid("select one migration operation"));
                 }
-                return legacy_ingress::activation::inspect_vm(&place);
+                return if req.on("inspect-personal-vm") {
+                    legacy_ingress::activation::inspect_vm(&place)
+                } else {
+                    legacy_ingress::service::stage_vm_wake(
+                        &place,
+                        req.on("deliver-personal-vm-wake"),
+                    )
+                };
             }
             if export.is_some() && source.is_some() {
                 return Err(invalid("select one original attachment source"));

@@ -164,6 +164,25 @@ pub(super) fn read_private_file(file: File, max: usize) -> io::Result<Vec<u8>> {
     Ok(payload)
 }
 
+pub(crate) fn bounded_bolt_writer(pin: File) -> io::Result<(File, bbolt_rs::Bolt)> {
+    let (send, recv) = std::sync::mpsc::sync_channel(1);
+    // Bolt::open waits for the flock. Keep that wait bounded at this CLI entry
+    // point, and do not let the waiting thread perform any mutation.
+    std::thread::Builder::new().spawn(move || {
+        let alias = if cfg!(target_os = "macos") {
+            "/dev/fd"
+        } else {
+            "/proc/self/fd"
+        };
+        let db = bbolt_rs::Bolt::open(format!("{alias}/{}", pin.as_raw_fd()))
+            .map(|db| (pin, db))
+            .map_err(io::Error::other);
+        let _ = send.send(db);
+    })?;
+    recv.recv_timeout(Duration::from_secs(2))
+        .map_err(|_| io::Error::other("original connector database is locked or unavailable"))?
+}
+
 pub(crate) fn write_json(path: &Path, data: &Value) -> io::Result<()> {
     write_atomic(path, |file| {
         serde_json::to_writer(&mut *file, data)?;
