@@ -100,8 +100,12 @@ impl Session {
         if old["account"] != current["account"] || !codex_continuity::same_origin(old, &current) {
             return Err(io::Error::other("Codex native origin or authority changed"));
         }
-        let rollout =
-            codex_continuity::rollout(Path::new(field(old, "native_home")), &cwd, &thread)?;
+        let rollout = codex_continuity::retained_rollout(
+            Path::new(field(old, "native_home")),
+            &cwd,
+            &thread,
+            &meta["codex_resume"],
+        )?;
         let transcript = PathBuf::from(field(&rollout, "path"));
         let dir = cwd.metadata()?;
         let proof = json!({"kind":"codex","instance":self.incarnation(),"conversation":thread,"transcript":transcript,"identity":rollout["identity"],

@@ -373,6 +373,30 @@ pub(crate) fn rollout(home: &Path, cwd: &Path, thread: &str) -> io::Result<Value
     Ok(json!({"path":path,"identity":[stat.dev(),stat.ino()]}))
 }
 
+pub(crate) fn retained_rollout(
+    home: &Path,
+    cwd: &Path,
+    thread: &str,
+    reservation: &Value,
+) -> io::Result<Value> {
+    let current = rollout(home, cwd, thread)?;
+    if !reservation.is_null() {
+        let original = reservation
+            .get("external_rollout")
+            .or_else(|| reservation.get("rollout"));
+        if reservation["thread"] != thread
+            || !original.is_some_and(|anchor| {
+                anchor["path"] == current["path"] && anchor["identity"] == current["identity"]
+            })
+        {
+            return Err(io::Error::other(
+                "original Codex rollout was replaced after acquisition",
+            ));
+        }
+    }
+    Ok(current)
+}
+
 fn find_rollout_day(
     home: &Path,
     day: time::Date,
@@ -458,7 +482,12 @@ pub(crate) fn verify_handoff(session_dir: &Path, lineage: &Value) -> io::Result<
     }
     let current = profile(&env, cwd, &original["options"])?;
     let admitted = &proof["profile"];
-    let file = rollout(Path::new(field(&current, "native_home")), cwd, thread)?;
+    let file = retained_rollout(
+        Path::new(field(&current, "native_home")),
+        cwd,
+        thread,
+        &meta["codex_resume"],
+    )?;
     let dir = cwd.metadata()?;
     if !same_origin(original, &current)
         || !same_origin(admitted, &current)
@@ -786,6 +815,28 @@ mod tests {
             file.to_str().unwrap()
         );
         assert!(rollout(&home, &root, id).is_err());
+        let anchor = rollout(&home, &cwd, id).unwrap();
+        for key in ["rollout", "external_rollout"] {
+            let reservation = json!({"thread":id, key:anchor});
+            assert_eq!(
+                retained_rollout(&home, &cwd, id, &reservation).unwrap(),
+                anchor
+            );
+        }
+        let held = file.with_extension("original");
+        fs::rename(&file, &held).unwrap();
+        fs::copy(&held, &file).unwrap();
+        for key in ["rollout", "external_rollout"] {
+            let reservation = json!({"thread":id, key:anchor});
+            assert!(
+                retained_rollout(&home, &cwd, id, &reservation)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("replaced")
+            );
+        }
+        fs::remove_file(&file).unwrap();
+        fs::rename(&held, &file).unwrap();
         let duplicate = folder.join(format!("rollout-2026-11-26T01-48-10-{id}.jsonl"));
         fs::copy(&file, &duplicate).unwrap();
         assert!(rollout(&home, &cwd, id).is_err());

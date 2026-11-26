@@ -781,8 +781,12 @@ impl Session {
             .ok_or_else(|| io::Error::other("saved Codex PATH is unproved"))?;
         env.retain(|(key, _)| key != "PATH");
         env.push(("PATH".into(), path.into()));
-        let rollout =
-            codex_continuity::rollout(Path::new(field(old, "native_home")), &cwd, &thread)?;
+        let rollout = codex_continuity::retained_rollout(
+            Path::new(field(old, "native_home")),
+            &cwd,
+            &thread,
+            &meta["codex_resume"],
+        )?;
         if relogin.is_some_and(|proof| proof["rollout"] != rollout) {
             return Err(io::Error::other(
                 "original Codex rollout changed during relogin",
