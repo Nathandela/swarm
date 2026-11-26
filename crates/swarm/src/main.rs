@@ -114,8 +114,8 @@ fn main() -> ExitCode {
         Some("dispatcher-guide") => guide(&args[1..]),
         Some("teammate") => teammate::run(&args[1..]),
         Some(
-            "ls" | "peek" | "watch" | "handoff" | "spawn" | "message" | "requests" | "decide"
-            | "send" | "kill",
+            "reattach" | "ls" | "peek" | "watch" | "handoff" | "spawn" | "message" | "requests"
+            | "decide" | "send" | "kill",
         ) => ipc::run(&args) as u8,
         None if !io::stdin().is_terminal() || !io::stdout().is_terminal() => {
             eprintln!("swarm: not a terminal; the TUI needs an interactive terminal");

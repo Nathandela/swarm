@@ -189,6 +189,21 @@ fn serve(dir: &Path) -> io::Result<()> {
     if provider["name"] == "hermes" {
         environment.extend(native::origins(&Value::Null, hermes_native)?);
     }
+    if provider["name"] == "codex" && !config["codex_home"].is_null() {
+        use std::os::unix::fs::MetadataExt;
+        let home = environment
+            .iter()
+            .rev()
+            .find(|(key, _)| key == "HOME")
+            .map_or(Path::new(""), |(_, value)| Path::new(value));
+        let native = providers::codex::explicit_home(&Value::Null, home)?
+            .ok_or_else(|| io::Error::other("reserved alternate CODEX_HOME is unavailable"))?;
+        let info = native.metadata()?;
+        if config["codex_home"] != json!({"path":native,"identity":[info.dev(),info.ino()]}) {
+            return Err(io::Error::other("alternate CODEX_HOME changed before exec"));
+        }
+        environment.push(("CODEX_HOME".into(), native.to_string_lossy().into_owned()));
+    }
     let mut app_args = vec![
         "-c".into(),
         "sandbox_workspace_write.network_access=true".into(),
@@ -366,7 +381,43 @@ fn serve(dir: &Path) -> io::Result<()> {
             }
         }
         if provider["name"] == "codex" && provider["mode"] == "managed" {
-            let (owner, connection) = codex_backend::start(
+            use providers::codex_continuity;
+            let cwd=Path::new(working_dir);
+            let restored=&config["codex_resume"];
+            if restored.is_object() && !scope["resume_request"].is_null() {
+                return Err(io::Error::other("overlapping manager and owner Codex resume requests"));
+            }
+            let same_rollout=|profile:&Value| -> io::Result<bool> {
+                let home=Path::new(field(profile,"native_home"));
+                let thread=field(restored,"thread");
+                if restored["external_rollout"].is_object() {
+                    Ok(codex_continuity::discover_external(home,true,thread)?
+                        .first()==Some(&restored["external_rollout"]))
+                } else {
+                    Ok(codex_continuity::rollout(home,cwd,thread)?==restored["rollout"])
+                }
+            };
+            let profile=codex_continuity::profile(&environment,cwd,&config["codex_options"]);
+            if let Ok(profile)=&profile{
+                runtime::write_json(&dir.join("codex-profile.json"),&json!({"token":token,"profile":profile}))?;
+            }
+            if restored.is_object() {
+                let profile=profile?;
+                if profile!=restored["profile"] ||
+                    !same_rollout(&profile)?
+                    || !argv.as_slice().starts_with(&["resume".into(),field(restored,"thread").into()])
+                {
+                    return Err(io::Error::other("Codex resume profile, rollout or argument custody changed"));
+                }
+                let sandbox=field(&profile["options"],"sandbox");
+                if !sandbox.is_empty(){
+                    if !matches!(sandbox,"read-only"|"workspace-write"|"danger-full-access"){
+                        return Err(io::Error::other("Codex resume sandbox policy is unqualified"));
+                    }
+                    app_args.extend(["-c".into(),format!("sandbox_mode={sandbox}")]);
+                }
+            }
+            let (owner, mut connection) = codex_backend::start(
                 executable,
                 Path::new(working_dir),
                 dir,
@@ -382,6 +433,11 @@ fn serve(dir: &Path) -> io::Result<()> {
                     return Err(io::Error::other("manager resume arguments differ from retirement custody"));
                 }
                 command.args(argv.drain(..2));
+            } else if restored.is_object() {
+                if codex_continuity::profile(&environment,cwd,&config["codex_options"])?!=restored["profile"] || !same_rollout(&restored["profile"])?{
+                    return Err(io::Error::other("Codex resume authority changed during app-server startup"));
+                }
+                connection.bind_resume(field(restored,"thread"),cwd)?;
             }
             command
                 .args(["--remote", &connection.endpoint])
@@ -1536,7 +1592,11 @@ fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> 
     {
         let reply = field(payload, "last_assistant_message");
         if !reply.is_empty() && reply.len() <= 4096 {
-            capture_pilot_reply(state, reply)?;
+            capture_pilot_item(
+                &state.dir,
+                &state.token,
+                json!({"kind":"agent_message","status":"completed","text":reply}),
+            )?;
         }
     }
     observe_claude_schedule(state, &mut observed, event, payload)?;
@@ -1552,12 +1612,12 @@ fn hook_observation(stream: &mut UnixStream, state: &State, request: &Value) -> 
     runtime::write_control(stream, &json!({"type":"ok"}))
 }
 
-fn capture_pilot_reply(state: &State, text: &str) -> io::Result<()> {
-    let path = state.dir.join("pilot-replies.json");
+fn capture_pilot_item(dir: &Path, token: &str, mut item: Value) -> io::Result<()> {
+    let path = dir.join("pilot-replies.json");
     let mut record = match runtime::read_json(&path) {
-        Ok(record) if record["token"] == state.token => record,
+        Ok(record) if record["token"] == token => record,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            json!({"token":state.token,"next":1,"captures":[]})
+            json!({"token":token,"next":1,"captures":[]})
         }
         Err(err) => return Err(err),
         _ => {
@@ -1577,9 +1637,8 @@ fn capture_pilot_reply(state: &State, text: &str) -> io::Result<()> {
     if captures.len() == 16 {
         captures.remove(0);
     }
-    captures.push(
-        json!({"sequence":next,"item":{"kind":"agent_message","status":"completed","text":text}}),
-    );
+    item["item_id"] = json!(codex_receipt::hash(&format!("pilot:{token}:{next}")));
+    captures.push(json!({"sequence":next,"item":item}));
     record["next"] = json!(next + 1);
     runtime::write_json(&path, &record)
 }

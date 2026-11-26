@@ -1,4 +1,4 @@
-usage: swarm [--pilot|pilot|daemon|shim|hook|discord|setup-trust|dispatcher-guide|teammate|schedule|handoff|spawn|ls|watch|kill|send|message|requests|decide|peek|doctor|checkout|clean|upgrade|version]
+usage: swarm [--pilot|pilot|daemon|shim|hook|discord|setup-trust|dispatcher-guide|teammate|schedule|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|checkout|clean|upgrade|version]
 
   swarm            open the TUI
   swarm --pilot    enter a private pilot context and show the discussion roster
@@ -14,6 +14,8 @@ usage: swarm [--pilot|pilot|daemon|shim|hook|discord|setup-trust|dispatcher-guid
   swarm spawn      launch a new session with context
                    (--cli agent [--dir d] [--model m] [--worktree] [--name n],
                     one of --prompt text | --handoff file | --delegate file)
+  swarm reattach   import existing Codex CLI conversations
+                   (--cli codex [--session ID] [--all] [--take-over] [--dry-run])
   swarm ls         list sessions (--json for the full roster)
   swarm watch      wait for a session to reach a status
                    (--until needs_input[,ready_for_review,completed]|change, --timeout d)

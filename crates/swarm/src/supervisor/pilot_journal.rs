@@ -226,22 +226,36 @@ impl Journal {
         }
     }
 
-    pub(super) fn history(&self, id: &str, limit: u64) -> io::Result<Vec<Value>> {
+    pub(super) fn history(
+        &self,
+        id: &str,
+        before: &str,
+        limit: u64,
+    ) -> io::Result<(Vec<Value>, bool)> {
         let inner = self.owned.lock().unwrap();
         ensure(&inner)?;
         let mut page: Vec<_> = inner
             .records
             .iter()
-            .rev()
             .filter(|record| {
                 record["session_id"] == id
                     && matches!(field(record, "type"), "interaction" | "structured_gap")
             })
-            .take(limit.min(20) as usize)
-            .cloned()
             .collect();
-        page.reverse();
-        Ok(page)
+        if !before.is_empty() {
+            let Some(boundary) = page
+                .iter()
+                .position(|record| record["item"]["item_id"] == before)
+            else {
+                return Ok((Vec::new(), true));
+            };
+            page.truncate(boundary);
+        }
+        let start = page.len().saturating_sub(limit.min(20) as usize);
+        Ok((
+            page[start..].iter().map(|row| (*row).clone()).collect(),
+            start == 0,
+        ))
     }
 
     pub(super) fn stream(
@@ -476,7 +490,7 @@ mod tests {
         let checkpoint = saved["head"].as_u64().unwrap();
         book.file = path.join("blocked").join("pilot-journal.json");
         book.publish(&current[0], Vec::new());
-        assert!(book.history("exit", 20).is_err());
+        assert!(book.history("exit", "", 20).is_err());
         assert_eq!(
             runtime::read_json(&path.join("pilot-journal.json")).unwrap(),
             saved
@@ -559,12 +573,12 @@ mod tests {
         let capture = json!({"sequence":1,"item":{"kind":"agent_message","status":"completed","text":"literal evidence"}});
         let book = Journal::load(&path, [row.clone()]);
         book.publish(&row, vec![capture.clone()]);
-        let entry = book.history("session", 20).unwrap();
+        let entry = book.history("session", "", 20).unwrap().0;
         assert_eq!(entry.len(), 1);
         drop(book);
         let reloaded = Journal::load(&path, [row.clone()]);
         reloaded.publish(&row, vec![capture]);
-        assert_eq!(reloaded.history("session", 20).unwrap(), entry);
+        assert_eq!(reloaded.history("session", "", 20).unwrap().0, entry);
         std::fs::remove_dir_all(path).unwrap();
     }
 }
