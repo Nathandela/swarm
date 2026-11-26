@@ -64,3 +64,18 @@ The signed `3d15e157` build repeated the managed-install, bundled media, PTY rec
 | macOS x86_64 under Rosetta | `1a613de0b13557d5cf3678272909914471dfc05c50d4ede909a8d52bcc8a90cf` | `0607b0822eb73c66776e40ae40103e2147f9bc9e108ebe75615d9e540076b690` |
 | Linux x86_64 native | `7d8866cbc58644448ec9b075701c3e5c384518e4e9b953220a9ce8829914de5f` | `ce65a99919709ef52dca90f5b17d42f464da55e77f961959e34bf9d164f3cbfe` |
 | Linux arm64 guest on Apple Silicon | `01ae3adea3d5f80f7ac24e1130ae334d1f5d0791bfe12aac0dc58d137528f0e3` | `ada17b958cbf57ef81dd91d41f322692407657bcc564a9d8531753ae69a5bf0d` |
+
+## Signed `52e77ee5` qualification
+
+The clean detached source build produced all three signed archives. All four execution environments verified a private managed installation, the packaged media helper, PTY recovery of the same worker after daemon SIGKILL, and writer lease release and terminal restoration after exit. Cleanup left zero fixture processes.
+
+The explicit Rust archive test ran on macOS arm64 and Linux x86_64 against these exact signed assets. Each validated the signature and every member across the three archives, then refused a changed archive digest. Test log SHA-256 is `766a216592c63f8c55c7f2e7381302a2329debea824052dde87fd63e5ea79df2` on macOS and `7872a6cae5473280aef614e0a26debfc8ea005bf0382743d5af1c53416e52db1` on Linux.
+
+Rosetta used `arch -x86_64` for the installed entry points. Kernel process flags confirmed translation for both boards and daemons, the surviving shim, the media checker and the bundled x86_64 Node. The process census SHA-256 is `1d0b7eedc6ff0613dbe28ffd327d38848976db28dc3a42017eaf313fb3ef88cd`. The aarch64 test used an offline Apple Virtualization guest with LinuxKit 6.10.14 and Debian 12. Its serial capture SHA-256 is `44547653770c76af0aae01790f4c24a40036fe1f017da79c5584c82d8e26451c`.
+
+| Execution environment | Archive SHA-256 | PTY receipt SHA-256 |
+| --- | --- | --- |
+| macOS arm64 native | `0a89875d2fe2db60d088f7c941f38c79d2fdaf667a11575c61e375c10d2dd88d` | `00d10fae1a8bdc3dd44460dd44fa2f511f3b4af093d49fc50877ff8b8067e9ea` |
+| macOS x86_64 under Rosetta | `0a89875d2fe2db60d088f7c941f38c79d2fdaf667a11575c61e375c10d2dd88d` | `972e01a7bbf35d39a5817720457f0bf45ebde4ab4afbb73c63ee5add29e452d0` |
+| Linux x86_64 native | `51fea5361817bbe5890ca86ae64521f70a10a1a7599e05f4ac40e3038a3c6680` | `c9a9b54cd492b86f201e948d4db098f47d85a9e04e5451c2def54b7c8045aea5` |
+| Linux aarch64 in the offline Apple VZ guest | `7ce95658e4bdb485a6ffa1e93e6f7b3556a3f37cee4ef89ce1a8aca6252e5019` | `312422fcaefc952923993edd8e7152d97250f97ae5e2cdf918bb705d68aeef18` |
