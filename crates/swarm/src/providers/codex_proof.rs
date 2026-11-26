@@ -177,6 +177,7 @@ impl Ledger {
                                     | "swarm_status"
                                     | "swarm_list"
                                     | "swarm_read"
+                                    | "swarm_send"
                             )
                             && valid(id) =>
                     {
@@ -261,6 +262,15 @@ pub(crate) fn input_status(evidence: &Value, nonce: &str) -> Value {
 }
 
 pub(crate) fn resolve(evidence: &Value, input: &Value) -> io::Result<Value> {
+    resolve_call(evidence, input, true)
+}
+
+/// Reconcile an exact tool invocation already durably admitted while the call was active.
+pub(crate) fn resolve_recorded(evidence: &Value, input: &Value) -> io::Result<Value> {
+    resolve_call(evidence, input, false)
+}
+
+fn resolve_call(evidence: &Value, input: &Value, active: bool) -> io::Result<Value> {
     let binding = &evidence["binding"];
     let meta = &input["host_meta"];
     let coordinates = crate::discord::provenance::coordinates(binding, meta)?;
@@ -272,14 +282,17 @@ pub(crate) fn resolve(evidence: &Value, input: &Value) -> io::Result<Value> {
         || evidence["externally_steered"] == true
         || input["binding"] != *binding
         || field(input, "tool_name") != call["tool"].as_str().unwrap_or("publish")
-        || call["closed"] != false
+        || !call["closed"].is_boolean()
         || call["arguments_hash"] != input["arguments_hash"]
         || match binding["provider"].as_str() {
             Some("claude") => coordinates.turn.is_some() || !call["agent"].is_null(),
             _ => coordinates.turn != Some(turn),
         }
-        || evidence["current"] != turn
-        || receipt["closed"] != false
+        || !receipt["closed"].is_boolean()
+        || active
+            && (call["closed"] != false
+                || evidence["current"] != turn
+                || receipt["closed"] != false)
         || !is_hash(nonce)
     {
         return Err(refusal(

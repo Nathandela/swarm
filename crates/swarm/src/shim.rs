@@ -1442,12 +1442,24 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                         text: text.into(),
                         schedule_attempt: scheduled.map(str::to_owned),
                         composer: request["composer_send"].clone(),
+                        enrolled: request["enrolled_worker_send"].clone(),
                         answer,
-                        not_after: Instant::now() + Duration::from_secs(2),
+                        not_after: Instant::now()
+                            + if request["enrolled_worker_send"].is_null() {
+                                Duration::from_secs(2)
+                            } else {
+                                Duration::from_secs(9)
+                            },
                     })
                     .map_err(|_| io::Error::other("Codex native input lane is unavailable"))?;
                 response
-                    .recv_timeout(Duration::from_secs(6))
+                    .recv_timeout(Duration::from_secs(
+                        if request["enrolled_worker_send"].is_null() {
+                            6
+                        } else {
+                            14
+                        },
+                    ))
                     .map_err(|_| io::Error::other("Codex semantic submission outcome is unknown"))?
             })();
             let response = match body {

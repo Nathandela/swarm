@@ -419,6 +419,78 @@ impl Manager {
         Ok(result.clone())
     }
 
+    pub(super) fn enrolled_send(
+        &self,
+        session: &str,
+        action: &Value,
+        submit: bool,
+    ) -> io::Result<Value> {
+        let mut caps = CAPS.to_vec();
+        caps.push(super::enrolled_worker::CAP);
+        let mut client = Client::dial(Path::new(self.cfg.text("daemon_socket")), &caps)?;
+        self.cfg.check_supervisor(&client, &caps)?;
+        let operation = &action["operation_id"];
+        let reply = client.exchange(
+            json!({
+                "op":"manager_worker_send","body_version":1,"session_id":session,
+                "operation_id":operation,"manager_worker_send":action,"submit":submit
+            }),
+            "manager_worker_send",
+            std::time::Duration::from_secs(16),
+        )?;
+        self.verify_endpoint(&client, &reply)?;
+        let value = &reply["worker_send"];
+        let args = &action["arguments"];
+        if reply["session_id"] != session || reply["operation_id"] != *operation {
+            return Err(invalid("uncorrelated enrolled worker send response"));
+        }
+        if value["state"] == "pending" {
+            return Ok(value.clone());
+        }
+        if value["operation_id"] != *operation
+            || value["session"] != args["session"]
+            || value["session_instance"] != args["session_instance"]
+            || value["agent"] != "codex"
+            || value["origin"] != action["source_anchor"]["composer"]["origin"]
+            || !crate::providers::codex_receipt::canonical_thread(field(value, "native_session_id"))
+            || !matches!(
+                field(value, "state"),
+                "native_accepted" | "outcome_unknown" | "rejected"
+            )
+            || value["state"] == "native_accepted"
+                && (!crate::providers::codex_receipt::canonical_thread(field(
+                    value,
+                    "native_turn_id",
+                )) || value["native_input_id"]
+                    != crate::providers::codex_receipt::hash(field(action, "operation_id")))
+        {
+            return Err(invalid(
+                "uncorrelated native receipt for enrolled worker send",
+            ));
+        }
+        Ok(value.clone())
+    }
+
+    pub(super) fn enrolled_send_target<'a>(
+        &self,
+        actions: &'a Value,
+        args: &Value,
+    ) -> io::Result<&'a Value> {
+        let mut client = self.dial()?;
+        let endpoint = client.endpoint().to_owned();
+        let row = client
+            .sessions()?
+            .into_iter()
+            .find(|row| {
+                row["id"] == args["session"]
+                    && row["endpoint_id"] == endpoint
+                    && row["worker_discussion"] == self.conversation
+            })
+            .ok_or_else(|| invalid("missing enrolled Codex worker"))?;
+        super::enrolled_worker::send_target(actions, &row, args)
+            .ok_or_else(|| invalid("send target is not the exact enrolled Codex worker"))
+    }
+
     pub(super) fn enrolled_roster(&self, actions: &Value, args: &Value) -> io::Result<Value> {
         let fields = args
             .as_object()
@@ -699,9 +771,37 @@ mod tests {
             file_ack: Default::default(),
             forwarded_revocation: (forwarded == "revoked")
                 .then(|| root.join(".fixture-hide-forward")),
-            source_deletion: std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_DELETED")
-                .map(|_| root.join(".fixture-enrolled-deleted")),
+            source_deletion: (std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_DELETED").is_some()
+                || std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_SEND_REVOKED").is_some())
+            .then(|| root.join(".fixture-enrolled-deleted")),
         };
+        let _send_guard = std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_CODEX_SEND").map(|_| {
+            if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_SEND_REVOKED").is_none() {
+                dispatcher.lose_enrolled_ack.set(true);
+            }
+            let scope = dispatcher.scope(&cfg);
+            let source = source.clone();
+            let after_preflight = std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_SEND_REVOKED")
+                .map(|_| root.join(".fixture-enrolled-deleted"));
+            super::super::enrolled_worker::authority::Service::bind(
+                &scope,
+                cfg.clone(),
+                move |cfg, inbox, anchor| {
+                    let api = FixtureAudience {
+                        source: source.clone(),
+                        posts: Default::default(),
+                        file_ack: Default::default(),
+                        forwarded_revocation: None,
+                        source_deletion: after_preflight.clone(),
+                    };
+                    if let Some(marker) = &after_preflight {
+                        std::fs::write(marker, b"late authority refusal")?;
+                    }
+                    super::super::dispatcher::enrolled_source(cfg, inbox, &api, anchor)
+                },
+            )
+            .unwrap()
+        });
         let launch = dispatcher.scope(&cfg)["launch"].clone();
         let operation = format!("launch:{}:{:032x}", crate::ipc::spawn::now_ms(), 1);
         if cfg.text("project_access") == "vm" {
@@ -836,6 +936,12 @@ mod tests {
         }
         let posts = api.posts.borrow();
         assert_eq!(posts.len(), 1);
+        if _send_guard.is_some() {
+            assert!(
+                !dispatcher.lose_enrolled_ack.get(),
+                "native receipt loss arm not exercised"
+            );
+        }
         assert_eq!(
             posts[0].1,
             if forwarded.is_empty() {

@@ -463,6 +463,7 @@ pub(super) struct SemanticAction {
     pub text: String,
     pub schedule_attempt: Option<String>,
     pub composer: Value,
+    pub enrolled: Value,
     pub not_after: Instant,
     pub answer: SyncSender<io::Result<Value>>,
 }
@@ -609,7 +610,11 @@ fn submit(
     action: &SemanticAction,
     target: &SemanticTarget<'_>,
 ) -> io::Result<Value> {
-    let hash = codex_receipt::hash(&action.text);
+    let hash = if action.enrolled.is_null() {
+        codex_receipt::hash(&action.text)
+    } else {
+        crate::discord::enrolled_worker::send_intent(&action.enrolled["action"])?
+    };
     let root = target
         .dir
         .parent()
@@ -687,11 +692,44 @@ fn submit(
         )?;
         proof.prepare(&action.operation, nonce, &action.text, external)?;
     }
+    let _enrolled = if action.enrolled.is_null() {
+        None
+    } else {
+        if manager_nonce.is_some() || launch.is_some() {
+            return Err(io::Error::other(
+                "unrelated native scopes cannot be combined",
+            ));
+        }
+        let lock = crate::discord::enrolled_worker::authority::guard(
+            target.dir,
+            target.cwd,
+            target.token,
+            &action.operation,
+            &action.composer,
+            &action.enrolled,
+        )?;
+        if Instant::now() >= action.not_after
+            || action.composer["text"] != action.text
+            || action.composer["session"] != action.session
+        {
+            return Err(io::Error::other(
+                "enrolled worker send expired before dispatch",
+            ));
+        }
+        Some(lock)
+    };
+    let enrolled_input = _enrolled
+        .as_ref()
+        .map(|_| codex_receipt::hash(&action.operation));
     let mut receipt = json!({
         "session":action.session,"session_instance":codex_receipt::instance(target.token),
         "operation_id":action.operation,"native_session_id":observation.thread,
         "agent":"codex","state":"outcome_unknown",
     });
+    if enrolled_input.is_some() {
+        receipt["origin"] =
+            action.enrolled["action"]["source_anchor"]["composer"]["origin"].clone();
+    }
     codex_receipt::fence(
         target.dir,
         &action.operation,
@@ -726,7 +764,7 @@ fn submit(
     if let Some(binding) = launch {
         worker::codex_turn(&binding.authority, target.cwd, &mut params);
     }
-    if let Some(nonce) = manager_nonce {
+    if let Some(nonce) = manager_nonce.or(enrolled_input.as_deref()) {
         params["clientUserMessageId"] = json!(nonce);
     }
     if send(ws, json!({"id":rpc,"method":"turn/start","params":params})).is_err() {
@@ -753,6 +791,9 @@ fn submit(
             if !turn.is_empty() && turn.len() <= 128 && !turn.chars().any(char::is_control) {
                 receipt["state"] = json!("native_accepted");
                 receipt["native_turn_id"] = json!(turn);
+                if let Some(input) = enrolled_input.as_deref() {
+                    receipt["native_input_id"] = json!(input);
+                }
                 observation.turn = Some(turn.into());
                 if let Some(binding) = launch {
                     observation.scheduled_turn = Some(ScheduledTurn {
