@@ -384,7 +384,7 @@ fn json_out(value: &Value) -> io::Result<()> {
     writeln!(io::stdout().lock(), "{output}")
 }
 
-fn escape_json(value: String) -> String {
+pub(crate) fn escape_json(value: String) -> String {
     value
         .replace('<', "\\u003c")
         .replace('>', "\\u003e")

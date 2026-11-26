@@ -341,7 +341,7 @@ impl<'a> Request<'a> {
             }
             "migrate-state" => {
                 flags = &["dry-run", "rollback", "controls"];
-                &["settle-personal-ingress"]
+                &["settle-personal-ingress", "dispatch-personal-ingress"]
             }
             "migrate-supervisor" => {
                 flags = &["dry-run"];
@@ -473,6 +473,15 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
     match req.command {
         "connect" => return connect(req, place),
         "migrate-state" => {
+            if let Some(message) = req.get("dispatch-personal-ingress") {
+                if req.on("controls")
+                    || req.on("rollback")
+                    || req.get("settle-personal-ingress").is_some()
+                {
+                    return Err(invalid("select one migration operation"));
+                }
+                return legacy_ingress::dispatch(&place, message, req.on("dry-run"));
+            }
             if let Some(message) = req.get("settle-personal-ingress") {
                 if req.on("controls") || req.on("rollback") {
                     return Err(invalid("select one migration operation"));
