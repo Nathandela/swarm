@@ -235,7 +235,7 @@ fn inspect_voice<'tx>(
             let entry: Value = serde_json::from_slice(raw)?;
             let b = entry["binding"].clone();
             if b["conversation_id"] != conversation
-                || b["native_cli"] != true
+                || !matches!(b["native_cli"], Value::Null | Value::Bool(false))
                 || b["provider"] != provider
                 || !field(&b, "session_id").starts_with(&format!("{endpoint}/"))
                 || [
@@ -661,6 +661,7 @@ fn dispatch_with(
         "body_version":1,"manager_runtime_request":{"session_instance":request["session_instance"]}}), "manager_runtime")?;
     let current = &current["manager_runtime"];
     if current["binding"] != request["manager_admission"]["binding"]
+        || !matches!(current["native_cli"], Value::Null | Value::Bool(false))
         || current["ready_for_input"] != true
         || current["provider_exhausted"] == true
         || current["turn"]["externally_steered"] == true
@@ -1165,6 +1166,68 @@ mod tests {
             .is_err()
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn retained_original_go_native_manager_roundtrip() {
+        let Some(root) = std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_ROOT") else {
+            return;
+        };
+        let place = Place::for_supervisor(Path::new(&root)).unwrap();
+        let current = json!({"author":{"id":"200","username":"synthetic owner"},"channel_id":"400","id":"701",
+            "content":"Retained real native loopback input.", "type":0, "attachments":[]});
+        assert!(capture_with(&place, "701", false, |_, _| Ok(current.clone())).unwrap());
+        assert!(prepare::with(&place, "701", false, |_, _| Ok(current.clone())).unwrap());
+        assert!(dispatch_with(&place, "701", false, |_| Ok(current)).unwrap());
+        let cfg = place.load().unwrap();
+        let request = {
+            let source = place.dir.join("discord.db");
+            let (_pin, db) = open_bolt(&source, 64 << 20).unwrap();
+            let c = candidate(&db.begin().unwrap(), &cfg, "701")
+                .unwrap()
+                .unwrap();
+            let (directory, id, endpoint) = voice_location(&place, &cfg, &c).unwrap();
+            let (_pin, _db, receipt) =
+                controller(&directory, &id, &c.origin, "codex", &endpoint).unwrap();
+            assert_eq!(receipt.admission["phase"], "executing");
+            assert_eq!(receipt.admission["source_cutover"], true);
+            receipt.admission["request"].clone()
+        };
+        let (mut owner, _) = super::super::migrate_supervisor::verified_owner(
+            place.supervisor_root(),
+            Path::new(cfg.text("daemon_socket")),
+            Path::new(field(&cfg.0["supervisor"], "lock")),
+            &["manager-provenance"],
+        )
+        .unwrap();
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            let reply = owner.request_body(
+                json!({"op":"manager_input_status",
+                    "session_id":request["session"],"body_version":1,
+                    "manager_input_status_request":request["manager_admission"]
+                }),
+                "manager_input_status",
+            );
+            if let Ok(reply) = reply {
+                let turn = &reply["manager_input_status"];
+                if turn["state"] == "completed" {
+                    assert_eq!(
+                        turn["native_input_id"],
+                        request["manager_admission"]["nonce"]
+                    );
+                    assert!(!field(turn, "native_turn_id").is_empty());
+                    assert_ne!(turn["externally_steered"], true);
+                    break;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < limit,
+                "real native turn did not complete"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(settle(&place, "701", false).unwrap());
     }
 
     #[test]
