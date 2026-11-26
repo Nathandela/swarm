@@ -1,4 +1,5 @@
 // The Go store remains authoritative throughout stopped-session compatibility.
+mod codex;
 pub(super) mod export;
 pub(super) mod live;
 
@@ -82,6 +83,7 @@ const ROSTER_CUSTODY_FIELDS: &[&str] = &[
     "conversation_id",
     "env",
     "cli_identity",
+    "auth_identity",
     "backend_plan_error",
     "resume_error",
 ];
@@ -940,6 +942,44 @@ impl Store {
 
     pub(super) fn contains(&self, id: &str) -> bool {
         self.rows.lock().unwrap().contains_key(id)
+    }
+
+    pub(super) fn prepare_codex_resume(
+        &self,
+        launch: &Value,
+        qualified: &str,
+        id: &str,
+    ) -> io::Result<super::session::Prepared> {
+        let rows = self.rows.lock().unwrap();
+        let entry = rows
+            .get(id)
+            .ok_or_else(|| io::Error::other("unknown Go resume source"))?;
+        let thread = field(&entry.meta, "conversation_id");
+        if entry.live.is_some()
+            || entry.observed_exit.is_some()
+            || entry.exported
+            || entry.meta["agent_type"] != "codex"
+            || rows.iter().any(|(other, row)| {
+                row.meta["agent_type"] == "codex"
+                    && (row.live.is_some()
+                        || other != id && !row.exported && row.meta["conversation_id"] == thread)
+            })
+        {
+            return Err(io::Error::other(
+                "Go Codex source has live, duplicate or unqualified custody",
+            ));
+        }
+        let raw = read_meta(&entry.dir)?;
+        if !same_file(&entry.dir.metadata()?, &fs::symlink_metadata(self.root.join(id))?)
+            || raw != entry.raw
+            || qualified_role(&entry.meta).is_err()
+            || entry.meta["status"]["Process"] != "exited"
+        {
+            return Err(io::Error::other("stopped Go Codex source changed"));
+        }
+        exited(&entry.dir, &entry.meta)?;
+        let evidence = launch_evidence(&entry.dir, &entry.meta)?;
+        codex::prepare(launch, qualified, &entry.meta, &evidence)
     }
 
     pub(super) fn exported(&self, id: &str) -> io::Result<bool> {

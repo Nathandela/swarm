@@ -351,10 +351,20 @@ pub(crate) fn discover_external(
 }
 
 pub(crate) fn rollout(home: &Path, cwd: &Path, thread: &str) -> io::Result<Value> {
-    read_rollout(home, cwd, thread, false)
+    read_rollout(home, cwd, thread, false, None)
 }
 
-fn read_rollout(home: &Path, cwd: &Path, thread: &str, literal: bool) -> io::Result<Value> {
+pub(crate) fn go_rollout(home: &Path, cwd: &Path, thread: &str, version: &str) -> io::Result<Value> {
+    read_rollout(home, cwd, thread, true, Some(version))
+}
+
+fn read_rollout(
+    home: &Path,
+    cwd: &Path,
+    thread: &str,
+    literal: bool,
+    go_version: Option<&str>,
+) -> io::Result<Value> {
     if !codex_receipt::canonical_thread(thread) || thread.as_bytes().get(14) != Some(&b'7') {
         return Err(io::Error::other(
             "Codex rollout requires a canonical UUIDv7 thread",
@@ -399,7 +409,13 @@ fn read_rollout(home: &Path, cwd: &Path, thread: &str, literal: bool) -> io::Res
         } else {
             recorded.canonicalize()? == cwd
         };
-    if row["type"] != "session_meta" || row["payload"]["id"] != thread || !matches {
+    if row["type"] != "session_meta"
+        || row["payload"]["id"] != thread
+        || !matches
+        || go_version.is_some_and(|version| {
+            row["payload"]["source"] != "vscode" || row["payload"]["cli_version"] != version
+        })
+    {
         return Err(io::Error::other("Codex rollout root or checkout differs"));
     }
     Ok(json!({"path":path,"identity":[stat.dev(),stat.ino()],
@@ -462,6 +478,7 @@ fn checked_rollout(
         original.unwrap_or(cwd),
         thread,
         relocate || original.is_some(),
+        None,
     )?;
     if !reservation.is_null() {
         let original = reservation
@@ -900,6 +917,34 @@ mod tests {
         chosen["project"][0][3] = Value::Null;
         chosen["project"][1][2] = json!(8);
         assert!(!relocation_origin(&source, &chosen));
+    }
+
+    #[test]
+    fn go_rollout_requires_a_literal_checkout_and_the_pinned_native_source() -> io::Result<()> {
+        let home = crate::test_temp::root()
+            .canonicalize()?
+            .join(format!("go-codex-proof-{}", runtime::random_id()?));
+        let cwd = home.join("work");
+        let alias = home.join("alias");
+        let day = home.join("sessions/2026/11/26");
+        runtime::private_dir(&day)?;
+        runtime::private_dir(&cwd)?;
+        std::os::unix::fs::symlink(&cwd, &alias)?;
+        let id = "01a21552-fdc6-7e60-94f0-3311a05424eb";
+        let file = day.join(format!("rollout-2026-11-26T00-48-10-{id}.jsonl"));
+        for (recorded, source, version, admitted) in [
+            (&cwd, "vscode", "0.172.0", true),
+            (&alias, "vscode", "0.172.0", false),
+            (&cwd, "cli", "0.172.0", false),
+            (&cwd, "vscode", "0.171.0", false),
+        ] {
+            runtime::write_json(&file, &json!({"type":"session_meta",
+                "payload":{"cwd":recorded,"id":id,"source":source,"cli_version":version}
+            }))?;
+            assert_eq!(go_rollout(&home, &cwd, id, "0.172.0").is_ok(), admitted);
+        }
+        fs::remove_dir_all(home)?;
+        Ok(())
     }
 
     #[test]

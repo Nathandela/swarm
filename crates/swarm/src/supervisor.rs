@@ -252,8 +252,9 @@ impl State {
                     "claude" | "claude-code" | "agy" | "codex"
                 )
                 || request["launch"]["worktree"] == true
+                || request["launch"]["options"].get("resume_from").is_some()
+                    && field(&request["launch"], "agent") != "codex"
                 || [
-                    "resume_from",
                     "resume_conversation_id",
                     "resume_relocate",
                     "handoff_from",
@@ -265,7 +266,7 @@ impl State {
                     .any(|key| !field(&request["launch"], key).is_empty()))
         {
             return Err(io::Error::other(
-                "stopped rollback supports fresh ordinary, non-worktree Claude, agy or Codex launches",
+                "stopped rollback supports ordinary non-worktree launches and qualified stopped Go Codex resume",
             ));
         }
         if managed.is_some()
@@ -382,6 +383,19 @@ impl State {
             } else {
                 format!("{}/{}", self.endpoint, source)
             };
+            if let Some(store) = &self.stopped_go
+                && field(launch, "agent") == "codex"
+            {
+                let (endpoint, local) = qualified.split_once('/').expect("qualified source");
+                if endpoint != self.endpoint || expected_nonce.is_some() {
+                    return Err(io::Error::other(
+                        "Go Codex resume requires an ordinary local source",
+                    ));
+                }
+                let prepared = store.prepare_codex_resume(launch, &qualified, local)?;
+                runtime::private_dir(&self.root)?;
+                return self.reserve_prepared(prepared, false, None, None);
+            }
             let session = self.session(&json!({"session_id":qualified}))?;
             if matches!(field(launch, "agent"), "claude" | "claude-code") {
                 if managed.is_some() {

@@ -69,33 +69,37 @@ class Guard:
 
     def close(self):
         for alias, lock in self.paths:
-            try:
-                descriptor = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            except FileNotFoundError:
-                assert not alias.is_socket(), f"unaccompanied fixture socket preserved: {alias}"
-                continue
-            with os.fdopen(descriptor, "rb") as locked:
-                info = os.fstat(locked.fileno())
-                assert stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and info.st_nlink == 1
-                fcntl.flock(locked, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            retire_listener(alias, lock)
+
+
+def retire_listener(alias, lock):
+    try:
+        descriptor = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        assert not alias.is_socket(), f"unaccompanied fixture socket preserved: {alias}"
+        return
+    with os.fdopen(descriptor, "rb") as locked:
+        info = os.fstat(locked.fileno())
+        assert stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and info.st_nlink == 1
+        fcntl.flock(locked, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            listener = alias.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            assert stat.S_ISSOCK(listener.st_mode) and listener.st_uid == os.geteuid()
+            with socket.socket(socket.AF_UNIX) as client:
                 try:
-                    listener = alias.lstat()
-                except FileNotFoundError:
-                    pass
+                    client.connect(str(alias))
+                except ConnectionRefusedError:
+                    current = alias.lstat()
+                    assert (current.st_dev, current.st_ino) == (listener.st_dev, listener.st_ino)
+                    alias.unlink()
                 else:
-                    assert stat.S_ISSOCK(listener.st_mode) and listener.st_uid == os.geteuid()
-                    with socket.socket(socket.AF_UNIX) as client:
-                        try:
-                            client.connect(str(alias))
-                        except ConnectionRefusedError:
-                            current = alias.lstat()
-                            assert (current.st_dev, current.st_ino) == (listener.st_dev, listener.st_ino)
-                            alias.unlink()
-                        else:
-                            raise AssertionError(f"live fixture socket preserved: {alias}")
-                current = lock.lstat()
-                assert (current.st_dev, current.st_ino) == (info.st_dev, info.st_ino)
-                lock.unlink()
+                    raise AssertionError(f"live fixture socket preserved: {alias}")
+        current = lock.lstat()
+        assert (current.st_dev, current.st_ino) == (info.st_dev, info.st_ino)
+        lock.unlink()
 
 
 def process_birth(pid):

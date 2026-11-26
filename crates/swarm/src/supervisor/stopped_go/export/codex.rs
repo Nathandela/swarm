@@ -67,7 +67,6 @@ pub(super) fn resume_proof(dir: &Path, exported: &Value, token: &str) -> io::Res
         || record["token"] != token
         || !original.is_object()
         || source["go_rollback"]["codex_profile"] != *original
-        || source["codex_resume"].is_object()
         || legacy_identity(
             Path::new(field(provider, "executable")),
             field(provider, "version"),
@@ -102,10 +101,27 @@ pub(super) fn resume_proof(dir: &Path, exported: &Value, token: &str) -> io::Res
             "Codex rollback native origin or authority changed",
         ));
     }
-    let rollout = codex_continuity::rollout(
-        Path::new(field(original, "native_home")),
-        cwd,
-        field(exported, "conversation_id"),
-    )?;
+    let native = Path::new(field(original, "native_home"));
+    let thread = field(exported, "conversation_id");
+    let resumed = &source["codex_resume"];
+    let rollout = if resumed.is_object() {
+        let rollout = codex_continuity::go_rollout(native, cwd, thread, RELEASE)?;
+        if resumed["profile"] != *original
+            || resumed["thread"] != thread
+            || resumed["source_cwd"] != json!(cwd)
+            || resumed["rollout"] != rollout
+            || !exported["auth_identity"].is_string()
+            || crate::refresh::auth_identity("codex", &exported["env"]).as_deref()
+                != exported["auth_identity"].as_str()
+            || !codex_continuity::verify_observed_rollout(dir, token, thread, &rollout)?
+        {
+            return Err(io::Error::other(
+                "Codex rollback resumed thread or account changed",
+            ));
+        }
+        rollout
+    } else {
+        codex_continuity::rollout(native, cwd, thread)?
+    };
     Ok(json!({"profile":effective,"rollout":rollout}))
 }

@@ -3,7 +3,7 @@
 set -eu
 test "$#" -ge 1 && test "$#" -le 2
 mode=${2:-}
-case "$mode" in ""|--relocation) ;; *) exit 2 ;; esac
+case "$mode" in ""|--relocation|--stopped-resume) ;; *) exit 2 ;; esac
 test "$(uname -sm)" = "Darwin arm64"
 vendor=$1
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
@@ -46,4 +46,7 @@ if [ "$mode" = --relocation ]; then
   exec python3 -Bu "$witness" --binary "$build/target/debug/swarm" --provider "$vendor" --implementation rust
 fi
 cp -p "$vendor" "$run/bin/codex"
+if [ "$mode" = --stopped-resume ]; then
+  exec python3 -Bu "$repo/scripts/verification/stopped_go_codex_resume.py" "$build/go-oracle" "$build/target/debug/swarm" "$run"
+fi
 exec python3 -Bu "$repo/scripts/verification/live_go_codex.py" "$build/go-oracle" "$build/target/debug/swarm" "$run" 0.172.0 --cold

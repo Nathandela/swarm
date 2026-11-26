@@ -192,7 +192,8 @@ fn configuration(dir: &Path, id: &str) -> io::Result<Value> {
                 && provider["stable_release"] == true
                 && config["go_rollback"]["cli_identity"].is_object()
                 && config["go_rollback"]["codex_profile"].is_object()
-                && config["codex_resume"].is_null()
+                && (config["codex_resume"].is_null() || config["codex_resume"].is_object())
+                && config["codex_resume"] == config["go_rollback"]["codex_resume"]
         }
         _ => false,
     };
@@ -606,6 +607,9 @@ fn validate(dir: &Path) -> io::Result<Attempt> {
     };
     if agent == "codex" {
         attempt.meta["cli_identity"] = config["go_rollback"]["cli_identity"].clone();
+        if let Some(auth) = config["go_rollback"].get("auth_identity") {
+            attempt.meta["auth_identity"] = auth.clone();
+        }
     }
     Ok(attempt)
 }
@@ -624,6 +628,7 @@ pub(super) fn verify(root: &Path, meta: &Value, origin: &Value) -> io::Result<()
         "id",
         "agent_type",
         "cli_identity",
+        "auth_identity",
         "cwd",
         "agent_cwd",
         "launch_options",

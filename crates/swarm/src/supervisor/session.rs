@@ -49,7 +49,7 @@ pub(super) struct Prepared {
     pub(super) codex_resume: Value,
     codex_options: Value,
     agy_launch: Value,
-    go_rollback: Value,
+    pub(super) go_rollback: Value,
     scheduled: Option<(worker::Binding, Value)>,
     mailbox: Value,
     manager: Value,
@@ -2730,7 +2730,7 @@ impl Session {
     }
 }
 
-fn codex_resume_args(thread: &str, cwd: &Path, model: &str) -> Vec<String> {
+pub(super) fn codex_resume_args(thread: &str, cwd: &Path, model: &str) -> Vec<String> {
     let mut args = vec![
         "resume".into(),
         thread.into(),
