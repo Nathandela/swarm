@@ -22,6 +22,67 @@ pub(super) struct Inbox {
     data: Value,
 }
 
+fn certify_attachment_source(saved: &Value, fresh: &Value) -> io::Result<()> {
+    use super::received_files::{LEGACY_PROMPT_HEADER, PROMPT_HEADER, prompt_files, visible};
+
+    let route = &saved["route"];
+    let guild = route["guild_id"].as_str().unwrap_or_default();
+    let channel = route["channel_id"].as_str().unwrap_or_default();
+    let edited = &fresh["edited_timestamp"];
+    let changed = || invalid("Discord attachment source revision changed");
+    let text = fresh["content"].as_str().ok_or_else(changed)?;
+    if fresh["id"] != route["message_id"]
+        || fresh["channel_id"] != channel
+        || (if guild.is_empty() {
+            !fresh["guild_id"].is_null()
+        } else {
+            fresh["guild_id"] != guild
+        })
+        || fresh["author"]["id"] != saved["author"]["id"]
+        || !fresh["webhook_id"].is_null()
+        || fresh["author"]
+            .get("bot")
+            .is_some_and(|value| value != false)
+        || fresh["author"]
+            .get("system")
+            .is_some_and(|value| value != false)
+        || fresh["type"] != 0
+        || !fresh["attachments"].is_array()
+        || *edited != saved["edited_at"]
+    {
+        return Err(changed());
+    }
+    let visible = visible(fresh)?;
+    let files = &saved["received_files"];
+    let source_channel = fresh["source_channel_id"]
+        .as_str()
+        .filter(|_| !guild.is_empty())
+        .unwrap_or(channel);
+    if !visible.has_files() || !visible.matches(files) || !visible.same_cdn_scope(source_channel) {
+        return Err(changed());
+    }
+    let body = format!("{text}{}", visible.context());
+    let prompt = format!("{body}{PROMPT_HEADER}{}", prompt_files(files));
+    let legacy = format!("{body}{LEGACY_PROMPT_HEADER}{files}");
+    let admitted = saved["text"].as_str().ok_or_else(changed)?;
+    if (admitted != prompt && admitted != legacy)
+        || saved["revision"]
+            != hash(&json!([
+                fresh["author"]["id"],
+                admitted,
+                channel,
+                guild,
+                fresh["id"],
+                edited,
+                visible.revision()?,
+                files
+            ]))?
+    {
+        return Err(changed());
+    }
+    Ok(())
+}
+
 impl Inbox {
     pub(super) fn open(dir: &Path, cfg: &Config) -> io::Result<Self> {
         let file = dir.join("rust-text-v1.json");
@@ -463,6 +524,7 @@ impl Inbox {
         id: &str,
         digest: &str,
         offset: u64,
+        current: impl FnOnce(&str) -> io::Result<Option<Value>>,
     ) -> io::Result<Value> {
         let source_id = input["source_id"]
             .as_str()
@@ -482,6 +544,10 @@ impl Inbox {
                 "attachment grant does not match the active admitted turn",
             ));
         }
+        let fresh = current(source_id)
+            .map_err(|_| invalid("Discord attachment source could not be verified"))?
+            .ok_or_else(|| invalid("Discord attachment source is no longer visible"))?;
+        certify_attachment_source(source, &fresh)?;
         let place = self
             .file
             .parent()

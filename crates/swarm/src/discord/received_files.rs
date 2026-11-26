@@ -686,43 +686,130 @@ mod tests {
         );
         fs::set_permissions(path, fs::Permissions::from_mode(0o400)).unwrap();
         assert!(!receipt["text"].as_str().unwrap().contains(path));
+        let fresh = |id: &str| {
+            assert_eq!(id, "11");
+            Ok(Some(source.clone()))
+        };
         let digest = receipt["received_files"][0]["sha256"].as_str().unwrap();
         assert!(
             inbox
-                .read_active_attachment(&state["input"], "22", digest, 0)
+                .read_active_attachment(&state["input"], "22", digest, 0, fresh)
                 .is_err()
         );
         let mut accepted = state;
         accepted["input"]["turn_id"] = json!("native-turn");
         inbox.settled_input("11", accepted.clone()).unwrap();
         let chunk = inbox
-            .read_active_attachment(&accepted["input"], "22", digest, 2)
+            .read_active_attachment(&accepted["input"], "22", digest, 2, fresh)
             .unwrap();
         assert_eq!(chunk["data"], "Ygo=");
+        let mut edited = source.clone();
+        edited["edited_timestamp"] = json!("2026-01-01T00:00:00Z");
+        let mut removed = source.clone();
+        removed["attachments"] = json!([]);
+        for replay in [None, Some(edited), Some(removed)] {
+            assert!(
+                inbox
+                    .read_active_attachment(&accepted["input"], "22", digest, 0, |_| Ok(replay))
+                    .is_err()
+            );
+        }
+
         assert!(
             inbox
-                .read_active_attachment(&accepted["input"], "23", digest, 0)
+                .read_active_attachment(&accepted["input"], "23", digest, 0, fresh)
                 .is_err()
         );
         assert!(
             inbox
-                .read_active_attachment(&accepted["input"], "22", &"0".repeat(64), 0)
+                .read_active_attachment(&accepted["input"], "22", &"0".repeat(64), 0, fresh)
                 .is_err()
         );
         let mut stale = accepted["input"].clone();
         stale["turn_id"] = json!("another-turn");
         assert!(
             inbox
-                .read_active_attachment(&stale, "22", digest, 0)
+                .read_active_attachment(&stale, "22", digest, 0, fresh)
                 .is_err()
         );
         inbox.set_manager(Value::Null).unwrap();
         assert!(
             inbox
-                .read_active_attachment(&accepted["input"], "22", digest, 0)
+                .read_active_attachment(&accepted["input"], "22", digest, 0, fresh)
                 .is_err()
         );
         fs::remove_dir_all(place).unwrap();
+    }
+
+    #[test]
+    fn accepted_team_reads_recertify_direct_and_forwarded_sources_during_gap() {
+        use super::super::{config::Config, receipt::Inbox, team_thread::Route};
+        for forwarded in [false, true] {
+            let place = std::env::temp_dir().join(format!(
+                "swarm-attach-team-{}",
+                runtime::random_id().unwrap()
+            ));
+            runtime::private_dir(&place).unwrap();
+            let cfg = Config(json!({
+                "mode":"teammate","installation_id":"fixture","application_id":"44",
+                "owner_id":"15","dm_channel_id":"30","daemon_socket":"/tmp/native-attach",
+                "guild_ids":["55"],"team_discussion":{"guild_id":"55","thread_id":"33"}
+            }));
+            let file = json!({"id":"22","filename":"data.csv","size":4,
+                "url":"https://cdn.discordapp.com/attachments/33/22/data.csv?sig=fixture"});
+            let mut source = json!({"id":"11","author":{"id":"16"},"guild_id":"55",
+                "channel_id":"33","type":0,"content":"source","attachments":[]});
+            if forwarded {
+                source["message_reference"] = json!({"type":1,"channel_id":"99","message_id":"56"});
+                source["message_snapshots"] = json!([{"message":{"content":"x".repeat(500),
+                    "attachments":[file]}}]);
+            } else {
+                source["attachments"] = json!([file]);
+            }
+            capture_with(&place, &source, "33", usize::MAX, |_| Ok(b"a,b\n".to_vec())).unwrap();
+            let mut inbox = Inbox::open(&place, &cfg).unwrap();
+            inbox.checkpoint("10").unwrap();
+            inbox.checkpoint_team("10").unwrap();
+            let route = Route::configured(&cfg).unwrap().unwrap();
+            let receipt = inbox.admit_team(&route, &source).unwrap().unwrap();
+            let mut state = json!({"input":{"source_id":"11","composer":{
+                "origin":{"revision":receipt["revision"]},"manager_admission":{"nonce":"a".repeat(64)}
+            }}});
+            inbox
+                .cutover("11", receipt["revision"].as_str().unwrap(), state.clone())
+                .unwrap();
+            state["input"]["turn_id"] = json!("native-turn");
+            inbox.settled_input("11", state.clone()).unwrap();
+            inbox.mark_team_gap().unwrap();
+
+            let digest = receipt["received_files"][0]["sha256"].as_str().unwrap();
+            let read = |fresh| {
+                inbox.read_active_attachment(&state["input"], "22", digest, 0, |id| {
+                    assert_eq!(id, "11");
+                    fresh
+                })
+            };
+            assert_eq!(read(Ok(Some(source.clone()))).unwrap()["data"], "YSxiCg==");
+            assert!(read(Ok(None)).is_err());
+            assert!(read(Err(io::Error::other("REST unavailable"))).is_err());
+            let mut altered = source.clone();
+            if forwarded {
+                // A revision beyond the admitted quote excerpt still invalidates the grant.
+                altered["message_snapshots"][0]["message"]["content"] =
+                    json!(format!("{}y", "x".repeat(499)));
+            } else {
+                altered["content"] = json!("changed");
+            }
+            assert!(read(Ok(Some(altered))).is_err());
+            let mut removed = source;
+            if forwarded {
+                removed["message_snapshots"][0]["message"]["attachments"] = json!([]);
+            } else {
+                removed["attachments"] = json!([]);
+            }
+            assert!(read(Ok(Some(removed))).is_err());
+            fs::remove_dir_all(place).unwrap();
+        }
     }
 
     #[test]
