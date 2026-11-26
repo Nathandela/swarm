@@ -30,6 +30,8 @@ parser.add_argument('--terminal-checkpoint', choices=('missing', 'recovered', 'i
 parser.add_argument('--live-go', type=Path)
 parser.add_argument('--digest-pause', choices=('old', 'retry', 'exhaust'),
                     help='pause the verified native TUI across one preflight deadline')
+parser.add_argument('--shim-pause', choices=('old', 'retry', 'exhaust'),
+                    help='pause the verified shim across its read-only ownership handshake')
 parser.add_argument('--check-arguments', action='store_true')
 args = parser.parse_args()
 if args.duration is not None and (
@@ -37,8 +39,10 @@ if args.duration is not None and (
     or not re.fullmatch('[a-f0-9]{40}', args.source or '')
 ):
     parser.error('soak requires 1..259200 seconds, a positive restart cadence and the full source SHA')
-if args.digest_pause and args.duration is not None:
-    parser.error('digest pause is a separate fault trial')
+if (args.digest_pause and args.shim_pause) or (
+    (args.digest_pause or args.shim_pause) and args.duration is not None
+):
+    parser.error('run one pause fault at a time, independently of the soak')
 if args.mixed and (args.duration is None or args.duration < 70):
     parser.error('the mixed workload needs at least 70 seconds and a real wall-clock tick')
 root, swarm = args.root, args.swarm
@@ -337,9 +341,10 @@ try:
         print('native running/stopped handoff, sealed artifact and real stale database substitution verified',flush=True)
         sys.exit(0)
     assert resume_request(env, row, root/'project')['op'] == 'error'
-    if args.digest_pause:
+    if args.digest_pause or args.shim_pause:
         from digest_pause import verify_fault
-        verify_fault(args.digest_pause, root, row, cli, output, history, request_log)
+        verify_fault(args.digest_pause or args.shim_pause, root, row, cli, output, history, request_log,
+                     shim=args.shim_pause is not None)
         sys.exit()
     operation=f'semantic:{int(time.time()*1000)}:00112233445566778899aabbccddeeff'
     message=output('message',row,'--operation-id',operation,'--text','RUST_SEMANTIC. Reply fixture only.')

@@ -1,4 +1,4 @@
-"""Pause an owned native TUI across one read-only digest deadline."""
+"""Pause an owned process across a read-only digest or ownership deadline."""
 
 import hashlib
 import json
@@ -11,12 +11,12 @@ import time
 from processes import alive
 
 
-def verify_fault(mode, root, row, cli, output, history, requests):
+def verify_fault(mode, root, row, cli, output, history, requests, *, shim=False):
     state = root / 'state/rust-v1' / row.split('/')[-1]
     owner = json.loads((state / 'owner.json').read_text())
-    pid, born = owner['worker_pid'], owner['worker_birth']
+    pid, born = (owner['pid'], owner['birth']) if shim else (owner['worker_pid'], owner['worker_birth'])
     assert alive(pid, born)
-    text = 'RUST_SOAK_123456. Digest deadline fault witness.'
+    text = 'RUST_SOAK_123456. Read-only deadline fault witness.'
     operation = f'semantic:{time.time_ns() // 1000000}:00112233445566778899aabbccddeeff'
     receipt_path = state / 'opencode-receipts' / (hashlib.sha256(operation.encode()).hexdigest() + '.json')
     database = root / 'data/opencode/opencode.db'
@@ -30,7 +30,10 @@ def verify_fault(mode, root, row, cli, output, history, requests):
         os.kill(pid, signal.SIGCONT)
 
     assert input_count() == 0 and not receipt_path.exists()
-    pause = 7.25 if mode == 'exhaust' else 4.25
+    if shim:
+        pause = 5.25 if mode == 'exhaust' else 3.25
+    else:
+        pause = 7.25 if mode == 'exhaust' else 4.25
     recovery = threading.Timer(pause, resume)
     os.kill(pid, signal.SIGSTOP)
     recovery.start()
@@ -44,17 +47,21 @@ def verify_fault(mode, root, row, cli, output, history, requests):
         resume()
 
     if mode != 'retry':
-        error = ('OpenCode bridge request failed' if mode == 'old' else
-                 'OpenCode dispatch preflight: OpenCode bridge request timed out')
+        if shim:
+            error = 'semantic_target:'
+        else:
+            error = ('OpenCode bridge request failed' if mode == 'old' else
+                     'OpenCode dispatch preflight: OpenCode bridge request timed out')
         assert first.returncode != 0 and error in first.stderr, first.stderr
         assert pause - 1.55 <= elapsed < pause, elapsed
         assert not receipt_path.exists() and input_count() == 0
         assert output('message', row, '--status', '--operation-id', operation)['state'] == 'unknown_operation'
-        conflict = cli('message', row, '--operation-id', operation, '--text', text + ' Different.', check=False)
-        assert conflict.returncode != 0 and not receipt_path.exists() and input_count() == 0
+        if not shim:
+            conflict = cli('message', row, '--operation-id', operation, '--text', text + ' Different.', check=False)
+            assert conflict.returncode != 0 and not receipt_path.exists() and input_count() == 0
         first = cli('message', row, '--operation-id', operation, '--text', text)
     else:
-        assert first.returncode == 0 and 4.0 <= elapsed < 10, (elapsed, first.stderr)
+        assert first.returncode == 0 and (2.0 if shim else 4.0) <= elapsed < 10, (elapsed, first.stderr)
 
     admitted = json.loads(first.stdout)
     assert admitted['state'] in ('native_accepted', 'completed'), admitted
@@ -70,6 +77,7 @@ def verify_fault(mode, root, row, cli, output, history, requests):
     assert input_count() == 1
     assert sum(req['marker'] == 'RUST_SOAK_123456' and req['primary'] for req in requests) == 1
     assert any(m['info']['id'] == done['native_message_id'] for m in history()['history'])
-    print(json.dumps({'fault': 'verified native TUI paused across first digest deadline',
+    print(json.dumps({'fault': 'verified shim paused across first ownership deadline' if shim else
+                      'verified native TUI paused across first digest deadline',
                       'mode': mode, 'first_seconds': elapsed, 'native_parts': input_count(),
                       'exact_replay_once': True, 'terminal_receipt': done['state']}), flush=True)

@@ -1389,7 +1389,10 @@ impl Session {
     }
 
     pub(super) fn dial(&self) -> io::Result<UnixStream> {
-        let (pid, birth) = self.owner_identity()?;
+        self.dial_owner(self.owner_identity()?)
+    }
+
+    fn dial_owner(&self, (pid, birth): (u32, u64)) -> io::Result<UnixStream> {
         let mut stream = UnixStream::connect(self.dir.join("p"))?;
         stream.set_read_timeout(Some(IO_TIMEOUT))?;
         stream.set_write_timeout(Some(IO_TIMEOUT))?;
@@ -1499,7 +1502,7 @@ impl Session {
             return Ok(codex_receipt::provider_instance("agy", &self.token));
         }
         if self.agent == "opencode" {
-            self.dial()?;
+            self.dial_opencode()?;
             let record = self.opencode_native()?;
             let launch = runtime::read_json(&self.dir.join("opencode-launch.json"))?;
             if launch["token"] != self.token || launch["ready"] != true {
@@ -2065,7 +2068,7 @@ impl Session {
         if self.agent != "opencode" {
             return Err(io::Error::other("session has no managed OpenCode runtime"));
         }
-        let mut stream = self.dial()?;
+        let mut stream = self.dial_opencode()?;
         stream.set_read_timeout(Some(Duration::from_secs(30)))?;
         runtime::write_control(&mut stream, request)?;
         let response = runtime::read_control(&mut stream)?;
@@ -2073,6 +2076,25 @@ impl Session {
             return Err(io::Error::other(field(&response, "error").to_owned()));
         }
         Ok(response["body"].clone())
+    }
+
+    fn dial_opencode(&self) -> io::Result<UnixStream> {
+        let owner = self.owner_identity()?;
+        match self.dial_owner(owner) {
+            // No semantic request has been written while exchanging the private hello.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                if self.owner_identity()? != owner {
+                    return Err(io::Error::other("OpenCode shim changed during handshake"));
+                }
+                self.dial_owner(owner)
+            }
+            result => result,
+        }
     }
 
     pub(super) fn opencode_history(&self, limit: u64, before: &str) -> io::Result<Value> {
