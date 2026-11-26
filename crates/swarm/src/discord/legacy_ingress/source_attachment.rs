@@ -125,10 +125,10 @@ mod tests {
     use std::process::Command;
 
     #[test]
+    #[ignore = "requires the pinned original Go Discord fixture"]
     fn current_source_attachment_needs_original_go_revision_and_cdn_scope() {
-        let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
-            return;
-        };
+        let fixture = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE")
+            .expect("set SWARM_TEST_GO_DISCORD_FIXTURE to the pinned helper");
         let root = std::env::temp_dir()
             .canonicalize()
             .unwrap()

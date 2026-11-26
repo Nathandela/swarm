@@ -572,10 +572,10 @@ mod tests {
     use std::process::Command;
 
     #[test]
+    #[ignore = "requires the pinned original Go Discord fixture"]
     fn pinned_go_keeps_original_publication_nonce_and_outcome() {
-        let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
-            return;
-        };
+        let fixture = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE")
+            .expect("set SWARM_TEST_GO_DISCORD_FIXTURE to the pinned helper");
         for (acknowledge, grant) in [
             (true, ""),
             (false, ""),
@@ -732,10 +732,10 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the pinned original Go Discord fixture"]
     fn original_unexported_or_removed_project_publication_cannot_send() {
-        let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
-            return;
-        };
+        let fixture = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE")
+            .expect("set SWARM_TEST_GO_DISCORD_FIXTURE to the pinned helper");
         for phase in ["unexported-final", "project-final", "attempt-final"] {
             let root = std::env::temp_dir()
                 .canonicalize()
@@ -801,10 +801,10 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the pinned original Go Discord fixture"]
     fn altered_go_attachment_payload_cannot_send() {
-        let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
-            return;
-        };
+        let fixture = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE")
+            .expect("set SWARM_TEST_GO_DISCORD_FIXTURE to the pinned helper");
         let root = std::env::temp_dir()
             .canonicalize()
             .unwrap()
@@ -851,10 +851,10 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the pinned original Go Discord fixture"]
     fn revocation_during_publication_validation_prevents_send() {
-        let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
-            return;
-        };
+        let fixture = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE")
+            .expect("set SWARM_TEST_GO_DISCORD_FIXTURE to the pinned helper");
         let root = std::env::temp_dir()
             .canonicalize()
             .unwrap()

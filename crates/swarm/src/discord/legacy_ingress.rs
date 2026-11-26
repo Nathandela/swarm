@@ -1117,10 +1117,10 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the pinned original Go Discord fixture"]
     fn pinned_go_reopens_rust_personal_input_cutover() {
-        let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
-            return;
-        };
+        let fixture = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE")
+            .expect("set SWARM_TEST_GO_DISCORD_FIXTURE to the pinned helper");
         for (acknowledge, fresh, interrupted) in [
             (true, false, false),
             (true, true, false),
@@ -1233,10 +1233,10 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the pinned original Go Discord fixture"]
     fn pinned_go_continues_a_personal_dm_first_captured_by_rust() {
-        let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
-            return;
-        };
+        let fixture = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE")
+            .expect("set SWARM_TEST_GO_DISCORD_FIXTURE to the pinned helper");
         let root = std::env::temp_dir()
             .canonicalize()
             .unwrap()

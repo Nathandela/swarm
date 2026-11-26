@@ -338,10 +338,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires the pinned original Go Discord fixture"]
     fn pending_vm_completion_is_read_only_and_discussion_scoped() {
-        let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
-            return;
-        };
+        let fixture = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE")
+            .expect("set SWARM_TEST_GO_DISCORD_FIXTURE to the pinned helper");
         let root = std::env::temp_dir()
             .canonicalize()
             .unwrap()

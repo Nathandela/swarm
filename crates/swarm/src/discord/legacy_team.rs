@@ -334,10 +334,10 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the pinned original Go Discord fixture"]
     fn pinned_go_retained_thread_observation_preserves_replay() {
-        let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
-            return;
-        };
+        let fixture = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE")
+            .expect("set SWARM_TEST_GO_DISCORD_FIXTURE to the pinned helper");
         let root = std::env::temp_dir()
             .canonicalize()
             .unwrap()
