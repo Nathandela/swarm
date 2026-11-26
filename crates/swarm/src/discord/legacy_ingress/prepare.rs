@@ -264,17 +264,8 @@ fn read_voice_with_admission<'tx>(
     origin: Option<(&Value, &[&str])>,
 ) -> io::Result<Voice> {
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
-    let raw = root.get(b"state").ok_or_else(invalid)?;
-    if raw.len() > 4096
-        || root.get(b"digest") != Some(format!("{:x}", Sha256::digest(raw)).as_bytes())
-    {
-        return Err(invalid());
-    }
-    let header: Value = serde_json::from_slice(raw)?;
+    let header = voice_ledger::reopen(tx)?;
     let guild = cfg.text("mode") == "teammate";
-    if guild && !canonical_guild_voice(&header, raw)? {
-        return Err(invalid());
-    }
     let conversation = format!("discord-teammate-{id}");
     let media_history = retained_vm(cfg) && header["version"] == 4;
     if (header["version"] != 3 && !media_history)
@@ -288,18 +279,9 @@ fn read_voice_with_admission<'tx>(
     if records.iter_buckets().next().is_some() {
         return Err(invalid());
     }
-    let mut count = 0;
     let mut admissions = 0;
     let mut queued = None;
-    let mut sum = [0u8; 32];
     for (key, raw) in records.iter_entries() {
-        count += 1;
-        if count >= 4096 || raw.len() > 1 << 20 {
-            return Err(invalid());
-        }
-        for (byte, item) in sum.iter_mut().zip(record_hash(key, raw)) {
-            *byte ^= item;
-        }
         if key == conversation_key
             || key.starts_with(b"journal\0")
             || key.starts_with(b"journal_snapshots\0")
@@ -380,9 +362,6 @@ fn read_voice_with_admission<'tx>(
             }
         }
         // Avoid giving a second scheduler custody of other unresolved work.
-        return Err(invalid());
-    }
-    if header["records"] != count || header["record_hash"] != json!(sum) {
         return Err(invalid());
     }
     let raw_conversation = records.get(&conversation_key).ok_or_else(invalid)?.to_vec();
@@ -473,15 +452,6 @@ pub(in crate::discord) fn read_guild_publication<'tx>(
             && row["binding"].is_string()
             && row["sequence"].as_u64().is_some()
     };
-    // Go's readState checks the size of the encoded full State, whose version
-    // and empty tables are independent of the v3 on-disk header.
-    let mut bytes = go_bytes(&json!({
-        "version":1, "generation":header["generation"], "current_conversation":conversation,
-        "workers":{}, "conversations":{}, "utterances":{}, "admissions":{}, "actions":{},
-        "closed_turns":{}, "cancelled_tasks":{}, "requests":{}, "permits":{}, "publications":{},
-        "journal":{}, "journal_snapshots":{}, "events":{}, "wakes":{},
-    }))?
-    .len();
     let error = || io::Error::other("the original guild Voice records cannot reopen in Go");
     let mut journal = false;
     let mut snapshot = false;
@@ -514,11 +484,8 @@ pub(in crate::discord) fn read_guild_publication<'tx>(
             }
             _ => return Err(error()),
         }
-        // Each qualified table has one entry. Count the encoded map key,
-        // colon, and canonical row within the braces already counted above.
-        bytes += go_bytes(&json!(suffix))?.len() + 1 + raw.len();
     }
-    if !journal || !snapshot || header["logical_bytes"] != bytes {
+    if !journal || !snapshot {
         return Err(error());
     }
     Ok(voice)

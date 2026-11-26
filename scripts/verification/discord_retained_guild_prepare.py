@@ -677,7 +677,7 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
                         assert go_read.returncode != 0 and b"corrupt" in go_read.stderr, (damage, go_read.stderr)
                         for probe in ("malformed-dry-run", "malformed"):
                             denied = subprocess.run(command, env=rust_env(f"publish-{probe}"), capture_output=True, timeout=10)
-                            reason = b"unqualified original guild Voice header or conversation" if damage == "conversation-type" else b"cannot reopen in Go"
+                            reason = b"cannot reopen in Go"
                             assert denied.returncode == 0 and reason in denied.stderr and (voice.read_bytes(), connector.read_bytes()) == (damaged, original[1]), (damage, denied.stdout + denied.stderr)
                     finally:
                         voice.write_bytes(original[0])

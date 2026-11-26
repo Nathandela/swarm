@@ -154,35 +154,11 @@ pub(super) fn reconcile(
     let (voice_pin, voice) = open_bolt(&voice_path, 64 << 20)?;
     let tx = voice.begin().map_err(io::Error::other)?;
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
-    let header = root
-        .get(b"state")
-        .filter(|raw| raw.len() <= 4096)
-        .ok_or_else(invalid)?;
-    let decoded: Value = serde_json::from_slice(header)?;
-    if decoded["version"] != 4
-        || decoded["current_conversation"] != conversation
-        || root.get(b"digest") != Some(hash(header).as_bytes())
-    {
+    let header = voice_ledger::reopen(&tx)?;
+    if header["version"] != 4 || header["current_conversation"] != conversation {
         return Err(invalid());
     }
     let records = root.bucket(b"records").ok_or_else(invalid)?;
-    if records.iter_buckets().next().is_some() {
-        return Err(invalid());
-    }
-    let mut checksum = [0; 32];
-    let mut count = 0;
-    for (entry, raw) in records.iter_entries() {
-        count += 1;
-        if count > 4096 || raw.len() > 1 << 20 {
-            return Err(invalid());
-        }
-        for (left, right) in checksum.iter_mut().zip(record_hash(entry, raw)) {
-            *left ^= right;
-        }
-    }
-    if decoded["records"] != count || decoded["record_hash"] != json!(checksum) {
-        return Err(invalid());
-    }
     let prepared = records.get(key("publications", &conversation, publication)?.as_bytes());
     if prepared.is_some() || old.is_some() || receipt || nonce_index.is_some() {
         if let (Some(raw), Some(out)) = (prepared, old) {

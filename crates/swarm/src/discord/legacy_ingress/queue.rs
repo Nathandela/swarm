@@ -59,21 +59,11 @@ pub(super) fn inspect(
     let (voice_pin, db) = open_bolt(&voice_path, 64 << 20)?;
     let voice = db.begin().map_err(io::Error::other)?;
     let root = voice.bucket(b"controller").ok_or_else(invalid)?;
-    let header = root
-        .get(b"state")
-        .filter(|raw| raw.len() <= 4096)
-        .ok_or_else(invalid)?;
-    let parsed: Value = serde_json::from_slice(header)?;
-    if !matches!(parsed["version"].as_u64(), Some(3 | 4))
-        || parsed["current_conversation"] != conversation
-        || root.get(b"digest") != Some(format!("{:x}", Sha256::digest(header)).as_bytes())
-    {
+    let parsed = voice_ledger::reopen(&voice)?;
+    if parsed["current_conversation"] != conversation {
         return Err(invalid());
     }
     let records = root.bucket(b"records").ok_or_else(invalid)?;
-    if records.iter_buckets().next().is_some() {
-        return Err(invalid());
-    }
     let recovered = queued.is_none();
     let existing = prepared_file(&records, &conversation)?;
     let (note, mailbox_identity) = match queued {
@@ -144,17 +134,8 @@ pub(super) fn inspect(
     {
         return Err(invalid());
     }
-    let mut checksum = [0; 32];
-    let mut count = 0;
     let mut parent = None;
     for (key, raw) in records.iter_entries() {
-        count += 1;
-        if count > 4096 || raw.len() > 1 << 20 {
-            return Err(invalid());
-        }
-        for (left, right) in checksum.iter_mut().zip(record_hash(key, raw)) {
-            *left ^= right;
-        }
         if key.starts_with(b"admissions\0") {
             let row: Value = serde_json::from_slice(raw)?;
             let nonce = field(&row, "native_input_id");
@@ -165,9 +146,6 @@ pub(super) fn inspect(
                 return Err(invalid());
             }
         }
-    }
-    if parsed["records"] != count || parsed["record_hash"] != json!(checksum) {
-        return Err(invalid());
     }
     let parent = parent.ok_or_else(invalid)?;
     let origin = &parent["origin"];
@@ -449,7 +427,7 @@ pub(super) fn prepare(
     let request_hash = digest(&request)?;
     let tx = db.begin_rw().map_err(io::Error::other)?;
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
-    let current_header: Value = serde_json::from_slice(root.get(b"state").ok_or_else(invalid)?)?;
+    let current_header = voice_ledger::reopen(&tx)?;
     let records = root.bucket(b"records").ok_or_else(invalid)?;
     if current_header != proof.header {
         return Err(invalid());
@@ -618,21 +596,11 @@ pub(super) fn dispatch(
     prepare::no_pending_output(&conn, cfg)?;
     let tx = db.begin_rw().map_err(io::Error::other)?;
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
-    let bytes = root
-        .get(b"state")
-        .filter(|bytes| bytes.len() <= 4096)
-        .ok_or_else(invalid)?;
-    let header: Value = serde_json::from_slice(bytes)?;
-    if root.get(b"digest") != Some(format!("{:x}", Sha256::digest(bytes)).as_bytes())
-        || header["version"] != 4
-        || header["current_conversation"] != prepared.conversation
-    {
+    let header = voice_ledger::reopen(&tx)?;
+    if header["version"] != 4 || header["current_conversation"] != prepared.conversation {
         return Err(invalid());
     }
     let records = root.bucket(b"records").ok_or_else(invalid)?;
-    if records.iter_buckets().next().is_some() {
-        return Err(invalid());
-    }
     let conversation = &prepared.conversation;
     let conv_key = format!("conversations\0{conversation}").into_bytes();
     let mut state: Value = serde_json::from_slice(records.get(&conv_key).ok_or_else(invalid)?)?;
@@ -677,16 +645,7 @@ pub(super) fn dispatch(
             state["retired_through"]
         )));
     }
-    let mut count = 0;
-    let mut checksum = [0u8; 32];
     for (key, raw) in records.iter_entries() {
-        count += 1;
-        if count > 4096 || raw.len() > 1 << 20 {
-            return Err(invalid());
-        }
-        for (left, right) in checksum.iter_mut().zip(record_hash(key, raw)) {
-            *left ^= right;
-        }
         if key.starts_with(b"wakes\0")
             && key != record_key("wakes", conversation, &prepared.event)?
             && !serde_json::from_slice::<Value>(raw).is_ok_and(|row| row["state"] == "settled")
@@ -715,9 +674,6 @@ pub(super) fn dispatch(
                 "an earlier original Go effect still needs its scheduler",
             ));
         }
-    }
-    if header["records"] != count || header["record_hash"] != json!(checksum) {
-        return Err(invalid());
     }
     let caps = ["semantic-send", "manager-provenance", "message-origin"];
     let (mut owner, rows) = super::super::migrate_supervisor::verified_owner(
@@ -901,8 +857,7 @@ pub(super) fn dispatch(
         std::thread::sleep(std::time::Duration::from_millis(25));
     };
     let tx = db.begin_rw().map_err(io::Error::other)?;
-    let root = tx.bucket(b"controller").ok_or_else(invalid)?;
-    let header: Value = serde_json::from_slice(root.get(b"state").ok_or_else(invalid)?)?;
+    let header = voice_ledger::reopen(&tx)?;
     admission["phase"] = json!(field(&observed, "state"));
     if let Some(turn) = observed["native_turn_id"]
         .as_str()

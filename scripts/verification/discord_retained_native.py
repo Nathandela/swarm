@@ -439,6 +439,30 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                         run(rust_test,queued_env,"native_go_queued_file_owner_inspection_is_read_only","--nocapture")
                         assert ((place / "discord.db").read_bytes(),ledger.read_bytes()) == original_ledgers
                         assert posts == []
+                        if mode == "ordinary-restart-lost":
+                            copy = base / "voice-size-copy"
+                            copy.mkdir(mode=0o700)
+                            copied = copy / "voice.db"
+                            copied.write_bytes(original_ledgers[1])
+                            copied.chmod(0o600)
+                            run(fixture, env, "vm-voice-size", copy, "read")
+                            run(fixture, env, "vm-voice-size", copy, "damage")
+                            damaged = copied.read_bytes()
+                            go_read = subprocess.run([fixture, "vm-voice-size", copy, "read"], env=env,
+                                                     capture_output=True, timeout=5)
+                            assert go_read.returncode != 0 and b"corrupt" in go_read.stderr
+                            assert copied.read_bytes() == damaged
+                            no_effect = len(calls), len(posts), len(worker_wake_requests)
+                            try:
+                                ledger.write_bytes(damaged)
+                                run(rust_test, queued_env | {"SWARM_TEST_DISCORD_BAD_VOICE_SIZE": "1"},
+                                    "native_go_queued_file_owner_inspection_is_read_only", "--nocapture")
+                                assert ledger.read_bytes() == damaged
+                                assert (place / "discord.db").read_bytes() == original_ledgers[0]
+                                assert no_effect == (len(calls), len(posts), len(worker_wake_requests))
+                            finally:
+                                ledger.write_bytes(original_ledgers[1])
+                            print("PASS Go and Rust refuse checksum-correct VM logical size damage before native sends or POST", flush=True)
                         if fresh:
                             rust_env = env | {"SWARM_TEST_DISCORD_ADMITTED_FILE_WAKE_ROOT":str(base / "state"),
                                 "SWARM_TEST_DISCORD_REST_PORT":str(discord.server_port), "SWARM_TEST_DISCORD_WAKE_DELIVERY":mode}

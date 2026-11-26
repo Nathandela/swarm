@@ -169,13 +169,7 @@ fn original_voice(
     let (pin, db) = open_bolt(&path.join("voice.db"), 64 << 20)?;
     let tx = db.begin().map_err(io::Error::other)?;
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
-    let raw = root.get(b"state").ok_or_else(invalid)?;
-    if raw.len() > 4096
-        || root.get(b"digest") != Some(format!("{:x}", Sha256::digest(raw)).as_bytes())
-    {
-        return Err(invalid());
-    }
-    let header: Value = serde_json::from_slice(raw)?;
+    let header = voice_ledger::reopen(&tx)?;
     let conversation = format!("discord-teammate-{id}");
     if !matches!(header["version"].as_u64(), Some(3 | 4))
         || (!expected.files.is_empty() && header["version"] != 4)
@@ -187,17 +181,6 @@ fn original_voice(
     let reference = serde_json::to_string(&[conversation.as_str(), field(output, "ID")])?;
     let key = format!("publications\0{reference}");
     let records = root.bucket(b"records").ok_or_else(invalid)?;
-    let mut sum = [0; 32];
-    let mut count = 0;
-    for (key, raw) in records.iter_entries() {
-        count += 1;
-        if count > 4096 || raw.len() > 1 << 20 {
-            return Err(invalid());
-        }
-        for (left, right) in sum.iter_mut().zip(record_hash(key, raw)) {
-            *left ^= right;
-        }
-    }
     let existing: Value = serde_json::from_slice(records.get(key.as_bytes()).ok_or_else(invalid)?)?;
     let sequence = existing["admission"]
         .as_u64()
@@ -226,9 +209,7 @@ fn original_voice(
     {
         return Err(invalid());
     }
-    if header["records"] != count
-        || header["record_hash"] != json!(sum)
-        || existing["conversation_id"] != conversation
+    if existing["conversation_id"] != conversation
         || existing["id"] != output["ID"]
         || existing["text"] != expected.body
         || existing["text_hash"] != format!("{:x}", Sha256::digest(expected.body.as_bytes()))

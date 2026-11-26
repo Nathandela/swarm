@@ -866,3 +866,65 @@ func FixtureReplyNoise(dir, scenario, action string, clock time.Time) (State, er
 	}
 	return store.Snapshot()
 }
+
+// FixtureVMVoiceSize inspects or damages only a disposable copy of a native
+// VM file wake ledger. Production reopen and header encoding stay in Go.
+func FixtureVMVoiceSize(dir, action string) error {
+	canonical, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return err
+	}
+	tmp, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		return err
+	}
+	root := filepath.Dir(dir)
+	if canonical != dir || filepath.Base(dir) != "voice-size-copy" ||
+		filepath.Dir(root) != tmp || !strings.HasPrefix(filepath.Base(root), "dn-admit-") {
+		return ErrInvalid
+	}
+	path := filepath.Join(dir, "voice.db")
+	info, err := os.Lstat(path)
+	if err != nil || !privateRegular(info) {
+		return ErrInvalid
+	}
+	opener := openInventoryLedger
+	if action == "damage" {
+		var created bool
+		opener = func(path string, flag int, mode os.FileMode) (*os.File, error) {
+			return openStoreFile(path, flag, mode, &created)
+		}
+	}
+	db, err := bolt.Open(path, 0600, &bolt.Options{
+		ReadOnly: action == "read", Timeout: time.Second, OpenFile: opener,
+	})
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	switch action {
+	case "read":
+		return db.View(func(tx *bolt.Tx) error {
+			_, err := readState(tx)
+			return err
+		})
+	case "damage":
+		return db.Update(func(tx *bolt.Tx) error {
+			st, err := readState(tx)
+			if err != nil {
+				return err
+			}
+			if !st.Conversations[st.CurrentConversation].Binding.NativeCLI {
+				return ErrInvalid
+			}
+			header, err := readHeader(tx)
+			if err != nil {
+				return err
+			}
+			header.LogicalBytes++
+			return writeHeader(tx, header)
+		})
+	default:
+		return ErrInvalid
+	}
+}

@@ -40,26 +40,14 @@ pub(super) fn inspect<'connector, 'voice>(
     endpoint: &str,
 ) -> io::Result<Admitted> {
     let root = voice.bucket(b"controller").ok_or_else(invalid)?;
-    let raw = root
-        .get(b"state")
-        .filter(|value| value.len() <= 4096)
-        .ok_or_else(invalid)?;
-    let header: Value = serde_json::from_slice(raw)?;
+    let header = voice_ledger::reopen(voice)?;
     let conversation = format!("discord-teammate-{id}");
-    if header["version"] != 4
-        || header["current_conversation"] != conversation
-        || root.get(b"digest") != Some(format!("{:x}", Sha256::digest(raw)).as_bytes())
-    {
+    if header["version"] != 4 || header["current_conversation"] != conversation {
         return Err(io::Error::other(
             "unqualified original media-v4 voice ledger header",
         ));
     }
     let records = root.bucket(b"records").ok_or_else(invalid)?;
-    if records.iter_buckets().next().is_some() {
-        return Err(io::Error::other(
-            "unexpected bucket in original VM voice records",
-        ));
-    }
     let row: Value = serde_json::from_slice(
         records
             .get(format!("conversations\0{conversation}").as_bytes())
@@ -102,17 +90,8 @@ pub(super) fn inspect<'connector, 'voice>(
             "no live supervisor native input for original VM wake",
         ));
     }
-    let mut checksum = [0; 32];
-    let mut count = 0;
     let mut admitted = None;
     for (key, raw) in records.iter_entries() {
-        count += 1;
-        if count > 4096 || raw.len() > 1 << 20 {
-            return Err(invalid());
-        }
-        for (left, right) in checksum.iter_mut().zip(record_hash(key, raw)) {
-            *left ^= right;
-        }
         if key.starts_with(b"admissions\0") {
             let admission: Value = serde_json::from_slice(raw)?;
             if field(&admission, "settled_at") == "0001-01-01T00:00:00Z"
@@ -126,11 +105,6 @@ pub(super) fn inspect<'connector, 'voice>(
                 ));
             }
         }
-    }
-    if header["records"] != count || header["record_hash"] != json!(checksum) {
-        return Err(io::Error::other(
-            "original VM voice record checksum mismatch",
-        ));
     }
     let (admission, admission_key, admission_raw) =
         admitted.ok_or_else(|| io::Error::other("no unsettled original VM admission"))?;

@@ -9,6 +9,7 @@ mod queue;
 pub(super) mod reply_notice;
 pub(super) mod service;
 pub(super) mod source_attachment;
+mod voice_ledger;
 mod wake;
 mod wake_intent;
 
@@ -218,13 +219,7 @@ fn inspect_voice<'tx>(
     endpoint: &str,
 ) -> io::Result<Receipt> {
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
-    let header = root.get(b"state").ok_or_else(invalid)?;
-    if header.len() > 4096
-        || root.get(b"digest") != Some(format!("{:x}", Sha256::digest(header)).as_bytes())
-    {
-        return Err(invalid());
-    }
-    let header: Value = serde_json::from_slice(header)?;
+    let header = voice_ledger::reopen(tx)?;
     let conversation = format!("discord-teammate-{id}");
     if !matches!(header["version"].as_u64(), Some(3 | 4))
         || header["current_conversation"] != conversation
@@ -232,18 +227,9 @@ fn inspect_voice<'tx>(
         return Err(invalid());
     }
     let bucket = root.bucket(b"records").ok_or_else(invalid)?;
-    let mut sum = [0u8; 32];
-    let mut count = 0;
     let mut admission = None;
     let mut binding = None;
     for (key, raw) in bucket.iter_entries() {
-        count += 1;
-        if count > 4096 || raw.len() > 1 << 20 {
-            return Err(invalid());
-        }
-        for (byte, digest) in sum.iter_mut().zip(record_hash(key, raw)) {
-            *byte ^= digest;
-        }
         if key == format!("conversations\0{conversation}").as_bytes() {
             let entry: Value = serde_json::from_slice(raw)?;
             let b = entry["binding"].clone();
@@ -302,9 +288,7 @@ fn inspect_voice<'tx>(
     let (admission, key, raw) = admission.ok_or_else(invalid)?;
     let (binding, conversation) = binding.ok_or_else(invalid)?;
     let request = &admission["request"];
-    if header["records"] != count
-        || header["record_hash"] != json!(sum)
-        || request["origin"] != *origin
+    if request["origin"] != *origin
         || request["session"] != binding["session_id"]
         || request["session_instance"] != binding["session_instance"]
         || request["manager_admission"]["nonce"] != admission["native_input_id"]
@@ -1734,6 +1718,15 @@ mod tests {
             ];
             execute(&Request::parse(&args).unwrap())
         };
+        if std::env::var_os("SWARM_TEST_DISCORD_BAD_VOICE_SIZE").is_some() {
+            let error = inspect().unwrap_err();
+            assert!(error.to_string().contains("cannot reopen in Go"), "{error}");
+            let error = activation::migrate(&place, false, false, true).unwrap_err();
+            assert!(error.to_string().contains("cannot reopen in Go"), "{error}");
+            assert!(!activation::selected(&place).unwrap());
+            assert_eq!(snapshot(), before);
+            return;
+        }
         assert!(inspect().unwrap());
         assert!(!activation::selected(&place).unwrap());
         assert!(activation::migrate(&place, true, false, true).unwrap());

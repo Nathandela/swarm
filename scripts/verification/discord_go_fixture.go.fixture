@@ -192,6 +192,10 @@ func main() {
 		}
 		return
 	}
+	if action == "vm-voice-size" && len(os.Args) == 4 {
+		check(voice.FixtureVMVoiceSize(dir, os.Args[3]))
+		return
+	}
 	if action == "guild-publication" {
 		row, err := voice.FixtureGuildPublication(dir, "701")
 		check(err)

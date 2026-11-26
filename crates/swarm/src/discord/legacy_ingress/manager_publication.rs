@@ -674,8 +674,7 @@ pub(super) fn accept_wake(
     queue(cfg, lease, binding, &output, &speech)?;
     if output["exported"] != true {
         let tx = db.begin_rw().map_err(io::Error::other)?;
-        let root = tx.bucket(b"controller").ok_or_else(invalid)?;
-        let header: Value = serde_json::from_slice(root.get(b"state").ok_or_else(invalid)?)?;
+        let header = voice_ledger::reopen(&tx)?;
         output["exported"] = json!(true);
         apply_voice(
             tx,
@@ -858,40 +857,18 @@ pub(super) fn complete_vm_wake(
     let (pin, mut db) = bounded_writer(writable_pin(&path)?)?;
     let tx = db.begin_rw().map_err(io::Error::other)?;
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
-    let raw_header = root
-        .get(b"state")
-        .filter(|raw| raw.len() <= 4096)
-        .ok_or_else(invalid)?;
-    let header: Value = serde_json::from_slice(raw_header)?;
-    if root.get(b"digest") != Some(format!("{:x}", Sha256::digest(raw_header)).as_bytes())
-        || header["version"] != 4
-        || header["current_conversation"] != conversation
-    {
+    let header = voice_ledger::reopen(&tx)?;
+    if header["version"] != 4 || header["current_conversation"] != conversation {
         return Err(invalid());
     }
     let records = root.bucket(b"records").ok_or_else(invalid)?;
-    if records.iter_buckets().next().is_some() {
-        return Err(invalid());
-    }
-    let mut checksum = [0; 32];
-    let mut count = 0;
     for (key, raw) in records.iter_entries() {
-        count += 1;
-        if count > 4096 || raw.len() > 1 << 20 {
-            return Err(invalid());
-        }
-        for (left, right) in checksum.iter_mut().zip(record_hash(key, raw)) {
-            *left ^= right;
-        }
         if key.starts_with(b"actions\0") {
             let action: Value = serde_json::from_slice(raw)?;
             if action["admission"] == sequence && action["state"] != "settled" {
                 return Err(invalid());
             }
         }
-    }
-    if header["records"] != count || header["record_hash"] != json!(checksum) {
-        return Err(invalid());
     }
     let read = |value: &[u8]| -> io::Result<Value> {
         Ok(serde_json::from_slice(
