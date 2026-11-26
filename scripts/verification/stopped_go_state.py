@@ -341,7 +341,31 @@ def new_attempt(go, rust, base, tools, copied, go_env, rust_env):
     finally:
         foreign_entry.unlink()
         target.rmdir()
+    # Recreate the durable image after binding the private staging inode and
+    # writing part of the credentials-bearing metadata, before publication.
+    stage = source / ".go-rollback-stage"
+    stage.mkdir(mode=0o700)
+    stage_info = stage.stat()
+    source_token = disk(source / "session.json")["token"]
+    marker = {"schema": 1, "id": local, "reservation": hashlib.sha256(source_token.encode()).hexdigest()}
+    intent = source / "go-rollback-intent.json"
+    private(intent, {"origin": marker, "stage": [stage_info.st_dev, stage_info.st_ino]})
+    interrupted_meta = stage / "meta.json"
+    foreign = base / "unrelated-stage-data"
+    private(foreign, {"contents": "separate fixture data"})
+    foreign_before = foreign.read_bytes()
+    os.link(foreign, interrupted_meta)
+    try:
+        linked = export()
+        assert linked.returncode == 1 and "not a private regular owner file" in linked.stderr
+        assert foreign.read_bytes() == foreign_before
+    finally:
+        interrupted_meta.unlink()
+    interrupted_meta.write_text('{"env":["ANTHROPIC_API_KEY=' + SENTINEL)
+    interrupted_meta.chmod(0o600)
     await_value(lambda: export().returncode == 0)
+    assert target.stat().st_ino == stage_info.st_ino and not stage.exists()
+    assert not list(copied.glob(".rust-go-export-*"))
     copied_meta = target / "meta.json"
     before = copied_meta.read_bytes()
     published = source / "go-rollback-published.json"
@@ -356,6 +380,21 @@ def new_attempt(go, rust, base, tools, copied, go_env, rust_env):
     assert record["conversation_id"] == native_id and record["name"] == "Rust after cutover"
     assert record["tag"] == "after-cutover" and record["status"]["Process"] == "exited"
     assert not (target / "shim-launch.json").exists()
+    # A missing bound staging inode and a missing destination alone do not
+    # prove the row was deleted. Neither runtime may reconstruct that old row.
+    published.unlink()
+    parked = base / "parked-export"
+    target.rename(parked)
+    try:
+        ambiguous = export()
+        assert ambiguous.returncode == 1 and "missing its bound stage" in ambiguous.stderr
+        with daemon(rust, rust_env, base / "rust-mixed.log"):
+            assert all(row["id"] != session for row in listed(rust_env))
+        assert not target.exists()
+    finally:
+        parked.rename(target)
+    assert export().returncode == 0 and copied_meta.read_bytes() == before
+
     with daemon(go, go_env, base / "copy-go.log"):
         rows = {row["id"]: row for row in listed(go_env)}
         assert rows[session]["name"] == "Rust after cutover" and len(rows) == 2
@@ -365,6 +404,9 @@ def new_attempt(go, rust, base, tools, copied, go_env, rust_env):
         rows = {row["id"]: row for row in listed(rust_env)}
         assert rows[session]["name"] == "Renamed after rollback" and len(rows) == 2
 
+    # Simulate the supervisor stopping after publication and before its receipt
+    # is recorded, then have the pinned Go daemon perform a real family delete.
+    published.unlink()
     with daemon(go, go_env, base / "copy-go.log"):
         reply = owner(go_env, {"op":"launch", "launch": launch | {"options":{"resume_from":session}}})
         assert reply["op"] == "launch", reply
@@ -377,7 +419,18 @@ def new_attempt(go, rust, base, tools, copied, go_env, rust_env):
         finally:
             assert owner(go_env, {"op":"kill", "session_id":resumed})["op"] == "ok"
         await_value(lambda: next(row for row in listed(go_env) if row["id"] == resumed)["status"]["Process"] == "exited")
-    print("PASS classic Rust start: preserved live Rust restart, stopped export, Go rollback, native Go resume")
+        reply = owner(go_env, {"op": "delete", "session_id": resumed})
+        assert reply["op"] == "ok", reply
+        remaining, = listed(go_env)
+        reply = owner(go_env, {"op": "delete", "session_id": remaining["id"]})
+        assert reply["op"] == "ok" and listed(go_env) == [], reply
+    assert not target.exists() and not (copied / resumed.split("/")[1]).exists()
+    assert intent.is_file() and not published.exists()
+    settled = export()
+    assert settled.returncode == 0 and not target.exists() and published.is_file(), settled.stderr
+    with daemon(rust, rust_env, base / "rust-mixed.log"):
+        assert all(row["id"] != session for row in listed(rust_env))
+    print("PASS classic Rust start: live restart, staged crash recovery, Go native resume and durable deletion")
 
 
 if __name__ == "__main__":

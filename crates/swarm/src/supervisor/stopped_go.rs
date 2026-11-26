@@ -514,7 +514,7 @@ impl Store {
             );
         }
         if opted_in {
-            if rows.is_empty() {
+            if rows.is_empty() && export::collect(root)?.is_empty() {
                 return Err(io::Error::other(
                     "no qualified stopped Go sessions in the state root",
                 ));

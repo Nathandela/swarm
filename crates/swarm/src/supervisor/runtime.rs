@@ -99,7 +99,7 @@ fn uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-fn validate_file(file: &File) -> io::Result<()> {
+pub(super) fn validate_file(file: &File) -> io::Result<()> {
     let meta = file.metadata()?;
     if !meta.is_file() || meta.mode() & 0o077 != 0 || meta.uid() != uid() || meta.nlink() != 1 {
         return Err(io::Error::other(
