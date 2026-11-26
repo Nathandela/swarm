@@ -142,7 +142,10 @@ impl<B: Backend> Engine<B> {
 
     fn dispatch_manual(&self, run: &Occurrence, now: Timestamp) -> Result<()> {
         if run.state == "queued"
-            && run.attempts.is_empty()
+            && run
+                .attempts
+                .iter()
+                .all(|attempt| attempt.state == "rejected")
             && let Err(error) = self.dispatch(run, now)
             && !error.is::<Changed>()
         {
@@ -1202,6 +1205,93 @@ mod tests {
         assert_eq!(backend.stops.get(), 0);
         assert_eq!(backend.prompts.borrow().len(), 1);
         assert_eq!(backend.launches.borrow().len(), 1);
+    }
+
+    #[test]
+    fn manual_restart_advances_only_past_definitively_rejected_routes() {
+        use crate::schedule::catalog::Manual;
+
+        for (attempt_state, exhaust) in [
+            ("rejected", false),
+            ("rejected", true),
+            ("dispatching", false),
+            ("unknown", false),
+        ] {
+            let dir = Temp::new();
+            let state = dir.0.join("state");
+            let host = Path::new("/etc/localtime");
+            let backend = Fixture::default();
+            let now: Timestamp = "2026-01-01T12:00:00Z".parse().unwrap();
+            let engine = Engine::open(&state, host, &backend).unwrap();
+            let ids = scenario(&dir, &engine, now, "directory");
+            if exhaust {
+                let mut spec = engine.store.job(&ids.job).unwrap().spec;
+                spec.agents.truncate(1);
+                engine.store.edit(&ids.job, None, spec, now).unwrap();
+            }
+            let run = engine.store.claim_board_run(&ids.job, None, now).unwrap();
+            let first = Attempt {
+                id: id(now).unwrap(),
+                operation_id: format!("schedule:{}", id(now).unwrap()),
+                agent: "codex".into(),
+                completion_token_hash: digest("synthetic-completion-token"),
+                state: attempt_state.into(),
+                dispatch_started: true,
+                workspace: run.spec.directory.clone(),
+                started_at: now,
+                updated_at: now,
+                ..Attempt::default()
+            };
+            engine
+                .store
+                .update(&run.id, |saved| {
+                    saved.workspace.clone_from(&first.workspace);
+                    saved.source_directory.clone_from(&first.workspace);
+                    saved.attempts.push(first.clone());
+                    Ok(())
+                })
+                .unwrap();
+            drop(engine);
+
+            let reopened = Engine::open(&state, host, &backend).unwrap();
+            let observed = reopened
+                .board_run(&ids.job, Manual::Status, now)
+                .unwrap()
+                .unwrap();
+            assert_eq!(observed.id, run.id);
+            assert!(observed.pending);
+            assert!(backend.launches.borrow().is_empty());
+            let reconcile = || {
+                reopened
+                    .board_run(&ids.job, Manual::Run { previous: None }, now)
+                    .unwrap()
+                    .unwrap()
+            };
+            let receipt = reconcile();
+            assert_eq!(receipt.id, run.id);
+            let recovered = reopened.store.occurrence(&receipt.id).unwrap();
+            assert_eq!(
+                serde_json::to_value(&recovered.attempts[0]).unwrap(),
+                serde_json::to_value(&first).unwrap()
+            );
+            if attempt_state != "rejected" {
+                assert!(receipt.pending);
+                assert_eq!(recovered.attempts.len(), 1);
+                assert!(backend.launches.borrow().is_empty());
+            } else if exhaust {
+                assert_eq!(receipt.state, "exhausted");
+                assert!(!receipt.pending);
+                assert!(backend.launches.borrow().is_empty());
+            } else {
+                assert_eq!(receipt.state, "working");
+                assert_eq!(recovered.attempts.len(), 2);
+                assert_eq!(recovered.attempts[1].agent, "claude");
+                assert_ne!(recovered.attempts[1].operation_id, first.operation_id);
+                assert_eq!(recovered.attempts[1].workspace, first.workspace);
+                assert_eq!(reconcile().id, run.id);
+                assert_eq!(backend.launches.borrow().len(), 1);
+            }
+        }
     }
 
     #[test]
