@@ -1,6 +1,6 @@
 # Rust migration decision and delivery roadmap
 
-**Implementation started on `migration/rust-parity`, 25 November 2026.** M0 establishes the reference builds and behavioral inventory. The release decision belongs to a future candidate with measured evidence.
+**M0–M2 passed on November 26, 2026.** Work continues on `migration/rust-parity`. The release decision depends on the remaining operator, compatibility and qualification gates. [Milestone evidence](../../verification/rust-migration.md#reference-harness-and-runtime-milestones)
 
 Build the smallest complete daily workflow first. From the familiar board, launch a fixture worker, attach, type, detach, restart the daemon, reattach to the same process, inspect its screen and stop it. Run the same interaction against the shipping Go binary. This slice buys an early answer to the expensive question: can Rust preserve the terminal experience and process survival at the same time? Start independent capture of provider, Discord, scheduling and upgrade behavior on day one. Those contracts take longer to learn than the scaffold takes to build.
 
@@ -15,7 +15,7 @@ Build the smallest complete daily workflow first. From the familiar board, launc
 
 Before each milestone and the final freeze, compare new main commits to the last reviewed SHA. Classify each user-visible delta as retained, retired or separately proposed. Add retained behavior to both the scenario ledger and the candidate before advancing the pin. Record upstream-only branches such as `feat/discord-ticket-admission` as discovery items. Promote a feature from such a branch only with evidence of daily use or an explicit scope decision. Never merge the entire call branch to manufacture a combined oracle. A mixed text/file/call scenario needs independent assertions from each reference.
 
-**Implementation tracking.** Beads epic `agents-tracker-8fp1` owns M0–M11 in order as child issues `.1` through `.12`, with blocking dependencies. Start with `bd show agents-tracker-8fp1.1`. The [top-level CLI inventory](reference-surfaces.tsv) covers the default invocation and every switch arm in the pinned main dispatcher, including internal roles and aliases. The [board control inventory](reference-board-keys.tsv) ties gestures, state guards and retired controls to their Go handlers. Complete individual options, destination-screen controls, configuration, artifacts and positive/refusal scenarios during M0.
+**Implementation tracking.** Beads epic `agents-tracker-8fp1` owns M0–M11 in order as child issues `.1` through `.12`, with blocking dependencies. Use `bd show agents-tracker-8fp1` to inspect the open implementation milestones. The [top-level CLI inventory](reference-surfaces.tsv) covers the default invocation and every switch arm in the pinned main dispatcher, including internal roles and aliases. The [board control inventory](reference-board-keys.tsv) ties gestures, state guards and retired controls to their Go handlers. Complete individual options, destination-screen controls, configuration, artifacts and positive/refusal scenarios during M0.
 
 ### Running the first milestone
 

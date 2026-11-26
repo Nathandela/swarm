@@ -47,3 +47,19 @@ The combined state, provider, board and packaging checkpoint `2634adf4` passed 1
 An ordinary classic Claude session created by Go kept the same live PTY, shim and provider across Go→Rust→Go on macOS arm64 and Linux x86_64. Through the public Rust board the operator attached, entered text and detached. One-shot peek preserved the active lease. Superseding a controller fenced its stale writes, and the original Go owner subsequently folded its pending hook. The Rust supervisor also projected a verified spontaneous exit without changing Go metadata. [Live Go shim](rust-live-go-shim.md).
 
 The copied-state rollback rehearsal on both hosts also launched a fresh classic Claude attempt in Rust, stopped it, and reopened it in Go with its original native UUID. Crash recovery resumed the staged export without resurrecting a row already deleted in Go. Rust Automations retained one manual occurrence after board/daemon restart, and a delayed pause retry could not undo a later resume. The joined default fleet passed 111 tests on each host, with three opt-in tests reported separately. Native Linux also passed the HOME/XDG board auto-start and singleton trials. [Stopped-state rollback](rust-stopped-go-state.md) · [Automation operator fixture](../../scripts/verification/parity/test_board.py).
+
+### Reference, harness and runtime milestones
+
+M0, M1 and M2 met their exit criteria on November 26. M0 identifies both pinned Go trees and the signed main release, with an owner and disposition for each inventory surface. M1 ran the two-arm PTY driver on both hosts, detected a deliberate byte mismatch, replayed the recording and reaped the timed-out child. M2 followed a real dashboard session through PTY attachment, resize, input, daemon death and reattachment. Both hosts completed 100 recovery trials with matching worker identities. After reattachment, Rust preserves the combining accent that Go loses, as approved. [Reference and release identity](../specifications/rust-migration/reference-checks.md) · [Harness](../../scripts/verification/parity/README.md) · [Live PTY evidence](rust-live-go-shim.md).
+
+The unprivileged Linux x86_64 Go 1.26.9 normal and race package sets match exactly, with 96 test-bearing and nine test-free packages. The race evidence spans four uncached invocations. One run stopped at the VM disk guard and a later TUI first-paint fixture timed out while launching worker 45 of 50. The full TUI package passed on its own in 55.607 seconds with two Go scheduler threads per process and the original launch and performance thresholds. The failed setup preceded the timing sample. Logs from the unsuccessful attempts were retained.
+
+| Linux package evidence | Tested | Without tests | SHA-256 |
+|---|---:|---:|---|
+| Normal full log | 96 | 9 | `4171de87d7243cb2ade71149d29796ebd2c14dbe8d51cf20541bbfcfbf005ab3` |
+| Race through shimwire | 74 | 5 | `3e9ef2a89036777b40ee0f7eae942d1fb5b87612bfaf7cfbdfb1d47bce863064` |
+| Race skeleton through transcript | 6 | 1 | `ff1c0bbff1581cf0d78c60aae4708baa397d2804fca3fd20db6c1f279809b538` |
+| Race remaining packages, successful entries | 15 | 3 | `1f8da1406a2dd564fe3c1aa329ea8bb1834b92b1a6e81aa55db1a096351c7b17` |
+| Complete TUI race rerun | 1 | 0 | `b374ab7cf2a4dbfd56dd1c52a65aa25f31cfb47e8d3051dcacda4e0bf64e1f87` |
+
+At integration revision `cb630ec5`, the ordinary Rust workspace suite passed 146 tests on native macOS arm64 and 146 on Linux x86_64. Five cases on each host required opt-in prerequisites. The joined suite includes stopped Go compatibility, the terminal query path, cleanup lock release, enrolled team calls and signed-install write custody. Whole-product parity and production qualification remain open.
