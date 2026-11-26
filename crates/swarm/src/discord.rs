@@ -348,6 +348,7 @@ impl<'a> Request<'a> {
                     "prepare-personal-ingress",
                     "deliver-personal-publication",
                     "read-personal-publication-file",
+                    "read-personal-source-attachment",
                     "file-id",
                     "file-sha256",
                     "offset",
@@ -494,7 +495,12 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                 ("dispatch-personal-ingress", legacy_ingress::dispatch),
                 ("settle-personal-ingress", legacy_ingress::settle),
             ];
-            if let Some(output) = req.get("read-personal-publication-file") {
+            let export = req.get("read-personal-publication-file");
+            let source = req.get("read-personal-source-attachment");
+            if export.is_some() && source.is_some() {
+                return Err(invalid("select one original attachment source"));
+            }
+            if let Some(output) = export.or(source) {
                 if req.on("controls")
                     || req.on("rollback")
                     || req.on("dry-run")
@@ -514,7 +520,11 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                     .unwrap_or("0")
                     .parse()
                     .map_err(|_| invalid("invalid offset"))?;
-                let data = legacy_ingress::publication::read(&place, output, id, digest, offset)?;
+                let data = if export.is_some() {
+                    legacy_ingress::publication::read(&place, output, id, digest, offset)?
+                } else {
+                    legacy_ingress::source_attachment::read(&place, output, id, digest, offset)?
+                };
                 println!("{}", serde_json::to_string_pretty(&data)?);
                 return Ok(true);
             }
@@ -523,7 +533,7 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
                 .any(|flag| req.get(flag).is_some())
             {
                 return Err(invalid(
-                    "file selection requires --read-personal-publication-file",
+                    "select an original publication or source attachment",
                 ));
             }
             if req.on("activate-personal") {

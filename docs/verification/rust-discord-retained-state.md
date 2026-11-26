@@ -27,6 +27,8 @@ Original Go attachment publications use the saved media-controller export and Bb
 
 Use `swarm discord migrate-state --read-personal-publication-file OUTPUT_ID --file-id ID --file-sha256 SHA --offset N` to read one bounded page of an authorized staged file. The command checks the same Go source and publication proof and returns only that file’s base64 page. An acknowledged upload has no remaining staged buffer.
 
+Use `swarm discord migrate-state --read-personal-source-attachment MESSAGE_ID --file-id ID --file-sha256 SHA --offset N` to read a current owner DM attachment. The stopped original connector must hold the exact settled Go message revision. Rust rechecks the enrolled owner and channel, accepts only the exact approved Discord CDN route for that file, and verifies the requested SHA-256 before returning a bounded page. It writes no Go ledger or local file.
+
 In a disposable copy of the pinned Go repository, copy the fixture program to `cmd/swarm-discord-state-fixture/main.go`, the bindings fixture to `internal/discord/migration_fixture.go`, the route fixture to `internal/teammatemanager/migration_fixture.go`, and the voice fixture to `internal/voice/migration_fixture.go`. Build `./cmd/swarm-discord-state-fixture` in that copy and run the witness with both binaries.
 
 ```bash

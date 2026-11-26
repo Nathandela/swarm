@@ -288,7 +288,11 @@ fn manifest_matches(encoded: &Value, expected: &Value) -> bool {
         .is_some_and(|actual| actual == *expected)
 }
 
-fn verify_guard<'tx>(tx: &impl TxApi<'tx>, cfg: &Config, origin: &Value) -> io::Result<()> {
+pub(super) fn verify_guard<'tx>(
+    tx: &impl TxApi<'tx>,
+    cfg: &Config,
+    origin: &Value,
+) -> io::Result<()> {
     let install = cfg.text("installation_id");
     let id = field(origin, "message_id");
     if !snowflake(id) || origin["request_id"] != operation(install, id)? {

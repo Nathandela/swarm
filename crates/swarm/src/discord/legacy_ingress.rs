@@ -5,6 +5,7 @@ pub(super) mod manager_publication;
 pub(super) mod prepare;
 pub(super) mod publication;
 pub(super) mod service;
+pub(super) mod source_attachment;
 
 use super::{
     config::{Config, Place, open_owner_file, snowflake},
