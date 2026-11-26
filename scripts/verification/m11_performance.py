@@ -21,7 +21,6 @@ from parity_runtime import attach, control, fixtures, read_frame, send_frame
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'opencode-rust'))
 from processes import birth, sample
 
-REFERENCE = 'f26648d69086e329132ac7849954d2f29a895387'
 BUDGETS = {'paint_ms': 100, 'echo_ms': 10, 'idle_cpu_percent': 5}
 ECHO_FIXTURE = b"""#!/bin/sh
 if [ "$1" = --version ]; then
@@ -183,6 +182,7 @@ def main():
     assert __debug__
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--reference', required=True, type=fixtures.binary_path)
+    parser.add_argument('--reference-source', required=True)
     parser.add_argument('--candidate', required=True, type=fixtures.binary_path)
     parser.add_argument('--candidate-source', required=True)
     parser.add_argument('--out', required=True, type=Path)
@@ -190,7 +190,9 @@ def main():
     parser.add_argument('--smoke', action='store_true', help='short calibration, no gate claim')
     parser.add_argument('--quiet-host', action='store_true', help='operator confirmed no concurrent workload')
     args = parser.parse_args()
-    assert re.fullmatch('[0-9a-f]{40}', args.candidate_source)
+    for source in (args.reference_source, args.candidate_source):
+        if not re.fullmatch('[0-9a-f]{40}', source):
+            parser.error('both source pins must be full Git commit hashes')
     assert not args.out.exists(), 'fresh evidence path required'
     paint_count, echo_count, idle_seconds, cycles = (2, 30, 3, 3) if args.smoke else (25, 1000, 60, 100)
     result = {'platform': platform.platform(), 'machine': platform.machine(),
@@ -202,7 +204,7 @@ def main():
         fixtures.table()
         with ExitStack() as cleanup:
             pair = []
-            for binary, kind, source in ((args.reference, 'reference', REFERENCE),
+            for binary, kind, source in ((args.reference, 'reference', args.reference_source),
                                          (args.candidate, 'candidate', args.candidate_source)):
                 arm = Arm(kind, args.scratch)
                 evidence = result['arm'][kind] = {'sha256': fixtures.hash_file(binary), 'source': source,

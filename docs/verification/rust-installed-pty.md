@@ -53,3 +53,5 @@ The signed archives for `ded21c92e384ac8560827ce11d3567da0ed190a6` passed the ma
 | macOS x86_64 under Rosetta | `bb34a9c08b9074e990611630d63a780bedb59d5be0fa0adcdb11c3bacdca6d5f` | `3748dda299a04e671f8bd279bbc48e947995f5cc879624996c7171d6b2ab719a` |
 | Linux x86_64 native | `23002ac6613ad459054ab122a0e12df8a1a2fdc0b232957ad3b3196767ad5c64` | `895b19c8730caa4576667abcde320c3f2d309f673adde45aefd6d5c5476fec8d` |
 | Linux arm64 guest on Apple Silicon | `cd06e43267757469dfbaaaac11b13ed531bc136787fc30130c86bb2253a34ee7` | `f4c11874298033b9fe107c35993e77b8d77163f423ea8cd807f6e2539b57291f` |
+
+The signed `1ceed43c` build passed verification for all three archives. Its managed PTY and bundled media checks also passed on native macOS arm64, translated macOS x86_64 and native Linux x86_64. Their receipt SHA-256 values are `0459e5190c540e5dfd85ea19dab94a4f2ab31ca3cb24257f687e1db65a3c95f9`, `ecf6dbed639b2e1e7779d8f70b56c598c34aa34c71f138fae776a889b144212a` and `80719cbfe7e9cd7714b529f4ecffc8efcd86bcbaadd6f2824becd7450603e3cd`, respectively.

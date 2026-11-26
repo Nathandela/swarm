@@ -110,7 +110,8 @@ and reaps each arm's processes.
 ```sh
 python3 -B scripts/verification/m11_performance.py \
   --reference "$PINNED_GO_SWARM" --candidate "$RUST_SWARM" \
-  --candidate-source "$SOURCE_SHA" --out "$FRESH_EVIDENCE_JSON" --quiet-host
+  --reference-source "$GO_SOURCE_SHA" --candidate-source "$SOURCE_SHA" \
+  --out "$FRESH_EVIDENCE_JSON" --quiet-host
 ```
 
 The driver alternates 25 cold dashboard paints per arm at 120×200 with

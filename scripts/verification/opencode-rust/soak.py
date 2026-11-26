@@ -14,7 +14,7 @@ import sqlite3
 import time
 
 from launch import history_page
-from processes import alive, birth, sample
+from processes import alive, birth, sample, thread_wait_snapshot
 
 MIB = 1024 * 1024
 BUDGETS = {'swarm_rss_bytes': 256 * MIB, 'swarm_fds': 128, 'swarm_disk_bytes': 256 * MIB,
@@ -44,6 +44,16 @@ def allocated_bytes(root):
             # A concurrently replaced atomic-write temporary is absent from the sample.
             continue
     return total
+
+
+def host_pressure():
+    pressure = {}
+    for resource in ('cpu', 'io', 'memory'):
+        try:
+            pressure[resource] = (Path('/proc/pressure') / resource).read_text().splitlines()
+        except OSError:
+            continue
+    return pressure
 
 
 def run(args, env, cli, output, wait, start, stop, provider, requests):
@@ -105,7 +115,7 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
             result['maxima'][key] = max(val, result['maxima'].get(key, 0))
         record = dict(event=event, elapsed_seconds=round(time.monotonic() - started, 3),
                       wall=time.time(), input=result['inputs'], process=health,
-                      state_disk_bytes=state_disk, total_disk_bytes=usage)
+                      state_disk_bytes=state_disk, total_disk_bytes=usage, host_pressure=host_pressure())
         with (root / 'metrics.jsonl').open('a') as log:
             log.write(json.dumps(record, sort_keys=True) + '\n')
         atomic_json(root / 'heartbeat.json', dict(result, observation=record))
@@ -271,6 +281,9 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
         result['state'] = 'passed'
     except BaseException as exc:
         result.update(state='failed', error=repr(exc))
+        result['host_pressure_at_failure'] = host_pressure()
+        if 'shim' in owned:
+            result['shim_threads_at_failure'] = thread_wait_snapshot(*owned['shim'])
         if dispatch is not None:
             index, marker, operation = dispatch
             failure = result['dispatch_witness'] = {
@@ -346,6 +359,7 @@ def run(args, env, cli, output, wait, start, stop, provider, requests):
             result['cleanup'] = 'passed'
         except BaseException as exc:
             result.update(state='failed', cleanup='failed', cleanup_error=repr(exc))
+            result['cleanup_live_roles'] = [role for role, process in owned.items() if alive(*process)]
             raise
         finally:
             if daemon is not None and daemon.poll() is None:
