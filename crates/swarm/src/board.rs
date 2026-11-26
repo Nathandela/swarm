@@ -18,8 +18,9 @@ mod version;
 
 use crate::ipc::{self, Client, field};
 use crate::schedule::catalog::{
-    CAP as CATALOG_CAP, CONTROL as CATALOG_CONTROL, Change as CatalogChange, MANUAL_CAP, Manual,
-    Read as CatalogRead, Records as CatalogRecords, RunState,
+    CAP as CATALOG_CAP, CONTROL as CATALOG_CONTROL, Change as CatalogChange,
+    ChangeResult as CatalogChangeResult, MANUAL_CAP, Manual, Read as CatalogRead,
+    Records as CatalogRecords, RunState,
 };
 use automation::{Automation, TimerStatusProbe};
 use handoff::Handoff;
@@ -160,7 +161,7 @@ fn board(path: &Path) -> io::Result<()> {
             needs_paint = true;
         }
         if let Some(Modal::Automation(view)) = &mut board.modal
-            && let Some(result) = view.poll_enable()
+            && let Some(result) = view.poll_enable(connection.as_ref().map(Client::endpoint))
         {
             automation_changed(view, result, connection.as_mut());
             needs_paint = true;
@@ -482,6 +483,23 @@ fn board(path: &Path) -> io::Result<()> {
                         }
                     }
                 }
+                Action::ActivateAutomationWithTimer {
+                    endpoint,
+                    approval,
+                    change,
+                } => {
+                    if let Some(Modal::Automation(view)) = &mut board.modal {
+                        if connection.as_ref().is_some_and(|client| {
+                            client.endpoint() == endpoint
+                                && view.accepts_change_owner(client.endpoint())
+                                && client.supports("schedule-native")
+                        }) {
+                            view.enable(path, &endpoint, change, Some(*approval));
+                        } else {
+                            view.changed(Err(io::Error::other("automation owner changed; reopen the draft before enabling the timer")));
+                        }
+                    }
+                }
                 Action::ChangeAutomation(change) => {
                     if let Some(Modal::Automation(view)) = &mut board.modal {
                         if connection
@@ -497,7 +515,7 @@ fn board(path: &Path) -> io::Result<()> {
                         if change.checks_activation()
                             && let Some(client) = &connection
                         {
-                            view.enable(path, client.endpoint(), change);
+                            view.enable(path, client.endpoint(), change, None);
                         } else {
                             let result = connection.as_mut().map_or_else(
                                 || {
@@ -689,6 +707,11 @@ enum Action {
     InstallAutomationTimer {
         endpoint: String,
         status: String,
+    },
+    ActivateAutomationWithTimer {
+        endpoint: String,
+        approval: Box<automation::TimerApproval>,
+        change: CatalogChange,
     },
     ChangeAutomation(CatalogChange),
     TriggerAutomation {
@@ -1936,18 +1959,18 @@ fn automation_read(
 
 fn automation_changed(
     view: &mut Automation,
-    result: io::Result<Option<CatalogRecords>>,
+    result: io::Result<CatalogChangeResult>,
     client: Option<&mut Client>,
 ) {
-    if matches!(result, Ok(None)) {
-        view.confirm_enable_timer();
-    } else {
-        let result = result.map(|saved| saved.expect("confirmed automation reply"));
-        let state = automation_status(&result, client);
-        view.changed(result);
-        if let Some(state) = state {
-            view.triggered(state);
-        }
+    let result = match result {
+        Ok(CatalogChangeResult::ConfirmTimer(_)) => return,
+        Ok(CatalogChangeResult::Saved(records)) => Ok(records),
+        Err(error) => Err(error),
+    };
+    let state = automation_status(&result, client);
+    view.changed(result);
+    if let Some(state) = state {
+        view.triggered(state);
     }
 }
 

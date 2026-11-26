@@ -70,10 +70,20 @@ pub(super) fn command(verb: &str) -> Result<Option<String>> {
 }
 
 pub(super) fn board_install(path: &Path, endpoint: &str, expected: &str) -> Result<()> {
+    board_install_checked(path, endpoint, expected, &mut || Ok(()))
+}
+
+pub(super) fn board_install_checked(
+    path: &Path,
+    endpoint: &str,
+    expected: &str,
+    validate: &mut dyn FnMut() -> Result<()>,
+) -> Result<()> {
     super::rpc::qualified_board_timer(path, endpoint)?;
     if board_status(&AtomicBool::new(false))? != expected {
         return Err(STALE_STATUS.into());
     }
+    validate()?;
     let run = |name: &str, args: &[&str]| Command::new(name).args(args).env("LC_ALL", "C").output();
     install(
         &local_manager(&run)?,
@@ -82,6 +92,7 @@ pub(super) fn board_install(path: &Path, endpoint: &str, expected: &str) -> Resu
             path,
             endpoint,
             expected,
+            validate,
         }),
     )
 }
@@ -90,6 +101,7 @@ struct BoardInstall<'a> {
     path: &'a Path,
     endpoint: &'a str,
     expected: &'a str,
+    validate: &'a mut dyn FnMut() -> Result<()>,
 }
 
 fn install(manager: &Manager<'_>, socket: &Path, board: Option<BoardInstall<'_>>) -> Result<()> {
@@ -440,6 +452,7 @@ impl Manager<'_> {
         let set_enabled = |on| self.ctl(&[if on { "enable" } else { "disable" }, TIMER]);
         if let Some(board) = board {
             // The directory lock and manager reads can outlive the confirmed owner.
+            (board.validate)()?;
             super::rpc::qualified_board_timer(board.path, board.endpoint)?;
         }
         let mut undo: Vec<Box<dyn FnOnce() -> Result<()>>> = Vec::new();

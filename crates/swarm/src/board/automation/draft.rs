@@ -255,6 +255,14 @@ impl Draft {
         let revision = job.revision_id.clone();
         let generation = job.lifecycle_generation;
         let updated_at = job.updated_at;
+        let operation = if job.state == "active" && enable.is_some() {
+            if self.operation.is_none() {
+                self.operation = Some(automation_invocation().map_err(|error| error.to_string())?);
+            }
+            self.operation.clone()
+        } else {
+            None
+        };
         Ok(match (job.state.as_str(), enable) {
             ("paused", Some(install_timer)) => Change::Enable {
                 id,
@@ -267,6 +275,7 @@ impl Draft {
             ("active", Some(_)) => Change::SaveActive {
                 id,
                 revision,
+                operation,
                 generation,
                 updated_at,
                 spec,
@@ -327,6 +336,11 @@ impl Draft {
     pub(super) fn select(&mut self, focus: usize, count: usize, budget: usize) {
         self.focus = focus;
         menu::reveal(&mut self.focus, &mut self.top, count, budget);
+    }
+
+    pub(super) fn reset_focus(&mut self) {
+        self.focus = 0;
+        self.top = 0;
     }
 
     pub(super) fn update(

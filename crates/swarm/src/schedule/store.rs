@@ -460,8 +460,20 @@ impl Store {
         &self,
         job: &str,
         expected: Option<&str>,
+        spec: Spec,
+        transition: Option<(&str, u64, Timestamp, &str)>,
+        now: Timestamp,
+    ) -> Result<Job> {
+        self.edit_to_revision(job, expected, spec, transition, None, now)
+    }
+
+    pub(super) fn edit_to_revision(
+        &self,
+        job: &str,
+        expected: Option<&str>,
         mut spec: Spec,
         transition: Option<(&str, u64, Timestamp, &str)>,
+        planned: Option<&str>,
         now: Timestamp,
     ) -> Result<Job> {
         spec.prepare(&self.host)?;
@@ -478,6 +490,11 @@ impl Store {
                 })
             {
                 return Err(CONFLICT.into());
+            }
+            if let Some(revision) = planned
+                && tx.get_raw(REVISIONS, revision)?.is_some()
+            {
+                return Err("automation revision operation was already used".into());
             }
             let next_state = transition.map(|(_, _, _, state)| state);
             if next_state == Some("active") && job.state != "active"
@@ -500,7 +517,7 @@ impl Store {
                 job.state = state.into();
             }
             job.spec = spec;
-            job.revision_id = id(now)?;
+            job.revision_id = planned.map_or_else(|| id(now), |value| Ok(value.to_owned()))?;
             job.updated_at = now;
             self.set_revision(tx, &job, now)?;
             Ok(job)

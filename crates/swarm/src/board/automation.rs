@@ -1,7 +1,7 @@
 use super::launch::{ACCENT, Detected, ERROR, PLAIN, spans};
 use super::navigation::truncation;
 use super::{Action, Editor, Key, Mouse, MouseAction, form_header, line, terminal_char, usable};
-use crate::schedule::catalog::{Change, Manual, Read, Records, RunState, State};
+use crate::schedule::catalog::{Change, ChangeResult, Manual, Read, Records, RunState, State};
 use crate::schedule::{
     Calendar, Job, Occurrence, Spec, Template, automation_install_timer, automation_timer_status,
 };
@@ -108,8 +108,8 @@ pub(super) struct Automation {
     preview_worker: Option<(Spec, mpsc::Receiver<Preview>)>,
     templates: Option<templates::Picker>,
     archive: Option<ArchivePrompt>,
-    enable_confirmation: bool,
-    enabling: Option<mpsc::Receiver<io::Result<Option<Records>>>>,
+    enable_confirmation: Option<EnablePrompt>,
+    enabling: Option<Activation>,
     run: Option<Occurrence>,
     manual: Option<RunState>,
     press: Option<(Mouse, (u16, u16), PointerTarget)>,
@@ -125,6 +125,46 @@ struct ArchivePrompt {
     name: String,
     change: Change,
     painted: Option<(u16, u16)>,
+}
+
+struct Activation {
+    change: Change,
+    endpoint: String,
+    receive: mpsc::Receiver<io::Result<(ChangeResult, crate::ipc::Client)>>,
+}
+
+struct EnablePrompt {
+    change: Change,
+    endpoint: String,
+    approval: TimerApproval,
+    selected: usize,
+    painted: Option<((u16, u16), usize)>,
+}
+
+pub(super) struct TimerApproval {
+    status: Option<String>,
+    // Closure on owner exit is part of the authorization, even if its successor
+    // inherits the persisted endpoint ID.
+    client: crate::ipc::Client,
+}
+
+impl EnablePrompt {
+    fn rows(&self, cols: u16, timer: &str) -> Vec<String> {
+        let status = self.approval.status.as_deref().unwrap_or(timer);
+        [
+            format!("Timer · {status}"),
+            "This installs or starts the automation timer for this user's catalog on this host."
+                .into(),
+            "Eligible saved automations use the timer. Saving does not run this job now.".into(),
+        ]
+        .into_iter()
+        .flat_map(|text| super::menu::wrap(&text, cols.saturating_sub(2)))
+        .collect()
+    }
+
+    fn top(&self, budget: usize) -> usize {
+        self.selected.saturating_add(1).saturating_sub(budget)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -262,6 +302,9 @@ impl Automation {
 
     pub(super) fn disconnect_timer_owner(&mut self) {
         self.timer_owner = None;
+        if self.enable_confirmation.take().is_some() {
+            self.press = None;
+        }
         if self.timer_prompt.take().is_some() {
             self.press = None;
             self.selected = 0;
@@ -303,49 +346,99 @@ impl Automation {
             Ok(records) => {
                 self.draft = None;
                 self.archive = None;
-                self.enable_confirmation = false;
+                self.enable_confirmation = None;
                 self.receive(Ok(records));
             }
             Err(error) => self.error = error.to_string(),
         }
     }
 
-    pub(super) fn enable(&mut self, path: &Path, endpoint: &str, change: Change) {
+    pub(super) fn enable(
+        &mut self,
+        path: &Path,
+        endpoint: &str,
+        change: Change,
+        approval: Option<TimerApproval>,
+    ) {
         let (send, receive) = mpsc::channel();
-        self.enabling = Some(receive);
+        self.enabling = Some(Activation {
+            change: change.clone(),
+            endpoint: endpoint.into(),
+            receive,
+        });
         self.error.clear();
         let path = path.to_owned();
         let endpoint = endpoint.to_owned();
         std::thread::spawn(move || {
-            let result = (|| {
-                let mut client =
-                    crate::ipc::Client::dial(&path, &[crate::schedule::catalog::CONTROL])?;
-                if client.endpoint() != endpoint {
-                    return Err(io::Error::other(
+            let dial = || {
+                let client = crate::ipc::Client::dial(&path, &[crate::schedule::catalog::CONTROL])?;
+                if client.endpoint() == endpoint {
+                    Ok(client)
+                } else {
+                    Err(io::Error::other(
                         "automation owner changed before activation",
-                    ));
+                    ))
                 }
-                change.remote(&mut client)
+            };
+            let result = (|| {
+                let (mut client, install) = match approval {
+                    Some(approval) => (approval.client, approval.status),
+                    None => (dial()?, None),
+                };
+                if let Some(status) = install {
+                    crate::schedule::automation_install_timer_checked(
+                        &path,
+                        &endpoint,
+                        &status,
+                        &mut || change.check_timer_install(&mut client, &status),
+                    )?;
+                    return (|| match change.remote(&mut client)? {
+                        saved @ ChangeResult::Saved(_) => Ok((saved, client)),
+                        ChangeResult::ConfirmTimer(_) => {
+                            Err(io::Error::other("host timer is no longer active"))
+                        }
+                    })()
+                    .map_err(|error| {
+                        io::Error::other(format!("host timer enabled; job save failed: {error}"))
+                    });
+                }
+                Ok((change.remote(&mut client)?, client))
             })();
             let _ = send.send(result);
         });
     }
 
-    pub(super) fn poll_enable(&mut self) -> Option<io::Result<Option<Records>>> {
-        let result = match self.enabling.as_ref()?.try_recv() {
+    pub(super) fn poll_enable(&mut self, owner: Option<&str>) -> Option<io::Result<ChangeResult>> {
+        let result = match self.enabling.as_ref()?.receive.try_recv() {
             Ok(result) => result,
             Err(mpsc::TryRecvError::Empty) => return None,
             Err(mpsc::TryRecvError::Disconnected) => {
                 Err(io::Error::other("automation activation status unconfirmed"))
             }
         };
-        self.enabling = None;
-        Some(result)
-    }
-
-    pub(super) fn confirm_enable_timer(&mut self) {
-        self.enable_confirmation = true;
-        self.error.clear();
+        let activation = self.enabling.take().expect("completed activation");
+        Some(result.and_then(|(result, client)| {
+            if let ChangeResult::ConfirmTimer(status) = &result {
+                if owner != Some(activation.endpoint.as_str()) {
+                    return Err(io::Error::other(
+                        "automation owner changed; reopen the draft",
+                    ));
+                }
+                self.enable_confirmation = Some(EnablePrompt {
+                    change: activation.change,
+                    endpoint: activation.endpoint,
+                    approval: TimerApproval {
+                        status: status.clone(),
+                        client,
+                    },
+                    selected: 0,
+                    painted: None,
+                });
+                self.error.clear();
+                self.press = None;
+            }
+            Ok(result)
+        }))
     }
 
     pub(super) fn triggered(&mut self, response: std::io::Result<Option<RunState>>) {
@@ -365,6 +458,7 @@ impl Automation {
     pub(super) fn confirmation_pending(&self) -> bool {
         self.archive.is_some()
             || self.timer_prompt.is_some()
+            || self.enable_confirmation.is_some()
             || self.error.is_empty()
                 && self
                     .templates
@@ -373,6 +467,18 @@ impl Automation {
     }
 
     pub(super) fn note_confirmation_paint(&mut self, geometry: (u16, u16)) {
+        let budget = self.body_capacity(geometry);
+        if let Some(prompt) = &mut self.enable_confirmation {
+            let seen = prompt
+                .painted
+                .filter(|(size, _)| *size == geometry)
+                .map_or(0, |(_, rows)| rows);
+            let start = prompt.top(budget);
+            let total = prompt.rows(geometry.0, &self.timer_status).len();
+            if geometry.0 >= 32 && geometry.1 >= 8 && start <= seen {
+                prompt.painted = Some((geometry, seen.max((start + budget).min(total))));
+            }
+        }
         if let Some(archive) = &mut self.archive {
             archive.painted = Some(geometry);
         }
@@ -402,9 +508,11 @@ impl Automation {
             self.selected = 0;
             return Some(Action::None);
         }
-        if self.enable_confirmation {
-            self.enable_confirmation = false;
+        if self.enable_confirmation.take().is_some() {
             self.error.clear();
+            if let Some(draft) = &mut self.draft {
+                draft.reset_focus();
+            }
             return Some(Action::None);
         }
         if let Some(draft) = &mut self.draft
@@ -465,8 +573,8 @@ impl Automation {
             } else {
                 &[("History", '←'), ("Back", '⎋')]
             }
-        } else if self.enable_confirmation {
-            &[("Save and enable", 'y'), ("Cancel", '⎋')]
+        } else if self.enable_confirmation.is_some() {
+            &[("Save and enable", 'y'), ("Back", '⎋')]
         } else if let Some(draft) = &self.draft {
             if draft.convert_zone {
                 &[("Use host wall time", 'y'), ("Back", '⎋')]
@@ -596,8 +704,15 @@ impl Automation {
 
     fn rows_at(&self, geometry: (u16, u16)) -> (usize, usize, usize) {
         let budget = self.body_capacity(geometry);
-        if self.enabling.is_some() || self.enable_confirmation || self.timer_installing.is_some() {
+        if self.enabling.is_some() || self.timer_installing.is_some() {
             return (0, 0, 0);
+        }
+        if let Some(prompt) = &self.enable_confirmation {
+            return (
+                prompt.top(budget),
+                budget,
+                prompt.rows(geometry.0, &self.timer_status).len(),
+            );
         }
         if self.timer_prompt.is_some() {
             return (
@@ -655,6 +770,7 @@ impl Automation {
             return None;
         }
         if self.templates.is_none()
+            && self.enable_confirmation.is_none()
             && let Some(draft) = &self.draft
         {
             let items = draft.rows(geometry.0, &self.timer_status, self.detected.as_ref());
@@ -726,6 +842,9 @@ impl Automation {
                         PointerTarget::Row(index) => {
                             if let Some(picker) = &mut self.templates {
                                 picker.select(index)
+                            } else if let Some(prompt) = &mut self.enable_confirmation {
+                                prompt.selected = index;
+                                false
                             } else if let Some(draft) = &mut self.draft {
                                 let rows = draft.rows(
                                     geometry.0,
@@ -828,10 +947,42 @@ impl Automation {
             }
             return Action::None;
         }
-        if self.enable_confirmation && !matches!(key, Key::Text('y')) {
+        let budget = self.body_capacity(geometry);
+        if let Some(prompt) = &mut self.enable_confirmation {
+            let count = prompt.rows(geometry.0, &self.timer_status).len();
+            if key == Key::Text('y') {
+                if prompt.painted != Some((geometry, count)) || geometry.0 < 32 || geometry.1 < 8 {
+                    return Action::None;
+                }
+                let prompt = self
+                    .enable_confirmation
+                    .take()
+                    .expect("painted activation approval");
+                if let Some(draft) = &mut self.draft {
+                    draft.reset_focus();
+                }
+                let mut change = prompt.change;
+                if let Change::Enable { install_timer, .. } = &mut change {
+                    *install_timer = true;
+                }
+                return Action::ActivateAutomationWithTimer {
+                    endpoint: prompt.endpoint,
+                    approval: Box::new(prompt.approval),
+                    change,
+                };
+            }
+            prompt.selected = match key {
+                Key::Up | Key::BackTab | Key::Text('k') => prompt.selected.saturating_sub(1),
+                Key::Down | Key::Tab | Key::Text('j') => prompt.selected + 1,
+                Key::PageUp => prompt.selected.saturating_sub(budget),
+                Key::PageDown => prompt.selected + budget,
+                Key::Home => 0,
+                Key::End => count.saturating_sub(1),
+                _ => prompt.selected,
+            }
+            .min(count.saturating_sub(1));
             return Action::None;
         }
-        let budget = self.body_capacity(geometry);
         if let Some(draft) = &mut self.draft
             && draft.convert_zone
         {
@@ -861,22 +1012,19 @@ impl Automation {
                 self.error.clear();
                 return Action::None;
             }
-            let install_timer = self.enable_confirmation;
             let field = draft
                 .rows(geometry.0, &self.timer_status, self.detected.as_ref())
                 .get(draft.focus)
                 .and_then(|row| row.field);
             let invoke = matches!(key, Key::Enter | Key::Text(' '));
-            let enable =
-                key == Key::CtrlS || install_timer || invoke && field == Some(Field::SaveEnable);
+            let enable = key == Key::CtrlS || invoke && field == Some(Field::SaveEnable);
             let save = key == Key::CtrlD || invoke && field == Some(Field::SaveDraft);
             if enable || save {
                 if geometry.0 < 32 || geometry.1 < 8 {
                     self.error = "Resize to 32×8 to save".into();
                 } else {
-                    match draft.change(enable.then_some(install_timer)) {
+                    match draft.change(enable.then_some(false)) {
                         Ok(change) => {
-                            self.enable_confirmation = false;
                             return Action::ChangeAutomation(change);
                         }
                         Err(error) => self.error = error,
@@ -1155,15 +1303,31 @@ impl Automation {
             form_header(output, cols, "Checking automation activation…");
             return;
         }
-        if self.enable_confirmation {
-            form_header(output, cols, "Save and enable automation?");
+        if let Some(prompt) = &self.enable_confirmation {
             line(
                 output,
-                2,
+                1,
                 cols,
-                "",
-                "The per-user timer will be enabled on this host.",
+                ACCENT,
+                &list_label("Save and enable automation?", cols.into()),
             );
+            let budget = self.body_capacity((cols, rows));
+            let top = prompt.top(budget);
+            for (offset, text) in prompt
+                .rows(cols, &self.timer_status)
+                .iter()
+                .skip(top)
+                .take(budget)
+                .enumerate()
+            {
+                write_list_row(
+                    output,
+                    offset as u16 + 2,
+                    cols,
+                    text,
+                    top + offset == prompt.selected,
+                );
+            }
             self.footer(output, cols, rows);
             return;
         }
@@ -1559,5 +1723,66 @@ mod pointer_tests {
         view.back(true);
         view.update(Key::Text('n'), (80, 24));
         assert!(view.accepts_change_owner("replacement"));
+    }
+
+    #[test]
+    fn an_inline_timer_save_requires_the_painted_confirmation_at_current_geometry() {
+        let directory = crate::test_temp::root().join(format!(
+            "ac-{}",
+            crate::supervisor::runtime::random_id().unwrap()
+        ));
+        crate::supervisor::runtime::private_dir(&directory).unwrap();
+        let path = directory.join("s");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let owner = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            crate::ipc::wire::read_frame(&mut stream).unwrap();
+            let hello =
+                serde_json::json!({"op":"hello","protocol_version":1,"endpoint_id":"original"});
+            crate::ipc::wire::write_frame(
+                &mut stream,
+                crate::ipc::wire::CONTROL,
+                &serde_json::to_vec(&hello).unwrap(),
+            )
+            .unwrap();
+        });
+        let client = crate::ipc::Client::dial(&path, &[]).unwrap();
+        owner.join().unwrap();
+        let mut view = Automation::in_directory("/work");
+        let change = Change::CreateEnabled {
+            operation: "01JQXV79V2GH2FQPRJKA8FDAC7".into(),
+            spec: Box::new(view.draft.as_ref().unwrap().spec()),
+        };
+        view.enable_confirmation = Some(EnablePrompt {
+            change,
+            endpoint: "original".into(),
+            approval: TimerApproval {
+                status: Some("not installed, inactive".into()),
+                client,
+            },
+            selected: 0,
+            painted: None,
+        });
+        let compact = (40, 8);
+        let tiny = (24, 4);
+        assert!(matches!(view.update(Key::Text('y'), compact), Action::None));
+        view.note_confirmation_paint(compact);
+        assert!(matches!(view.update(Key::Text('y'), tiny), Action::None));
+        let Action::ActivateAutomationWithTimer {
+            endpoint,
+            approval,
+            change,
+        } = view.update(Key::Text('y'), compact)
+        else {
+            panic!("painted confirmation should authorize only its captured save");
+        };
+        assert_eq!(endpoint, "original");
+        assert_eq!(approval.status.as_deref(), Some("not installed, inactive"));
+        assert_eq!(approval.client.endpoint(), "original");
+        assert!(
+            matches!(change, Change::CreateEnabled { operation, .. } if operation == "01JQXV79V2GH2FQPRJKA8FDAC7")
+        );
+        assert!(matches!(view.update(Key::Text('y'), compact), Action::None));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

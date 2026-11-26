@@ -717,7 +717,7 @@ mod tests {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum State {
     Active,
@@ -735,7 +735,7 @@ impl State {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Change {
     Create {
@@ -763,6 +763,8 @@ pub(crate) enum Change {
     SaveActive {
         id: String,
         revision: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operation: Option<String>,
         generation: u64,
         updated_at: jiff::Timestamp,
         spec: Box<Spec>,
@@ -783,23 +785,64 @@ pub(crate) enum Change {
         updated_at: jiff::Timestamp,
         value: State,
     },
+    TimerCheck {
+        action: Box<Change>,
+        status: String,
+    },
+}
+
+pub(crate) enum ChangeResult {
+    Saved(Records),
+    ConfirmTimer(Option<String>),
 }
 
 impl Change {
     pub(crate) fn checks_activation(&self) -> bool {
         matches!(
             self,
-            Self::Enable { .. } | Self::CreateEnabled { .. } | Self::SaveActive { .. }
+            Self::Enable { .. }
+                | Self::CreateEnabled { .. }
+                | Self::SaveActive { .. }
+                | Self::TimerCheck { .. }
         )
     }
 
-    pub(crate) fn remote(self, client: &mut Client) -> io::Result<Option<Records>> {
+    fn timer_key(&self) -> Option<Value> {
+        match self {
+            Self::CreateEnabled { operation, .. } => Some(json!({"operation":operation})),
+            Self::SaveActive {
+                id,
+                revision,
+                operation: Some(operation),
+                generation,
+                updated_at,
+                ..
+            } => Some(
+                json!({"id":id,"revision":revision,"operation":operation,"generation":generation,"updated_at":updated_at}),
+            ),
+            Self::TimerCheck { action, .. } => action.timer_key(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn check_timer_install(&self, client: &mut Client, status: &str) -> io::Result<()> {
+        let request = Self::TimerCheck {
+            action: Box::new(self.clone()),
+            status: status.into(),
+        };
+        match request.remote(client)? {
+            ChangeResult::ConfirmTimer(Some(observed)) if observed == status => Ok(()),
+            _ => Err(io::Error::other("automation timer approval changed")),
+        }
+    }
+
+    pub(crate) fn remote(&self, client: &mut Client) -> io::Result<ChangeResult> {
         if !client.supports(CONTROL) {
             return Err(io::Error::other(
                 "selected supervisor does not support automation changes",
             ));
         }
-        let request = json!({"op":CHANGE,"change":self});
+        let request = json!({"op":CHANGE,"change":self,"inline_timer_confirmation":true});
         let reply = if self.checks_activation() {
             client.exchange(request, CHANGE, std::time::Duration::from_secs(60))?
         } else {
@@ -815,28 +858,47 @@ impl Change {
             revision,
             install_timer: false,
             ..
-        } = &self
+        } = self
             && reply["timer_confirmation"] == json!({"id":id,"revision":revision})
         {
-            return Ok(None);
+            return Ok(ChangeResult::ConfirmTimer(None));
+        }
+        if let Some(scope) = self.timer_key()
+            && reply["timer_confirmation"]["scope"] == scope
+            && let Some(status) = reply["timer_confirmation"]["status"].as_str()
+            && inactive_timer_status(status)
+        {
+            return Ok(ChangeResult::ConfirmTimer(Some(status.into())));
         }
         let job: Job = serde_json::from_value(reply["job"].clone())?;
-        let target = match &self {
+        let target = match self {
             Self::Create { operation, .. } => operation == &job.id && job.state == "paused",
             Self::CreateEnabled { operation, .. } => operation == &job.id && job.state == "active",
             Self::Edit { id, .. } => id == &job.id,
             Self::SaveDraft { id, .. } => id == &job.id && job.state == "paused",
-            Self::Enable { id, .. } | Self::SaveActive { id, .. } => {
-                id == &job.id && job.state == "active"
+            Self::Enable { id, .. } => id == &job.id && job.state == "active",
+            Self::SaveActive {
+                id,
+                operation,
+                generation,
+                ..
+            } => {
+                id == &job.id
+                    && job.state == "active"
+                    && *generation == job.lifecycle_generation
+                    && operation
+                        .as_ref()
+                        .is_none_or(|revision| revision == &job.revision_id)
             }
             Self::State { id, value, .. } => id == &job.id && job.state == value.token(),
+            Self::TimerCheck { .. } => false,
         };
         if !target {
             return Err(io::Error::other(
                 "automation change reply did not match the request",
             ));
         }
-        Ok(Some(Records::Get(Box::new(job))))
+        Ok(ChangeResult::Saved(Records::Get(Box::new(job))))
     }
 }
 
@@ -847,6 +909,25 @@ pub(crate) fn change(
     conflict: impl Fn(&Path) -> Option<String>,
 ) -> Result<Value> {
     let change: Change = serde_json::from_value(request["change"].clone())?;
+    let (change, required_status) = match change {
+        Change::TimerCheck { action, status }
+            if matches!(
+                *action,
+                Change::CreateEnabled { .. }
+                    | Change::SaveActive {
+                        operation: Some(_),
+                        ..
+                    }
+            ) && inactive_timer_status(&status) =>
+        {
+            (*action, Some(status))
+        }
+        Change::TimerCheck { .. } => return Err("invalid automation timer approval".into()),
+        change => (change, None),
+    };
+    let scope = (required_status.is_some() || request["inline_timer_confirmation"] == true)
+        .then(|| change.timer_key())
+        .flatten();
     if matches!(&change, Change::Create { operation, .. } | Change::CreateEnabled { operation, .. } if !super::valid_id(operation))
     {
         return Err("invalid automation creation operation ID".into());
@@ -857,6 +938,11 @@ pub(crate) fn change(
             if !super::valid_id(id) || !super::valid_id(revision))
     {
         return Err("invalid automation job or revision ID".into());
+    }
+    if matches!(&change, Change::SaveActive { id, revision, operation:Some(operation), .. }
+        if !super::valid_id(operation) || operation == revision || operation == id)
+    {
+        return Err("invalid automation revision operation ID".into());
     }
     let host_zone = Path::new("/etc/localtime");
     if let Change::CreateEnabled {
@@ -869,6 +955,9 @@ pub(crate) fn change(
         if let Some(store) = &store
             && let Some(saved) = store.creation_receipt(&operation, &spec, "active")?
         {
+            if required_status.is_some() {
+                return Err("automation draft was already saved".into());
+            }
             return Ok(json!({"op":CHANGE,"job":saved}));
         }
         Store::check_future_at(host_zone, &spec, jiff::Timestamp::now())?;
@@ -878,6 +967,10 @@ pub(crate) fn change(
             .transpose()?
             .unwrap_or_default();
         qualify_enabled_save(root, &operation, &spec, &active, readiness, conflict)?;
+        if let Some(confirmation) = timer_confirmation(scope.as_ref(), required_status.as_deref())?
+        {
+            return Ok(confirmation);
+        }
         let store = match store {
             Some(store) => store,
             None => Store::open(root, host_zone)?,
@@ -898,6 +991,7 @@ pub(crate) fn change(
         Change::CreateEnabled { .. } => {
             unreachable!("enabled create handled before opening catalog")
         }
+        Change::TimerCheck { .. } => unreachable!("timer check unwrapped before opening catalog"),
         Change::Edit {
             id,
             revision,
@@ -926,11 +1020,24 @@ pub(crate) fn change(
         Change::SaveActive {
             id,
             revision,
+            operation,
             generation,
             updated_at,
             mut spec,
         } => {
             let target = store.job(&id)?;
+            spec.prepare(host_zone)?;
+            if let Some(operation) = operation.as_ref()
+                && target.revision_id == *operation
+                && target.spec == *spec
+                && target.state == "active"
+                && target.lifecycle_generation == generation
+            {
+                if required_status.is_some() {
+                    return Err("automation draft was already saved".into());
+                }
+                return Ok(json!({"op":CHANGE,"job":target}));
+            }
             if target.revision_id != revision
                 || target.state != "active"
                 || target.lifecycle_generation != generation
@@ -938,16 +1045,21 @@ pub(crate) fn change(
             {
                 return Err("automation revision or state changed".into());
             }
-            spec.prepare(Path::new("/etc/localtime"))?;
             if spec.calendar != target.spec.calendar {
                 store.check_future(&spec, now)?;
             }
             qualify_enabled_save(root, &id, &spec, &store.active()?, readiness, conflict)?;
-            store.edit_bound(
+            if let Some(confirmation) =
+                timer_confirmation(scope.as_ref(), required_status.as_deref())?
+            {
+                return Ok(confirmation);
+            }
+            store.edit_to_revision(
                 &id,
                 Some(&revision),
                 *spec,
                 Some(("active", generation, updated_at, "active")),
+                operation.as_deref(),
                 jiff::Timestamp::now(),
             )?
         }
@@ -1022,12 +1134,36 @@ fn qualify_enabled_save(
     conflict: impl Fn(&Path) -> Option<String>,
 ) -> Result<()> {
     readiness(spec)?;
-    super::workspace::preview(root, id, spec, active, conflict)?;
+    super::workspace::preview(root, id, spec, active, conflict)
+}
+
+fn inactive_timer_status(status: &str) -> bool {
+    matches!(
+        status,
+        "not installed, inactive" | "partially installed, inactive" | "installed, inactive"
+    )
+}
+
+fn timer_confirmation(
+    scope: Option<&Value>,
+    required_status: Option<&str>,
+) -> Result<Option<Value>> {
     let cancel = std::sync::atomic::AtomicBool::new(false);
-    if super::timer::board_status(&cancel)? != "installed, active" {
-        return Err("Enable the timer from Automations before saving enabled.".into());
+    let status = super::timer::board_status(&cancel)?;
+    if required_status.is_some_and(|expected| expected != status) {
+        return Err("timer status changed; reopen the automation before enabling the timer".into());
     }
-    Ok(())
+    if status == "installed, active" {
+        return Ok(None);
+    }
+    if let Some(scope) = scope
+        && inactive_timer_status(&status)
+    {
+        return Ok(Some(
+            json!({"op":CHANGE,"timer_confirmation":{"scope":scope,"status":status}}),
+        ));
+    }
+    Err("Enable the timer from Automations before saving enabled.".into())
 }
 
 pub(crate) const MANUAL_CAP: &str = "schedule-board-manual-v1";

@@ -229,6 +229,18 @@ pub(crate) fn automation_install_timer(
         .map_err(|error| io::Error::other(error.to_string()))
 }
 
+pub(crate) fn automation_install_timer_checked(
+    path: &Path,
+    endpoint: &str,
+    status: &str,
+    validate: &mut dyn FnMut() -> io::Result<()>,
+) -> io::Result<()> {
+    timer::board_install_checked(path, endpoint, status, &mut || {
+        validate().map_err(Into::into)
+    })
+    .map_err(|error| io::Error::other(error.to_string()))
+}
+
 pub(crate) fn automation_invocation() -> io::Result<String> {
     id(Timestamp::now()).map_err(|error| io::Error::other(error.to_string()))
 }
