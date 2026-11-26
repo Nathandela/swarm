@@ -1,4 +1,7 @@
 // The Go store remains authoritative throughout stopped-session compatibility.
+pub(super) mod export;
+pub(super) mod live;
+
 use super::runtime;
 use crate::ipc::field;
 use serde::de::{DeserializeOwned, IgnoredAny};
@@ -11,7 +14,7 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub(super) const OPT_IN: &str = "SWARM_DAEMON_STOPPED_GO_COMPAT";
@@ -68,7 +71,10 @@ const ROSTER_CUSTODY_FIELDS: &[&str] = &[
     "exit_code",
     "shim_pid",
     "shim_start_time",
+    "shim_wire_version",
     "launch_options",
+    "conversation_id",
+    "env",
     "backend_plan_error",
     "resume_error",
 ];
@@ -172,6 +178,9 @@ struct Entry {
     meta: Value,
     raw: RawFields,
     needs_sync: bool,
+    exported: bool,
+    live: Option<Arc<live::Owner>>,
+    observed_exit: Option<Value>,
 }
 
 impl Entry {
@@ -249,7 +258,7 @@ fn local_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
-fn timestamp(value: &Value) -> Option<OffsetDateTime> {
+pub(super) fn timestamp(value: &Value) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(value.as_str()?, &Rfc3339).ok()
 }
 
@@ -267,7 +276,7 @@ fn inactive(pid: u32, birth: u64) -> io::Result<()> {
     }
 }
 
-fn exited(file: &File, meta: &Value) -> io::Result<()> {
+fn qualified_role(meta: &Value) -> io::Result<()> {
     let schema = meta["schema_version"].as_u64();
     if schema != Some(1) {
         return Err(io::Error::other(format!(
@@ -293,11 +302,10 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
             "unqualified Go role, lineage, workspace or native custody",
         ));
     }
-    if meta["status"]["Process"] != "exited" {
-        return Err(io::Error::other(
-            "Go session is live or has uncertain custody",
-        ));
-    }
+    Ok(())
+}
+
+fn exited(file: &File, meta: &Value) -> io::Result<()> {
     let exit = read_at(file, c"exit.json")
         .map_err(|e| io::Error::other(format!("Go exit evidence unavailable: {e}")))?;
     if meta["exit_code"].as_i64().is_none()
@@ -371,6 +379,26 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
         ));
     }
     inactive(native_pid, native_birth)?;
+    launch_evidence(file, meta)?;
+    Ok(())
+}
+
+fn completed(file: &File, meta: &Value) -> io::Result<Option<Value>> {
+    let exit = match read_at(file, c"exit.json") {
+        Ok(exit) => exit,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let mut ended = meta.clone();
+    ended["status"]["Process"] = json!("exited");
+    ended["exit_code"] = exit["exit_code"].clone();
+    ended["last_activity"] = exit["finished_at"].clone();
+    ended["group_entered_at"] = exit["finished_at"].clone();
+    exited(file, &ended)?;
+    Ok(Some(ended))
+}
+
+fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
     let launch = read_at(file, c"shim-launch.json")
         .map_err(|e| io::Error::other(format!("Go launch evidence unavailable: {e}")))?;
     // The original directory can differ on an offline copy, but the durable
@@ -399,7 +427,7 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
             "Go launch binding or native writer is unqualified",
         ));
     }
-    Ok(())
+    Ok(launch)
 }
 
 fn valid_meta(meta: &Value, id: &str) -> bool {
@@ -425,8 +453,22 @@ fn valid_meta(meta: &Value, id: &str) -> bool {
         && timestamp(&meta["last_activity"]).is_some()
 }
 
+fn qualified(root: &Path, file: &File, meta: &Value) -> io::Result<bool> {
+    qualified_role(meta)?;
+    if meta["status"]["Process"] != "exited" {
+        return Err(io::Error::other(
+            "Go session is live or has uncertain custody",
+        ));
+    }
+    match read_at(file, c"rust-origin.json") {
+        Ok(origin) => export::verify(root, meta, &origin).map(|()| true),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => exited(file, meta).map(|()| false),
+        Err(e) => Err(e),
+    }
+}
+
 impl Store {
-    pub(super) fn open(root: &Path, opted_in: bool) -> io::Result<Option<Self>> {
+    pub(super) fn open(root: &Path, opted_in: bool, adopt_live: bool) -> io::Result<Option<Self>> {
         let mut rows = BTreeMap::new();
         let directory = File::open(root)?;
         for dir in fs::read_dir(root)? {
@@ -482,7 +524,22 @@ impl Store {
                     continue;
                 }
             };
-            exited(&file, &meta).map_err(|e| io::Error::other(format!("Go session {id}: {e}")))?;
+            let (exported, live, observed_exit) =
+                if adopt_live && meta["status"]["Process"] == "running" {
+                    let adopt = (|| {
+                        qualified_role(&meta)?;
+                        if let Some(ended) = completed(&file, &meta)? {
+                            return Ok((false, None, Some(ended)));
+                        }
+                        let owner = live::Owner::open(path, &file, &meta)?;
+                        Ok::<_, io::Error>((false, Some(Arc::new(owner)), None))
+                    })();
+                    adopt.map_err(|err| io::Error::other(format!("Go session {id}: {err}")))?
+                } else {
+                    let exported = qualified(root, &file, &meta)
+                        .map_err(|err| io::Error::other(format!("Go session {id}: {err}")))?;
+                    (exported, None, None)
+                };
             rows.insert(
                 id.to_owned(),
                 Entry {
@@ -490,11 +547,14 @@ impl Store {
                     meta,
                     raw,
                     needs_sync: false,
+                    exported,
+                    live,
+                    observed_exit,
                 },
             );
         }
         if opted_in {
-            if rows.is_empty() {
+            if rows.is_empty() && export::collect(root)?.is_empty() {
                 return Err(io::Error::other(
                     "no qualified stopped Go sessions in the state root",
                 ));
@@ -509,13 +569,88 @@ impl Store {
     }
 
     pub(super) fn rows(&self, endpoint: &str) -> Vec<Value> {
-        let rows = self.rows.lock().unwrap();
-        let mut entries: Vec<_> = rows.values().collect();
-        entries.sort_by_key(|entry| std::cmp::Reverse(timestamp(&entry.meta["created_at"])));
-        entries
-            .into_iter()
-            .map(|entry| view(&entry.meta, endpoint))
+        self.rows
+            .lock()
+            .unwrap()
+            .values()
+            .map(|entry| {
+                view(
+                    entry.observed_exit.as_ref().unwrap_or(&entry.meta),
+                    endpoint,
+                )
+            })
             .collect()
+    }
+
+    pub(super) fn contains(&self, id: &str) -> bool {
+        self.rows.lock().unwrap().contains_key(id)
+    }
+
+    pub(super) fn exported(&self, id: &str) -> io::Result<bool> {
+        match self.rows.lock().unwrap().get(id) {
+            Some(entry) if entry.exported => Ok(true),
+            Some(_) => Err(io::Error::other("Go and Rust session IDs collide")),
+            None => Ok(false),
+        }
+    }
+
+    pub(super) fn live_ids(&self) -> Vec<String> {
+        self.rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, entry)| entry.live.is_some())
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    pub(super) fn observe_exit(&self, id: &str, endpoint: &str) -> io::Result<Option<Value>> {
+        let (dir, meta) = {
+            let rows = self.rows.lock().unwrap();
+            let Some(entry) = rows.get(id).filter(|entry| entry.live.is_some()) else {
+                return Ok(None);
+            };
+            (entry.dir.try_clone()?, entry.meta.clone())
+        };
+        let Some(ended) = completed(&dir, &meta)? else {
+            return Ok(None);
+        };
+        if !same_file(&dir.metadata()?, &fs::symlink_metadata(self.root.join(id))?) {
+            return Err(io::Error::other("live Go exit lost its directory binding"));
+        }
+        let raw = read_meta(&dir)?;
+        let row = view(&ended, endpoint);
+        let owner = {
+            let mut rows = self.rows.lock().unwrap();
+            let entry = rows.get_mut(id).expect("adopted Go entry is retained");
+            if raw != entry.raw {
+                return Err(io::Error::other(
+                    "live Go exit lost its original state binding",
+                ));
+            }
+            entry.observed_exit = Some(ended);
+            entry.live.take()
+        };
+        if let Some(owner) = owner {
+            owner.retire();
+        }
+        Ok(Some(row))
+    }
+
+    pub(super) fn has_live(&self) -> bool {
+        self.rows
+            .lock()
+            .unwrap()
+            .values()
+            .any(|entry| entry.live.is_some())
+    }
+
+    pub(super) fn live(&self, endpoint: &str, id: &str) -> Option<Arc<live::Owner>> {
+        let (want, local) = id.split_once('/')?;
+        if want != endpoint {
+            return None;
+        }
+        self.rows.lock().unwrap().get(local)?.live.clone()
     }
 
     pub(super) fn set_label(
@@ -534,6 +669,11 @@ impl Store {
         let entry = rows
             .get_mut(id)
             .ok_or_else(|| io::Error::other("unknown stopped Go session"))?;
+        if entry.live.is_some() {
+            return Err(io::Error::other(
+                "live Go label mutation requires separate rollback qualification",
+            ));
+        }
         let path = self.root.join(id);
         let current = fs::symlink_metadata(&path)?;
         if current.mode() & 0o077 != 0
@@ -545,7 +685,11 @@ impl Store {
                 "stopped Go session changed outside the supervisor",
             ));
         }
-        exited(&entry.dir, &entry.meta)?;
+        if qualified(&self.root, &entry.dir, &entry.meta)? != entry.exported {
+            return Err(io::Error::other(
+                "stopped Go origin changed outside the supervisor",
+            ));
+        }
         let updated = entry.set_label(key, value, |dir| {
             if !same_file(&dir.metadata()?, &fs::symlink_metadata(&path)?) {
                 return Err(io::Error::other(
@@ -589,16 +733,30 @@ fn view(meta: &Value, endpoint: &str) -> Value {
         .find(|key| nonzero_time(&meta[*key]))
         .expect("validated creation time");
     let mut status = json!({
-        "Process": "exited", "Turn": meta["status"]["Turn"], "Interaction": meta["status"]["Interaction"]
+        "Process": meta["status"]["Process"], "Turn": meta["status"]["Turn"], "Interaction": meta["status"]["Interaction"]
     });
     if meta["status"]["Attention"] == true {
         status["Attention"] = json!(true);
     }
+    let group = if status["Process"] != "running" {
+        "completed"
+    } else if status["Attention"] == true {
+        "needs_input"
+    } else if status["Turn"] != "idle" {
+        "working"
+    } else if matches!(
+        field(&status, "Interaction"),
+        "permission" | "prompt" | "error"
+    ) {
+        "needs_input"
+    } else {
+        "ready_for_review"
+    };
     let mut row = json!({
         "id":format!("{endpoint}/{}", field(meta, "id")), "endpoint_id":endpoint,
         "agent":meta["agent_type"], "cwd":meta["cwd"],
         "created_at":meta["created_at"], "last_activity":meta["last_activity"],
-        "group_entered_at":meta[group_entered], "group":"completed", "status":status, "summary":"",
+        "group_entered_at":meta[group_entered], "group":group, "status":status, "summary":"",
     });
     for key in ["name", "tag", "backend_plan_error", "resume_error"] {
         if !field(meta, key).is_empty() {
@@ -666,6 +824,9 @@ mod tests {
             meta: raw.parsed().unwrap(),
             raw,
             needs_sync: false,
+            exported: false,
+            live: None,
+            observed_exit: None,
         };
         replace_meta(&entry.dir, &entry.raw, || {}).unwrap();
         let error = entry.set_label("tag", "new".into(), |_| {

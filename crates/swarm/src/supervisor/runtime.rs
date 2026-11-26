@@ -8,6 +8,12 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::time::Duration;
 
+pub(crate) fn timestamp_now() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("UTC timestamp")
+}
+
 pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const SHIM_VERSION: u64 = 1;
 pub(crate) const DATA_OUT: u8 = 2;
@@ -117,7 +123,7 @@ pub(crate) fn uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-fn validate_file(file: &File) -> io::Result<()> {
+pub(super) fn validate_file(file: &File) -> io::Result<()> {
     let meta = file.metadata()?;
     if !meta.is_file() || meta.mode() & 0o077 != 0 || meta.uid() != uid() || meta.nlink() != 1 {
         return Err(io::Error::other(

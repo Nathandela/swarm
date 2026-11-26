@@ -10,6 +10,7 @@ mod stopped_go;
 mod supervision;
 
 use crate::ipc::{self, VERSION, field, wire};
+use crate::socket::DeadlineReader;
 use runtime::{DATA_IN, DATA_OUT, IO_TIMEOUT, SNAPSHOT};
 use serde_json::{Value, json};
 use session::Session;
@@ -25,11 +26,20 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const SESSION_LIMIT: usize = 64;
 
 pub(crate) fn run(args: &[String]) -> u8 {
+    if args == ["export-stopped-go"] {
+        return match stopped_go::export::run() {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("daemon export-stopped-go: {e}");
+                1
+            }
+        };
+    }
     if args == ["restart", "--unattended"] {
         return crate::bootstrap::unattended();
     }
@@ -61,7 +71,7 @@ pub(crate) fn run(args: &[String]) -> u8 {
             }
         }
     } else if !args.is_empty() {
-        eprintln!("usage: swarm daemon");
+        eprintln!("usage: swarm daemon [restart|export-stopped-go]");
         return 2;
     }
     let Some(configured) = ipc::env_path("SWARM_DAEMON_STATE") else {
@@ -129,13 +139,21 @@ impl State {
     }
 
     fn rows(&self) -> Vec<Value> {
-        if let Some(store) = &self.stopped_go {
-            return store.rows(&self.endpoint);
-        }
         let sessions = self.sessions.read().unwrap();
         let mut rows: Vec<_> = sessions.values().map(|s| s.view(&self.endpoint)).collect();
-        rows.sort_by(|a, b| field(b, "created_at").cmp(field(a, "created_at")));
+        if let Some(store) = &self.stopped_go {
+            rows.extend(store.rows(&self.endpoint));
+            rows.sort_by_key(|row| std::cmp::Reverse(stopped_go::timestamp(&row["created_at"])));
+        } else {
+            rows.sort_by(|a, b| field(b, "created_at").cmp(field(a, "created_at")));
+        }
         rows
+    }
+
+    fn live_go(&self, request: &Value) -> Option<Arc<stopped_go::live::Owner>> {
+        self.stopped_go
+            .as_ref()?
+            .live(&self.endpoint, field(request, "session_id"))
     }
 
     fn session(&self, request: &Value) -> io::Result<Arc<Session>> {
@@ -199,6 +217,27 @@ impl State {
         caps: &[&str],
         managed: Option<Value>,
     ) -> io::Result<Arc<Session>> {
+        if self
+            .stopped_go
+            .as_ref()
+            .is_some_and(stopped_go::Store::has_live)
+        {
+            return Err(io::Error::other(
+                "new launches require separate live Go workspace qualification",
+            ));
+        }
+        if self.stopped_go.is_some()
+            && (managed.is_some()
+                || !matches!(field(&request["launch"], "agent"), "claude" | "claude-code")
+                || request["launch"]["worktree"] == true
+                || ["spawned_from", "spawn_intent", "supervision"]
+                    .iter()
+                    .any(|key| !field(&request["launch"], key).is_empty()))
+        {
+            return Err(io::Error::other(
+                "stopped rollback supports ordinary, non-worktree Claude launches",
+            ));
+        }
         if managed.is_some()
             && runtime::launch_env(&request["launch"]["env"])
                 .iter()
@@ -287,6 +326,10 @@ impl State {
                 ));
             }
             prepared.bind_manager(scope.clone())?;
+        }
+        if self.stopped_go.is_some() {
+            prepared.bind_go_rollback(&bound)?;
+            runtime::private_dir(&self.root)?;
         }
         self.reserve_prepared(prepared, false, source, managed)
     }
@@ -451,6 +494,12 @@ fn serve(configured: PathBuf) -> io::Result<()> {
     let canonical_lock = root.join("daemon.lock");
     let lock = ipc::env_path("SWARM_DAEMON_LOCK").unwrap_or_else(|| canonical_lock.clone());
     let opted_in = std::env::var(stopped_go::OPT_IN).ok().as_deref() == Some("1");
+    let adopt_live = std::env::var(stopped_go::live::OPT_IN).ok().as_deref() == Some("1");
+    if adopt_live && !opted_in {
+        return Err(io::Error::other(
+            "live Go compatibility requires the stopped Go compatibility opt-in",
+        ));
+    }
     if opted_in && lock != canonical_lock {
         return Err(io::Error::other(
             "stopped Go compatibility requires the canonical daemon lock",
@@ -464,7 +513,7 @@ fn serve(configured: PathBuf) -> io::Result<()> {
     if opted_in {
         stopped_go::verify_daemon_stopped(&root, &socket)?;
     }
-    let stopped_go = stopped_go::Store::open(&root, opted_in)?;
+    let stopped_go = stopped_go::Store::open(&root, opted_in, adopt_live)?;
     let ownership = root.join(".rust-state-writer.lock");
     let _state_lock = if lock == ownership || opted_in {
         None
@@ -474,14 +523,18 @@ fn serve(configured: PathBuf) -> io::Result<()> {
     let endpoint = endpoint(&root);
     let runtime_root = root.join("rust-v1");
     let mut sessions = BTreeMap::new();
-    if stopped_go.is_some() {
-        match fs::symlink_metadata(&runtime_root) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            _ => {
-                return Err(io::Error::other(
-                    "mixed Rust and Go state requires separate rollback qualification",
-                ));
+    if let Some(store) = &stopped_go {
+        for path in stopped_go::export::collect(&root)? {
+            let id = path
+                .file_name()
+                .and_then(|x| x.to_str())
+                .expect("validated Rust ID");
+            if store.exported(id)? || stopped_go::export::was_published(&path)? {
+                continue;
             }
+            let session = Session::load(path)?;
+            session.reconcile();
+            sessions.insert(session.id.clone(), Arc::new(session));
         }
     } else {
         runtime::private_dir(&runtime_root)?;
@@ -557,21 +610,35 @@ fn serve(configured: PathBuf) -> io::Result<()> {
         if let Some((_, listener)) = receipt {
             scheduling::receipts(listener, state.clone());
         }
-        let monitor = state.clone();
-        thread::spawn(move || {
-            loop {
-                thread::sleep(Duration::from_millis(150));
-                let sessions: Vec<_> = monitor.sessions.read().unwrap().values().cloned().collect();
-                for session in sessions {
-                    if session.reconcile() {
-                        monitor.publish(&session);
-                    } else {
-                        monitor.pilot_refresh(&session);
+    }
+    let monitor = state.clone();
+    thread::spawn(move || {
+        let mut adopted = monitor
+            .stopped_go
+            .as_ref()
+            .map(stopped_go::Store::live_ids)
+            .unwrap_or_default();
+        loop {
+            thread::sleep(Duration::from_millis(150));
+            if let Some(store) = &monitor.stopped_go {
+                adopted.retain(|id| match store.observe_exit(id, &monitor.endpoint) {
+                    Ok(Some(row)) => {
+                        monitor.publish_row(row);
+                        false
                     }
+                    _ => true,
+                });
+            }
+            let sessions: Vec<_> = monitor.sessions.read().unwrap().values().cloned().collect();
+            for session in sessions {
+                if session.reconcile() {
+                    monitor.publish(&session);
+                } else {
+                    monitor.pilot_refresh(&session);
                 }
             }
-        });
-    }
+        }
+    });
     for incoming in listener.incoming() {
         let stream = incoming?;
         let state = state.clone();
@@ -631,7 +698,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
         .filter_map(Value::as_str)
         .filter(|cap| {
             if state.stopped_go.is_some() {
-                return *cap == "subscribe";
+                return matches!(*cap, "subscribe" | "attach");
             }
             worker_origin_available && matches!(*cap, "message-origin" | "worker-discord-origin-v1")
                 || guild_worker_available && *cap == "worker-discord-guild-origin-v1"
@@ -686,12 +753,25 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             continue;
         }
         let op = field(&request, "op");
-        if state.stopped_go.is_some() && !matches!(op, "list" | "subscribe" | "rename" | "set_tag")
+        if state.stopped_go.is_some()
+            && !matches!(
+                op,
+                "list"
+                    | "subscribe"
+                    | "rename"
+                    | "set_tag"
+                    | "launch"
+                    | "attach"
+                    | "resize"
+                    | "terminal_subscribe"
+                    | "send_input"
+                    | "kill"
+            )
         {
             reply(
                 &writer,
                 state,
-                json!({"op":"error","error_code":"op_not_implemented","error":"stopped Go compatibility supports roster and labels only"}),
+                json!({"op":"error","error_code":"op_not_implemented","error":"operation is outside stopped Go rollback qualification"}),
             )?;
             continue;
         }
@@ -833,7 +913,9 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     Some(Value::String(s)) => s,
                     _ => return Err(io::Error::other("invalid session label type")),
                 };
-                if let Some(store) = &state.stopped_go {
+                if let Some(store) = &state.stopped_go
+                    && field(&request, "session_id").split_once('/').is_some_and(|(_, id)| store.contains(id))
+                {
                     let mut value = session::sanitize_name(value);
                     if key == "tag" {
                         value = value.trim().to_owned();
@@ -973,16 +1055,22 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 };
                 reply(&writer,state,response)
             }),
-            "terminal_subscribe" => state.session(&request).and_then(|session| {
-                let mut terminal = session.status_exchange(&json!({"type": "snapshot_req"}))?;
-                terminal["session"] = json!(session.id);
+            "terminal_subscribe" => (|| {
+                let terminal = if let Some(owner) = state.live_go(&request) {
+                    owner.snapshot()?
+                } else {
+                    let session = state.session(&request)?;
+                    let mut terminal = session.status_exchange(&json!({"type": "snapshot_req"}))?;
+                    terminal["session"] = json!(session.id);
+                    terminal
+                };
                 reply(&writer, state, json!({"op": "ok"}))?;
                 reply(
                     &writer,
                     state,
                     json!({"op": "terminal_snapshot", "terminal": terminal}),
                 )
-            }),
+            })(),
             "send_input" => state.session(&request).and_then(|session| {
                 let data = &request["send_input"];
                 if !data.is_object()
@@ -1024,9 +1112,15 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     json!({"op": "ok", "session_id": request["session_id"]}),
                 )
             }),
-            "attach" => state
-                .session(&request)
-                .and_then(|session| attachment(&mut stream, &writer, state, &request, &session)),
+            "attach" => (|| {
+                let owner = state.live_go(&request);
+                let shim = if let Some(owner) = &owner {
+                    owner.dial()?
+                } else {
+                    state.session(&request)?.dial()?
+                };
+                attachment(&mut stream, &writer, state, &request, shim, owner.as_deref())
+            })(),
             "resize" => Ok(()),
             _ => Err(io::Error::other(format!("unknown op {op:?}"))),
         };
@@ -1054,32 +1148,53 @@ struct Subscriber {
     events: SyncSender<Value>,
 }
 
-fn attachment(
-    client: &mut UnixStream,
-    writer: &Writer,
-    state: &State,
-    request: &Value,
-    session: &Session,
-) -> io::Result<()> {
-    let mut shim = session.dial()?;
-    runtime::write_control(&mut shim, &json!({"type": "attach"}))?;
-    let info = runtime::read_control(&mut shim)?;
+fn read_attach_snapshot(shim: &mut UnixStream) -> io::Result<Vec<u8>> {
+    let mut reader = DeadlineReader(shim, Instant::now() + IO_TIMEOUT);
+    let info = runtime::read_control(&mut reader)?;
     let length = info["snapshot_len"]
         .as_u64()
-        .filter(|n| *n > 0 && *n <= 32 * 1024 * 1024)
+        .filter(|n| *n <= 32 * 1024 * 1024)
         .ok_or_else(|| io::Error::other("invalid shim snapshot length"))? as usize;
     if field(&info, "type") != "snapshot_info" {
         return Err(io::Error::other("expected shim snapshot envelope"));
     }
     let mut snapshot = Vec::with_capacity(length);
     while snapshot.len() < length {
-        let (tag, bytes) = wire::read_frame(&mut shim)?;
+        let (tag, bytes) = wire::read_frame(&mut reader)?;
         if tag != SNAPSHOT || bytes.is_empty() || bytes.len() > length - snapshot.len() {
             return Err(io::Error::other("invalid shim snapshot chunk"));
         }
         snapshot.extend(bytes);
     }
+    Ok(snapshot)
+}
+
+fn with_live_lease<T>(
+    lease: Option<&stopped_go::live::Lease<'_>>,
+    send: impl FnOnce() -> io::Result<T>,
+) -> io::Result<T> {
+    match lease {
+        Some(lease) => lease.current(send),
+        None => send(),
+    }
+}
+
+fn attachment(
+    client: &mut UnixStream,
+    writer: &Writer,
+    state: &State,
+    request: &Value,
+    mut shim: UnixStream,
+    owner: Option<&stopped_go::live::Owner>,
+) -> io::Result<()> {
     let generation = state.generation.fetch_add(1, Ordering::Relaxed);
+    let lease = owner
+        .map(|owner| owner.begin(generation, &shim, client))
+        .transpose()?;
+    let snapshot = with_live_lease(lease.as_ref(), || {
+        runtime::write_control(&mut shim, &json!({"type": "attach"}))?;
+        read_attach_snapshot(&mut shim)
+    })?;
     let id = field(request, "session_id");
     {
         let mut destination = writer.lock().unwrap();
@@ -1113,7 +1228,9 @@ fn attachment(
         loop {
             let (tag, bytes) = wire::read_frame(client)?;
             if tag == DATA_IN {
-                wire::write_frame(&mut shim, DATA_IN, &bytes)?;
+                with_live_lease(lease.as_ref(), || {
+                    wire::write_frame(&mut shim, DATA_IN, &bytes)
+                })?;
             } else if tag == wire::CONTROL {
                 let control: Value = serde_json::from_slice(&bytes)?;
                 if control["endpoint_id"] != state.endpoint
@@ -1123,12 +1240,14 @@ fn attachment(
                     continue;
                 }
                 match field(&control, "op") {
-                    "resize" => runtime::write_control(
-                        &mut shim,
-                        &json!({
-                            "type": "resize", "cols": control["cols"], "rows": control["rows"]
-                        }),
-                    )?,
+                    "resize" => with_live_lease(lease.as_ref(), || {
+                        runtime::write_control(
+                            &mut shim,
+                            &json!({
+                                "type": "resize", "cols": control["cols"], "rows": control["rows"]
+                            }),
+                        )
+                    })?,
                     "detach" => break,
                     _ => {}
                 }
