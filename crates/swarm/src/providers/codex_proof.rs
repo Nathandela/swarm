@@ -1,4 +1,5 @@
 //! Native manager evidence from the owned Codex observer. The model's text is never authority.
+pub(crate) mod claude;
 use super::codex_receipt;
 use crate::{ipc::field, supervisor::runtime};
 use serde_json::{Value, json};
@@ -264,7 +265,10 @@ pub(crate) fn resolve(evidence: &Value, input: &Value) -> io::Result<Value> {
         || field(input, "tool_name") != call["tool"].as_str().unwrap_or("publish")
         || call["closed"] != false
         || call["arguments_hash"] != input["arguments_hash"]
-        || coordinates.turn != Some(turn)
+        || match binding["provider"].as_str() {
+            Some("claude") => coordinates.turn.is_some() || !call["agent"].is_null(),
+            _ => coordinates.turn != Some(turn),
+        }
         || evidence["current"] != turn
         || receipt["closed"] != false
         || !is_hash(nonce)

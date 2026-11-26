@@ -1,5 +1,5 @@
 //! Private bridge for Claude's prompt queue and its independent lifecycle guard.
-use super::{agy_input, claude, codex_receipt as receipt};
+use super::{agy_input, claude, codex_proof, codex_receipt as receipt};
 use crate::{ipc::field, supervisor::runtime};
 use serde_json::{Value, json};
 use std::{
@@ -42,6 +42,8 @@ struct Joined {
     sender: Option<(Worker, Instant)>,
     guard: Option<(Worker, Instant)>,
     revoked: bool,
+    proof: Option<codex_proof::Ledger>,
+    manager_initial_idle: bool,
     operations: BTreeMap<String, Pending>,
 }
 
@@ -75,6 +77,8 @@ pub(crate) struct Broker {
     auth: String,
     generation: String,
     session: String,
+    manager: Value,
+    sender_name: String,
     joined: Mutex<Joined>,
     progress: Condvar,
 }
@@ -88,11 +92,26 @@ impl Broker {
     ) -> io::Result<Arc<Self>> {
         let provider = &config["provider"];
         let token = field(config, "token");
-        let installation = field(provider, "claude_native_installation");
+        let manager = &config["manager"];
+        let installation = if manager.is_null() {
+            field(provider, "claude_native_installation")
+        } else {
+            field(manager, "installation_id")
+        };
         let supervisor = dir.parent().and_then(Path::parent).ok_or_else(refused)?;
         if provider["name"] != "claude"
             || !qualified(field(provider, "version"))
-            || !crate::discord::worker_installation_enrolled(supervisor, owner_socket, installation)
+            || if manager.is_null() {
+                !crate::discord::worker_installation_enrolled(
+                    supervisor,
+                    owner_socket,
+                    installation,
+                )
+            } else {
+                manager["launch"]["agent"] != "claude"
+                    || manager["supervisor_socket"] != owner_socket
+                    || crate::discord::connector_intent(manager).is_err()
+            }
         {
             return Err(refused());
         }
@@ -105,15 +124,25 @@ impl Broker {
         let descriptor = dir.join("claude-input.json");
         let descriptor_js = serde_json::to_string(&descriptor)?;
         let listener = runtime::bind(&socket)?;
+        let sender_name = if manager.is_null() {
+            SENDER.to_owned()
+        } else {
+            format!("swarm-manager-input-{}", runtime::random_id()?)
+        };
         runtime::write_json(
             &descriptor,
             &json!({
                 "socket_path":socket,"token":auth.strip_prefix("Bearer "),
-                "generation":generation,"provider_version":VERSION,"sender_name":SENDER,
+                "generation":generation,"provider_version":VERSION,"sender_name":sender_name,
+                "manager_conversation_id":manager["launch"]["manager"]["conversation_id"],
+                "native_turns":!manager.is_null(),
             }),
         )?;
         for (name, source) in [
-            (SENDER, include_str!("../../assets/claude/plugin.js")),
+            (
+                sender_name.as_str(),
+                include_str!("../../assets/claude/plugin.js"),
+            ),
             (
                 "swarm-native-input-guard",
                 include_str!("../../assets/claude/guard.js"),
@@ -135,7 +164,7 @@ impl Broker {
                 &json!({"modules":["./input.js"]}),
             )?;
             let mut body = source.replace("__CONFIG_PATH__", &descriptor_js);
-            if name == SENDER {
+            if name == sender_name {
                 if body.matches(NATIVE_SUBMIT).count() != 1 {
                     return Err(refused());
                 }
@@ -155,6 +184,8 @@ impl Broker {
             token: token.into(),
             auth,
             generation,
+            manager: manager.clone(),
+            sender_name,
             joined: Mutex::new(Joined::default()),
             progress: Condvar::new(),
         });
@@ -298,11 +329,38 @@ impl Broker {
             || !claude::canonical_id(&worker.native_session_id)
             || !claude::canonical_id(&worker.generation)
             || !qualified(&worker.version)
-            || !matches!(path, "/guard" | "/exchange" | "/revoke")
         {
             return Err(refused());
         }
         let mut joined = self.joined.lock().unwrap();
+        if !matches!(path, "/guard" | "/exchange" | "/revoke") {
+            if self.manager.is_null()
+                || joined.revoked
+                || joined
+                    .guard
+                    .as_ref()
+                    .is_none_or(|(guard, heard)| guard != &worker || heard.elapsed() >= HEARTBEAT)
+            {
+                return Err(refused());
+            }
+            if path == "/turn"
+                && req["turn"]["state"] == "idle"
+                && field(&req["turn"], "turn_id").is_empty()
+                && joined.proof.is_none()
+            {
+                return Ok(Value::Null);
+            }
+            if path == "/manager-idle" && field(req, "turn_id").is_empty() && joined.proof.is_none()
+            {
+                joined.manager_initial_idle = true;
+                return Ok(Value::Null);
+            }
+            if joined.ready().is_none() {
+                return Err(refused());
+            }
+            let proof = joined.proof.as_mut().ok_or_else(refused)?;
+            return proof.claude_guard(&self.sender_name, path, req);
+        }
         let role = if path == "/guard" {
             &mut joined.guard
         } else {
@@ -365,6 +423,31 @@ impl Broker {
         let Some(id) = joined.ready() else {
             return Ok(Value::Null);
         };
+        if !self.manager.is_null() && joined.proof.is_none() {
+            let guard = &joined.guard.as_ref().ok_or_else(refused)?.0;
+            let resume = &self.manager["resume_request"]["binding"];
+            if resume["native_session_id"]
+                .as_str()
+                .is_some_and(|expected| id != expected)
+            {
+                joined.revoked = true;
+                return Err(refused());
+            }
+            let binding = json!({
+                "session":format!("{}/{}", field(&self.manager,"endpoint_id"),self.session),
+                "session_instance":receipt::provider_instance("claude",&self.token),
+                "conversation_id":self.manager["launch"]["manager"]["conversation_id"],
+                "provider":"claude","native_session_id":id,"native_generation":self.generation,
+                "observation_generation":format!("{}:{}",self.generation,guard.generation),
+                "login_epoch":self.manager["account"]
+            });
+            let mut proof = codex_proof::Ledger::open(&self.dir, &binding)?;
+            if joined.manager_initial_idle {
+                proof.claude_guard(&self.sender_name, "/manager-idle", &json!({"turn_id":""}))?;
+            }
+            joined.proof = Some(proof);
+            return Ok(Value::Null);
+        }
         let registration = self.dir.join("claude-native.json");
         if !registration.exists() {
             runtime::write_json(
