@@ -2,8 +2,11 @@
 # Run a native provider witness on a VM with only the installed executable and
 # the synthetic loopback model available to the worker.
 set -eu
-if [ "$#" -lt 3 ] || [ "$#" -gt 5 ] || { [ "$#" -eq 5 ] && [ "$3" != rust_claude_manager.py ]; }; then
+if [ "$#" -lt 3 ] || [ "$#" -gt 5 ]; then
   echo 'usage: provider_native_linux.sh STAGED_FIXTURE PROVIDER_EXECUTABLE WITNESS.py [MODE [CODEX_EXECUTABLE]]' >&2
+  exit 2
+fi
+if [ "$#" -eq 5 ] && [ "$3" != rust_claude_manager.py ] && [ "$3" != rust_cross_provider_handoff.py ]; then
   exit 2
 fi
 fixture_dir=$(realpath "$1")
@@ -12,6 +15,12 @@ extra_provider=
 mounted=/native/claude
 witness=$3
 case "$witness" in
+  rust_cross_provider_handoff.py)
+    test "$#" -eq 5
+    test "$4" = hands-off
+    extra_provider=$(realpath "$5")
+    test -x "$extra_provider"
+    set -- /fixture/swarm /native/claude /native/codex ;;
   codex_relocation.py)
     test "$#" -eq 4
     case "$4" in go|rust) ;; *) exit 2 ;; esac
