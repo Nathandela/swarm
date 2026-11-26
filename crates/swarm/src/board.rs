@@ -269,9 +269,8 @@ fn board(path: &Path) -> io::Result<()> {
                 Action::SaveLayout(layout) => board.persist_layout(layout),
                 Action::Discussion { row, binding, op } => {
                     if let Some(local) = &connection {
-                        let caps = if op == "attach" { &["attach"][..] } else { &[] };
                         let result =
-                            discussions::revalidate(path, local.endpoint(), &binding, &row, caps);
+                            discussions::revalidate(path, local.endpoint(), &binding, &row);
                         let id = field(&row, "id");
                         match (op, result) {
                             ("attach", Ok(client)) => {

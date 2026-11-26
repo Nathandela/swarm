@@ -110,7 +110,7 @@ impl Poll {
                 let scan = || -> io::Result<Scan> {
                     let deadline = Instant::now() + Duration::from_secs(2);
                     let Some((binding, mut client)) =
-                        linked_board::resolve(&local, &endpoint, &[])?
+                        linked_board::resolve(&local, &endpoint, super::attach::CAPABILITIES)?
                     else {
                         return Ok(None);
                     };
@@ -138,21 +138,33 @@ fn roster(client: &mut Client, deadline: Instant) -> io::Result<Vec<Value>> {
 }
 
 pub(super) fn same_target(old: &Value, new: &Value) -> bool {
-    [
-        "id",
-        "role",
-        "agent",
-        "cwd",
-        "created_at",
-        "manager_conversation_id",
-        "spawned_from",
-        "worker_discussion",
-        "worker_attempt",
-        "worker_instance",
-    ]
-    .into_iter()
-    .all(|key| old[key] == new[key])
-        && old["capabilities"]["session_instance"] == new["capabilities"]["session_instance"]
+    let old_instance = old["capabilities"]["session_instance"]
+        .as_str()
+        .filter(|value| !value.is_empty());
+    let new_instance = new["capabilities"]["session_instance"]
+        .as_str()
+        .filter(|value| !value.is_empty());
+    // Legacy Go can omit live capabilities during observation. Its immutable
+    // namespaced ID and creation time still bind an unchanged worker attempt.
+    let instance_matches = old_instance.zip(new_instance).map_or_else(
+        || !field(old, "created_at").is_empty(),
+        |(old, new)| old == new,
+    );
+    instance_matches
+        && [
+            "id",
+            "role",
+            "agent",
+            "cwd",
+            "created_at",
+            "manager_conversation_id",
+            "spawned_from",
+            "worker_discussion",
+            "worker_attempt",
+            "worker_instance",
+        ]
+        .into_iter()
+        .all(|key| old[key] == new[key])
         && super::running(old) == super::running(new)
 }
 
@@ -161,27 +173,53 @@ pub(super) fn revalidate(
     endpoint: &str,
     binding: &Binding,
     row: &Value,
-    caps: &[&str],
 ) -> io::Result<Client> {
-    let changed = || io::Error::other("Linked dispatcher or target changed; reopen the action");
     let deadline = Instant::now() + Duration::from_secs(2);
-    let Some((current, mut client)) = linked_board::resolve(local, endpoint, caps)? else {
-        return Err(changed());
+    let Some((current, mut client)) =
+        linked_board::resolve(local, endpoint, super::attach::CAPABILITIES)?
+    else {
+        return Err(io::Error::other(
+            "Linked dispatcher is unavailable; reopen the action",
+        ));
     };
     if &current != binding {
-        return Err(changed());
+        return Err(io::Error::other(
+            "Linked dispatcher binding changed; reopen the action",
+        ));
     }
     let rows = project(roster(&mut client, deadline)?, &binding.endpoint, true);
-    if rows.iter().any(|current| same_target(row, current)) {
+    let Some(fresh) = rows.iter().find(|candidate| candidate["id"] == row["id"]) else {
+        return Err(io::Error::other(
+            "Linked row is absent from the qualified roster; reopen the action",
+        ));
+    };
+    if same_target(row, fresh) {
         Ok(client)
     } else {
-        Err(changed())
+        Err(io::Error::other(
+            "Linked row identity or process state changed; reopen the action",
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_legacy_observation_preserves_an_exact_attempt_fence() {
+        let fingerprint = json!({"id":"peer/worker","created_at":"2026-01-01T00:00:00Z",
+                                 "status":{"Process":"running"},"worker_attempt":"one"});
+        let mut stamped = fingerprint.clone();
+        stamped["capabilities"] = json!({"session_instance":"original"});
+        assert!(same_target(&stamped, &fingerprint));
+        let mut changed = stamped.clone();
+        changed["capabilities"]["session_instance"] = json!("replacement");
+        assert!(!same_target(&stamped, &changed));
+        changed = fingerprint.clone();
+        changed["worker_attempt"] = json!("different");
+        assert!(!same_target(&stamped, &changed));
+    }
 
     #[test]
     fn only_visible_endpoint_bound_managers_and_their_workers_are_linked() {
