@@ -95,6 +95,7 @@ const CONFIG: &str = "config.json";
 const SELECTION: &str = "discord-active.json";
 const OWNER: &str = ".rust-offline-owner.json";
 const ENROLLMENTS: &str = "discord-enrollments-v1.json";
+const VM_GRANT: &str = ".rust-vm-manager-grant-v1.json";
 
 impl Place {
     pub(super) fn supervisor_root(&self) -> &Path {
@@ -272,14 +273,43 @@ impl Place {
         Ok(PathBuf::from(value))
     }
 
+    fn vm_grant(&self, cfg: &Config) -> io::Result<Value> {
+        use std::os::unix::fs::MetadataExt;
+        let cwd = Path::new(cfg.text("work_dir"));
+        let identity = cwd.metadata()?;
+        if cwd.canonicalize()? != cwd || !identity.is_dir() {
+            return Err(invalid("VM grant requires the enrolled physical checkout"));
+        }
+        Ok(
+            json!({"schema":1,"authority":"discord-connect","installation_id":cfg.text("installation_id"),
+            "application_id":cfg.text("application_id"),"owner_id":cfg.text("owner_id"),
+            "mode":cfg.text("mode"),"personal_channel":cfg.text("dm_channel_id"),
+            "guilds":cfg.0["guild_ids"],"channels":cfg.0["channel_ids"],
+            "supervisor":self.supervisor.canonicalize()?,"socket":cfg.text("daemon_socket"),
+            "place":self.dir.canonicalize()?,"cwd":cwd,"cwd_identity":[identity.dev(),identity.ino()]}),
+        )
+    }
+
+    fn verified_vm_grant(&self, cfg: &Config) -> bool {
+        self.vm_grant(cfg).is_ok_and(|expected| {
+            runtime::read_json(&self.dir.join(VM_GRANT)).is_ok_and(|record| record == expected)
+        })
+    }
+
     pub(super) fn load(&self) -> io::Result<Config> {
         let meta = fs::symlink_metadata(&self.dir)?;
         // SAFETY: geteuid takes no arguments.
         if !meta.is_dir() || meta.mode() & 0o077 != 0 || meta.uid() != unsafe { libc::geteuid() } {
             return Err(invalid("invalid private state directory"));
         }
-        let cfg = Config(runtime::read_json(&self.dir.join(CONFIG))?);
+        let mut cfg = Config(runtime::read_json(&self.dir.join(CONFIG))?);
         cfg.validate()?;
+        if cfg.text("project_access") == "vm"
+            && self.ensure_owned(&cfg).is_ok()
+            && !self.verified_vm_grant(&cfg)
+        {
+            cfg.0["project_access"] = json!("enrolled");
+        }
         Ok(cfg)
     }
 
@@ -512,7 +542,21 @@ impl Place {
                 }
             }
         }
-        if cfg.managed()
+        let existing_explicit_vm = req.get("project-access") == Some("vm")
+            && previous.as_ref().is_some_and(|old| {
+                [
+                    "mode",
+                    "application_id",
+                    "owner_id",
+                    "dm_channel_id",
+                    "token_file",
+                ]
+                .iter()
+                .all(|key| old.0[*key] == cfg.0[*key])
+                    && (cfg.text("mode") != "personal" || snowflake(cfg.text("dm_channel_id")))
+            });
+        if !existing_explicit_vm
+            && cfg.managed()
             && (cfg.text("mode") == "personal"
                 || cfg.text("application_id").is_empty()
                 || cfg.text("name").is_empty()
@@ -526,9 +570,25 @@ impl Place {
         if !Path::new(cfg.text("work_dir")).is_dir() {
             return Err(invalid("working directory does not exist"));
         }
+        let issue_vm = cfg.text("project_access") == "vm"
+            && (previous.is_none() || req.get("project-access") == Some("vm"));
+        let grant = issue_vm.then(|| self.vm_grant(&cfg)).transpose()?;
+        if cfg.text("project_access") == "vm" && grant.is_none() && !self.verified_vm_grant(&cfg) {
+            cfg.0["project_access"] = json!("enrolled");
+        }
+        if cfg.text("project_access") != "vm" {
+            match fs::remove_file(self.dir.join(VM_GRANT)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
         self.register(&cfg)?;
         runtime::write_json(&self.dir.join(OWNER), &json!(cfg.text("installation_id")))?;
         runtime::write_json(&self.dir.join(CONFIG), &cfg.0)?;
+        if let Some(grant) = grant {
+            runtime::write_json(&self.dir.join(VM_GRANT), &grant)?;
+        }
         runtime::write_json(&self.supervisor.join(SELECTION), &json!(self.dir))?;
         Ok(cfg)
     }

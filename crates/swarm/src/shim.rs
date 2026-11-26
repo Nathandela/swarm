@@ -243,6 +243,10 @@ fn serve(dir: &Path) -> io::Result<()> {
         environment.push(("SWARM_SESSION_ID".into(), field(&config, "id").into()));
         if !config["manager"].is_null() {
             if scope["launch"]["manager"]["native_cli"] == true {
+                crate::discord::verify_manager_vm_scope(
+                    scope,
+                    dir.parent().and_then(Path::parent),
+                )?;
                 environment.push((
                     "SWARM_DISPATCHER_SPAWN_PROOF".into(),
                     crate::supervisor::mail::proof(token, "spawn"),
@@ -424,6 +428,9 @@ fn serve(dir: &Path) -> io::Result<()> {
             ));
         }
         command.current_dir(working_dir);
+        if scope["launch"]["manager"]["native_cli"] == true {
+            crate::discord::verify_manager_vm_scope(scope,dir.parent().and_then(Path::parent))?;
+        }
         if provider["name"]=="claude" && config["claude_resume"].is_object() {
             let saved=&config["claude_profile"];
             let live=providers::claude::profile(&environment,&Value::Null,&saved["options"])?;

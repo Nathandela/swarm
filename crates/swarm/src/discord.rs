@@ -75,13 +75,16 @@ pub(crate) fn manager_nonce(
 
 /// Re-read the active, owned personal enrollment at the supervisor admission boundary.
 pub(crate) fn native_manager_enrollment(launch: &Value) -> io::Result<Value> {
+    native_manager_enrollment_at(&ipc::state_path()?, launch)
+}
+
+fn native_manager_enrollment_at(supervisor: &Path, launch: &Value) -> io::Result<Value> {
     let auth = Path::new(ipc::field(&launch["manager"], "auth_file"));
     let directory = auth
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| invalid("missing enrolled manager directory"))?;
-    let supervisor = ipc::state_path()?;
-    manager_scope_for_directory(Place::enrolled(&supervisor)?, directory)
+    manager_scope_for_directory(Place::enrolled(supervisor)?, directory)
 }
 
 fn manager_scope_for_directory(
@@ -210,12 +213,36 @@ pub(crate) fn lock_manager_mail_effect(scope: &Value) -> io::Result<std::fs::Fil
     crate::supervisor::runtime::lock(&place.join(".rust-manager-mail-effect.lock"))
 }
 
+pub(crate) fn verify_manager_vm_scope(scope: &Value, supervisor: Option<&Path>) -> io::Result<()> {
+    if scope["launch"]["manager"]["native_cli"] != true {
+        return Ok(());
+    }
+    let root = supervisor.ok_or_else(|| invalid("missing VM supervisor custody root"))?;
+    let current = native_manager_enrollment_at(root, &scope["launch"])?;
+    if current["launch"] != scope["launch"]
+        || [
+            "installation_id",
+            "owner_id",
+            "application_id",
+            "channel_id",
+            "guild_id",
+            "supervisor_socket",
+        ]
+        .iter()
+        .any(|coordinate| current[*coordinate] != scope[*coordinate])
+    {
+        return Err(invalid("VM manager enrollment authority changed"));
+    }
+    Ok(())
+}
+
 pub(crate) fn verify_connector_input(
     scope: &Value,
     operation: &str,
     composer: &Value,
     supervisor_root: Option<&Path>,
 ) -> io::Result<()> {
+    verify_manager_vm_scope(scope, supervisor_root)?;
     let data = connector_intent(scope)?;
     let manager = &data["manager"];
     let input = &manager["input"];
@@ -564,14 +591,19 @@ fn connect(req: &Request<'_>, place: Place) -> io::Result<bool> {
         ));
     }
     let cfg = place.configure(req)?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
-            "name": cfg.text("name"), "installation_id": cfg.text("installation_id"),
-            "state_dir": place.dir, "installed": false,
-            "next": format!("swarm discord run --state-dir '{}'", place.dir.to_string_lossy().replace('\'', "'\\''"))
-        }))?
-    );
+    let mut result = json!({
+        "name": cfg.text("name"), "installation_id": cfg.text("installation_id"),
+        "state_dir": place.dir, "installed": false,
+        "next": format!("swarm discord run --state-dir '{}'", place.dir.to_string_lossy().replace('\'', "'\\''"))
+    });
+    if cfg.managed() {
+        result["project_access"] = json!(if cfg.text("project_access") == "vm" {
+            "vm"
+        } else {
+            "enrolled"
+        });
+    }
+    println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(true)
 }
 

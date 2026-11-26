@@ -256,6 +256,8 @@ def verify(swarm, provider, test, root, server):
         save(home / ".claude/settings.json", dict(permissions=dict(allow=["Bash(" + command + ")"])))
         access["project_access"] = "vm"
         env["SWARM_CLAUDE_MANAGER_FIXTURE_VM"] = "1"
+        if server.vm_revoked:
+            env["SWARM_CLAUDE_MANAGER_FIXTURE_VM_REVOKED"] = "1"
     if server.enrolled:
         server.approved = root / "approved"
         server.unapproved = root / "unapproved"
@@ -281,6 +283,14 @@ def verify(swarm, provider, test, root, server):
             while not endpoint.exists():
                 assert daemon.poll() is None and time.monotonic() < deadline, "isolated owner socket absent"
                 time.sleep(0.05)
+            if server.vm:
+                status = lambda: json.loads(subprocess.check_output(
+                    run([swarm,"discord","status","--state-dir",str(place)]), cwd=project,env=env,text=True,timeout=8))
+                assert status()["project_access"] == "enrolled", "unproved preview VM string was adopted"
+                configured = subprocess.run(run([swarm,"discord","connect","--state-dir",str(place),
+                    "--project-access","vm"]), cwd=project,env=env,capture_output=True,text=True,timeout=8)
+                assert configured.returncode == 0, configured.stderr
+                assert status()["project_access"] == "vm", "explicit verified CLI grant was not loaded"
             if server.enrolled:
                 ordinary = subprocess.run(run([swarm,"spawn","--cli","claude","--worktree=false",
                                                "--dir",str(server.unapproved),"--prompt","Unrelated synthetic worker."]),
@@ -288,16 +298,16 @@ def verify(swarm, provider, test, root, server):
                 assert ordinary.returncode == 0, ordinary.stderr
             subprocess.run(run([test, "discord::manager::tests::installed_claude_manager_producer",
                                 "--ignored", "--nocapture"]), cwd=project, env=env, check=True, timeout=75 if server.park else 48)
-            if server.project_fault:
+            if server.project_fault or server.vm_revoked:
                 assert not server.seen_tools
-                assert provider_exec.is_file() == (server.project_fault == "after")
-            expected_posts = 0 if server.forwarded == "revoked" or server.deleted or server.project_fault else (2 if server.park else 1)
+                assert provider_exec.is_file() == (server.project_fault == "after" or server.vm_revoked)
+            expected_posts = 0 if server.forwarded == "revoked" or server.deleted or server.project_fault or server.vm_revoked else (2 if server.park else 1)
             assert sum(1 for publish, _, _ in server.main_requests if publish) == expected_posts
             assert not server.forwarded or server.forwarded_checked.is_file()
             assert all(("Bash" in tools) == server.vm for _, _, tools in server.main_requests)
             print(json.dumps(dict(version=version, private_loopback=True, original_envelope=bool(server.seen_tools),
-                                  exact_main_mcp_tool=not server.project_fault, observed_reply=expected_posts > 0, disabled_shell_tools=not server.vm,
-                                  vm_native_worker_launch=server.vm, vm_worktree_files=server.worktree,
+                                  exact_main_mcp_tool=not server.project_fault and not server.vm_revoked, observed_reply=expected_posts > 0, disabled_shell_tools=not server.vm,
+                                  vm_native_worker_launch=server.vm and not server.vm_revoked, vm_grant_revoked=server.vm_revoked, vm_worktree_files=server.worktree,
                                   enrolled_typed_launch=server.enrolled,
                                   project_authority_fault=server.project_fault,
                                   parked_worker_return=server.park, forwarded_attachments=server.forwarded)))
@@ -348,6 +358,7 @@ if __name__ == "__main__":
     modes.add_argument("--park", action="store_true")
     modes.add_argument("--vm", action="store_true")
     modes.add_argument("--vm-worktree", action="store_true")
+    modes.add_argument("--vm-revoked", action="store_true")
     modes.add_argument("--enrolled", action="store_true")
     modes.add_argument("--enrolled-deleted", action="store_true")
     modes.add_argument("--project-fault", choices=("before","after"))
@@ -358,7 +369,8 @@ if __name__ == "__main__":
         server.main_requests = []
         server.seen_tools = []
         server.park = args.park
-        server.vm = args.vm or args.vm_worktree
+        server.vm = args.vm or args.vm_worktree or args.vm_revoked
+        server.vm_revoked = args.vm_revoked
         server.worktree = args.vm_worktree
         server.enrolled = args.enrolled or args.enrolled_deleted
         server.deleted = args.enrolled_deleted

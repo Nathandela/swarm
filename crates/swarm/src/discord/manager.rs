@@ -624,7 +624,10 @@ mod tests {
             std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_ROOT").unwrap(),
         );
         let place = root.join("s/discord");
-        let cfg = Config(runtime::read_json(&place.join("config.json")).unwrap());
+        let cfg = super::super::config::Place::for_supervisor(&root.join("s"))
+            .unwrap()
+            .load()
+            .unwrap();
         let fault = std::env::var("SWARM_CLAUDE_MANAGER_FIXTURE_PROJECT_FAULT").unwrap_or_default();
         if fault == "before" {
             assert!(
@@ -706,6 +709,21 @@ mod tests {
         };
         let session = field(&runtime["binding"], "session");
         let instance = field(&runtime["binding"], "session_instance");
+        if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_VM_REVOKED").is_some() {
+            let local = session.rsplit('/').next().unwrap();
+            let data = runtime::read_json(&root.join("s/rust-v1").join(local).join("session.json"))
+                .unwrap();
+            let scope = &data["manager"];
+            assert!(crate::discord::verify_manager_vm_scope(scope, Some(&root.join("s"))).is_ok());
+            fs::remove_file(place.join(".rust-vm-manager-grant-v1.json")).unwrap();
+            assert!(crate::discord::verify_manager_vm_scope(scope, Some(&root.join("s"))).is_err());
+            assert!(manager.runtime(session, instance, &launch).is_err());
+            inbox.admit(&source).unwrap().unwrap();
+            assert!(dispatcher.tick(&cfg, &mut inbox, &api).is_err());
+            assert!(inbox.manager()["input"].is_null());
+            assert!(api.posts.borrow().is_empty());
+            return;
+        }
         if fault == "after" {
             let config = root.join("work/.claude");
             runtime::private_dir(&config).unwrap();
