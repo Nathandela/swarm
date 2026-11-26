@@ -504,6 +504,11 @@ where
         return Ok(true);
     }
     let readiness = activation::ready(place, &cfg, &lease.db)?;
+    if matches!(readiness, activation::Ready::QueuedFile) {
+        return Err(io::Error::other(
+            "the original VM worker has not been admitted",
+        ));
+    }
     let mut next_mail_check = Instant::now();
     let mut check_mail = || {
         if let Some(discussion) = &vm_discussion

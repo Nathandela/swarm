@@ -4,6 +4,7 @@ mod grants;
 pub(super) mod manager_publication;
 pub(super) mod prepare;
 pub(super) mod publication;
+mod queue;
 pub(super) mod service;
 pub(super) mod source_attachment;
 mod wake;
@@ -1514,6 +1515,52 @@ mod tests {
         assert!(execute(&Request::parse(&args).unwrap()).is_err());
         fs::remove_file(project).unwrap();
         fs::rename(moved, project).unwrap();
+        assert_eq!(snapshot(), before);
+    }
+
+    #[test]
+    fn native_go_queued_file_owner_inspection_is_read_only() {
+        let Some(root) = std::env::var_os("SWARM_TEST_DISCORD_QUEUED_FILE_ROOT") else {
+            return;
+        };
+        let place = Place::for_supervisor(Path::new(&root)).unwrap();
+        let paths = [
+            place.dir.join("discord.db"),
+            place.supervisor_root().join("dispatcher-mail.db"),
+            fs::read_dir(place.dir.join("discussions"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path()
+                .join("voice.db"),
+        ];
+        let snapshot = || {
+            paths
+                .iter()
+                .map(fs::read)
+                .collect::<io::Result<Vec<_>>>()
+                .unwrap()
+        };
+        let before = snapshot();
+        use super::super::{Request, execute};
+        let inspect = || {
+            let args = [
+                "migrate-state".to_owned(),
+                "--inspect-personal-vm".to_owned(),
+            ];
+            execute(&Request::parse(&args).unwrap())
+        };
+        assert!(inspect().unwrap());
+        assert!(!activation::selected(&place).unwrap());
+        assert!(activation::migrate(&place, true, false, true).is_err());
+        let original = place.load().unwrap();
+        let config_path = place.dir.join("config.json");
+        let mut foreign = original.0.clone();
+        foreign["owner_id"] = json!("300");
+        runtime::write_json(&config_path, &foreign).unwrap();
+        assert!(inspect().is_err());
+        runtime::write_json(&config_path, &original.0).unwrap();
         assert_eq!(snapshot(), before);
     }
 

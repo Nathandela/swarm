@@ -295,6 +295,73 @@ pub(crate) fn pending(
     Ok(result)
 }
 
+pub(crate) fn original_queued_file(root: &Path, discussion: &str) -> io::Result<Option<Value>> {
+    let path = match open_path(root, false) {
+        Ok(path) => path,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let (_pin, db) = crate::checkout::state::receipts::open_bolt(&path, 256 << 20)?;
+    let tx = db.begin().map_err(io_error)?;
+    let pending = tx.bucket(b"pending").ok_or_else(absent)?;
+    let mut cursor = pending.cursor();
+    let prefix = format!("{discussion}\0");
+    let Some((order_key, raw_key)) = cursor.seek(prefix.as_bytes()) else {
+        return Ok(None);
+    };
+    if !order_key.starts_with(prefix.as_bytes()) {
+        return Ok(None);
+    }
+    let raw_key = raw_key.ok_or_else(absent)?.to_vec();
+    let order_key = order_key.to_vec();
+    if cursor
+        .next()
+        .is_some_and(|(key, _)| key.starts_with(prefix.as_bytes()))
+    {
+        return Err(io_error(
+            "more than one old worker note is queued for this discussion",
+        ));
+    }
+    let notes = tx.bucket(b"notes").ok_or_else(absent)?;
+    let raw = notes
+        .get(&raw_key)
+        .filter(|value| value.len() <= 128 << 10)
+        .ok_or_else(absent)?;
+    let mut note: Value = serde_json::from_slice(raw)?;
+    let id = note["ID"].as_str().ok_or_else(absent)?;
+    if note["Discussion"] != discussion
+        || note["Kind"] != "complete"
+        || note["State"] != "queued"
+        || order(&note)? != order_key
+        || key(&note, id)? != raw_key
+    {
+        return Err(io_error("unqualified original queued worker completion"));
+    }
+    let files = serde_json::to_value(descriptors(&tx, &raw_key)?)?;
+    let fields = [
+        "Discussion",
+        "Parent",
+        "Session",
+        "Instance",
+        "Attempt",
+        "Agent",
+        "Project",
+        "ParentInputHash",
+        "Kind",
+        "Text",
+        "Sequence",
+    ];
+    let binding = Value::Object(
+        fields
+            .into_iter()
+            .map(|key| (key.to_owned(), note[key].clone()))
+            .collect(),
+    );
+    publication_files(&tx, &raw_key, &binding, id, &files, "queued")?;
+    note["Files"] = files;
+    Ok(Some(note))
+}
+
 pub(crate) fn read_publication_files(root: &Path, source: &Value) -> io::Result<Vec<Captured>> {
     let binding = &source["binding"];
     let id = source["id"].as_str().ok_or_else(absent)?;
@@ -302,7 +369,7 @@ pub(crate) fn read_publication_files(root: &Path, source: &Value) -> io::Result<
     let path = open_path(root, false)?;
     let (_pin, db) = crate::checkout::state::receipts::open_bolt(&path, 256 << 20)?;
     let tx = db.begin().map_err(io_error)?;
-    publication_files(&tx, &key, binding, id, &source["files"])
+    publication_files(&tx, &key, binding, id, &source["files"], "ingested")
 }
 
 fn publication_files<'a>(
@@ -311,6 +378,7 @@ fn publication_files<'a>(
     binding: &Value,
     id: &str,
     requested: &Value,
+    state: &str,
 ) -> io::Result<Vec<Captured>> {
     let note: Value = serde_json::from_slice(
         tx.bucket(b"notes")
@@ -320,7 +388,7 @@ fn publication_files<'a>(
     )?;
     if note["ID"] != id
         || note["Kind"] != "complete"
-        || note["State"] != "ingested"
+        || note["State"] != state
         || binding
             .as_object()
             .is_none_or(|fields| fields.iter().any(|(field, value)| note[field] != *value))
@@ -387,7 +455,7 @@ fn pin_in(db: &mut Bolt, source: &Value, nonce: &str) -> io::Result<Vec<Captured
     let id = source["id"].as_str().ok_or_else(absent)?;
     let key = key(binding, id)?;
     let mut tx = db.begin_rw().map_err(io_error)?;
-    let files = publication_files(&tx, &key, binding, id, &source["files"])?;
+    let files = publication_files(&tx, &key, binding, id, &source["files"], "ingested")?;
     let mut root_bucket = tx.bucket_mut(b"note-files").ok_or_else(absent)?;
     let mut bucket = root_bucket.bucket_mut(&key).ok_or_else(absent)?;
     let mut manifest: Value = serde_json::from_slice(bucket.get(b"manifest").ok_or_else(absent)?)?;
@@ -444,7 +512,14 @@ pub(crate) fn release_prepared_publication(
     let id = source["id"].as_str().ok_or_else(absent)?;
     let key = key(&source["binding"], id)?;
     let mut tx = db.begin_rw().map_err(io_error)?;
-    let files = publication_files(&tx, &key, &source["binding"], id, &source["files"])?;
+    let files = publication_files(
+        &tx,
+        &key,
+        &source["binding"],
+        id,
+        &source["files"],
+        "ingested",
+    )?;
     let mut root = tx.bucket_mut(b"note-files").ok_or_else(absent)?;
     let mut note = root.bucket_mut(&key).ok_or_else(absent)?;
     let mut manifest: Value = serde_json::from_slice(note.get(b"manifest").ok_or_else(absent)?)?;

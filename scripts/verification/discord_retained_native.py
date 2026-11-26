@@ -359,6 +359,8 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                         assert row["worker_parent_input_hash"] == note["ParentInputHash"]
                         assert row["spawned_from"] == note["Parent"]
                         assert list(map(base64.b64decode,witness["Files"])) == [original_bytes]
+                        queued_env = env | {"SWARM_TEST_DISCORD_QUEUED_FILE_ROOT":str(base / "state")}
+                        run(rust_test,queued_env,"native_go_queued_file_owner_inspection_is_read_only","--nocapture")
                         assert ((place / "discord.db").read_bytes(),ledger.read_bytes()) == original_ledgers
                         assert posts == []
                         return

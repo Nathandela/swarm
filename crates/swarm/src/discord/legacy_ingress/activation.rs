@@ -44,9 +44,14 @@ pub(in crate::discord) fn selected(place: &Place) -> io::Result<bool> {
 pub(super) enum Ready {
     Idle,
     AdmittedFile { parent_message: String },
+    QueuedFile,
 }
 
 pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<Ready> {
+    probe(place, cfg, db, false)
+}
+
+fn probe(place: &Place, cfg: &Config, db: &impl DbApi, inspect_queued: bool) -> io::Result<Ready> {
     let tx = db.begin().map_err(io::Error::other)?;
     let install = cfg.text("installation_id");
     let channel = cfg.text("dm_channel_id");
@@ -92,6 +97,18 @@ pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<
         }
     }
     let (directory, ledger, endpoint) = voice_location(place, cfg, &binding)?;
+    if inspect_queued
+        && retained_vm(cfg)
+        && pending_vm_mail(place, &format!("discord-teammate-{ledger}"))?
+    {
+        return queue::inspect(place, cfg, db)
+            .map(|_| Ready::QueuedFile)
+            .map_err(|error| {
+                io::Error::other(format!(
+                    "original VM worker mailbox has a pending completion or request: {error}"
+                ))
+            });
+    }
     open_owner_file(&directory.join("voice.initialized"))?;
     let path = directory.join("voice.db");
     let (_pin, voice) = open_bolt(&path, 64 << 20)?;
@@ -164,20 +181,23 @@ pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<
     Ok(Ready::Idle)
 }
 
-pub(super) fn require_no_pending_vm_mail(place: &Place, discussion: &str) -> io::Result<()> {
+fn pending_vm_mail(place: &Place, discussion: &str) -> io::Result<bool> {
     let path = place.supervisor_root().join("dispatcher-mail.db");
     let (_pin, db) = match open_bolt(&path, 256 << 20) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         result => result?,
     };
     let tx = db.begin().map_err(io::Error::other)?;
     let pending = tx.bucket(b"pending").ok_or_else(invalid)?;
     let prefix = format!("{discussion}\0");
     let mut cursor = pending.cursor();
-    if cursor
+    Ok(cursor
         .seek(prefix.as_bytes())
-        .is_some_and(|(key, _)| key.starts_with(prefix.as_bytes()))
-    {
+        .is_some_and(|(key, _)| key.starts_with(prefix.as_bytes())))
+}
+
+pub(super) fn require_no_pending_vm_mail(place: &Place, discussion: &str) -> io::Result<()> {
+    if pending_vm_mail(place, discussion)? {
         return Err(io::Error::other(
             "original VM worker mailbox has a pending completion or request",
         ));
@@ -194,7 +214,7 @@ pub(in crate::discord) fn inspect_vm(place: &Place) -> io::Result<bool> {
     }
     let source = place.dir.join("discord.db");
     let (pin, db) = open_bolt(&source, 64 << 20)?;
-    ready(place, &cfg, &db)?;
+    probe(place, &cfg, &db, true)?;
     let current = fs::symlink_metadata(checkout)?;
     if !identity(&pin, &source)?
         || (current.dev(), current.ino()) != (pinned.dev(), pinned.ino())
