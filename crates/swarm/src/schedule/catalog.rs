@@ -969,6 +969,15 @@ pub(crate) fn change(
         qualify_enabled_save(root, &operation, &spec, &active, readiness, conflict)?;
         if let Some(confirmation) = timer_confirmation(scope.as_ref(), required_status.as_deref())?
         {
+            // A timer check can wait while another caller creates the catalog or claims the ID.
+            if required_status.is_some()
+                && let Some(current) = Store::existing(root, host_zone)?
+                && current
+                    .creation_receipt(&operation, &spec, "active")?
+                    .is_some()
+            {
+                return Err("automation draft was already saved".into());
+            }
             return Ok(confirmation);
         }
         let store = match store {
@@ -1038,13 +1047,7 @@ pub(crate) fn change(
                 }
                 return Ok(json!({"op":CHANGE,"job":target}));
             }
-            if target.revision_id != revision
-                || target.state != "active"
-                || target.lifecycle_generation != generation
-                || target.updated_at != updated_at
-            {
-                return Err("automation revision or state changed".into());
-            }
+            require_active_revision(&target, &revision, generation, updated_at)?;
             if spec.calendar != target.spec.calendar {
                 store.check_future(&spec, now)?;
             }
@@ -1052,6 +1055,9 @@ pub(crate) fn change(
             if let Some(confirmation) =
                 timer_confirmation(scope.as_ref(), required_status.as_deref())?
             {
+                if required_status.is_some() {
+                    require_active_revision(&store.job(&id)?, &revision, generation, updated_at)?;
+                }
                 return Ok(confirmation);
             }
             store.edit_to_revision(
@@ -1123,6 +1129,22 @@ pub(crate) fn change(
         )?,
     };
     Ok(json!({"op":CHANGE,"job":job}))
+}
+
+fn require_active_revision(
+    job: &Job,
+    revision: &str,
+    generation: u64,
+    updated_at: jiff::Timestamp,
+) -> Result<()> {
+    if job.revision_id != revision
+        || job.state != "active"
+        || job.lifecycle_generation != generation
+        || job.updated_at != updated_at
+    {
+        return Err("automation revision or state changed".into());
+    }
+    Ok(())
 }
 
 fn qualify_enabled_save(
