@@ -23,7 +23,7 @@ sys.dont_write_bytecode = True
 from parity_runtime import attach, control, fixtures, read_control, read_frame
 
 
-def model_fixture(root, alternate_check, guard_check=False, native_publication=False):
+def model_fixture(root, alternate_check, guard_check=False, native_publication=False, fixture_tool=None):
     replies = []
     history=[]
     release_pressure=threading.Event()
@@ -69,6 +69,7 @@ def model_fixture(root, alternate_check, guard_check=False, native_publication=F
                     usage={"input_tokens":82_000 if high else 10,"output_tokens":4,"total_tokens":82_004 if high else 14,
                            "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}})})
             ]
+            selected = fixture_tool(body) if fixture_tool else None
             if native_publication and index % 2 == 1:
                 names = [(tool.get("name"), child.get("name"))
                          for tool in body.get("tools",[]) for child in tool.get("tools",[])
@@ -77,8 +78,14 @@ def model_fixture(root, alternate_check, guard_check=False, native_publication=F
                 namespace, name = names[0]
                 arguments = json.dumps(dict(output_id="retained-final",sequence=1,
                                             text="Verified native final reply.",final=True))
+                selected = namespace, name, json.loads(arguments)
+            if selected:
+                namespace, name, arguments = selected
+                arguments = json.dumps(arguments)
                 item = dict(type="function_call",id=f"fixture-function-{index}",call_id=f"fixture-call-{index}",
-                            namespace=namespace,name=name,arguments=arguments,status="completed")
+                            name=name,arguments=arguments,status="completed")
+                if namespace:
+                    item["namespace"] = namespace
                 events = [
                     ("response.created", {"response":response.copy()}),
                     ("response.output_item.added", {"output_index":0,"item":dict(item,arguments="",status="in_progress")}),

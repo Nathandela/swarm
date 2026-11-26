@@ -11,6 +11,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"github.com/Nathandela/swarm/internal/workermail"
 )
 
 func FixturePersonalIngress(dir, conversation, session string, origin schema.MessageOrigin, phase, project string) error {
@@ -165,4 +166,56 @@ func (d *DiscussionController) FixtureActivate(ctx context.Context) (ManagerBind
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+// FixtureAdmittedFileWake verifies the original Go publication file authority
+// and returns captured bytes without resolving or publishing the native turn.
+func FixtureAdmittedFileWake(dir, settings string) ([][]byte, error) {
+	store, err := OpenStore(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	st, err := store.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	conversation := st.CurrentConversation
+	current := st.Conversations[conversation]
+	if !current.Binding.NativeCLI {
+		return nil, ErrInvalid
+	}
+	var result [][]byte
+	for _, wake := range st.Wakes {
+		if wake.State != "native_input" || wake.ConversationID != conversation {
+			continue
+		}
+		admission := st.Admissions[admissionKey(conversation, wake.Admission)]
+		if !admission.SettledAt.IsZero() || admission.RecoveryOnly || admission.NativeBindingRetired ||
+			wake.NativeInputID == "" || admission.NativeInputID != wake.NativeInputID || result != nil {
+			return nil, ErrStale
+		}
+		note, binding, err := publicationWorkerNote(st, conversation, wake.Admission)
+		if err != nil {
+			return nil, err
+		}
+		worker := st.Workers[key(conversation, key(note.Session, note.Instance))]
+		parent := st.Admissions[admissionKey(conversation, worker.Admission)]
+		if parent.Origin == nil || parent.Origin.Kind != "owner_direct" || parent.NativeInputID == "" ||
+			worker.ParentInputHash != hashBytes([]byte(parent.NativeInputID)) {
+			return nil, ErrStale
+		}
+		result = make([][]byte, 0, len(note.Files))
+		for _, file := range note.Files {
+			data, err := workermail.ReadFile(settings, binding, note.NoteID, file.ID)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, data)
+		}
+	}
+	if result == nil {
+		return nil, ErrNotFound
+	}
+	return result, nil
 }

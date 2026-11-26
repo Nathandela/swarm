@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Original Go managed personal room with an installed, loopback-only Codex."""
+import base64
 import http.server
 import json
+import shlex
 import socket
 import threading
+import time
 import os
 from pathlib import Path
 import subprocess
@@ -168,8 +171,108 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge, vm=False):
         source.server_close()
 
 
+def admit_vm_worker_wake(go, fixture, codex, base):
+    assert os.environ.get("SWARM_NATIVE_FIXTURE_OS_ISOLATED") == "1"
+    assert os.stat("/proc/self/ns/net").st_ino != int(os.environ["SWARM_NATIVE_FIXTURE_HOST_NETNS"])
+    for part in ("home", "home/.codex", "bin", "work", "state"):
+        (base / part).mkdir(mode=0o700)
+    (base / "bin/codex").symlink_to(codex)
+    (base / "bin/codex-linux-sandbox").symlink_to(codex)
+    (base / "bin/swarm").symlink_to(go)
+    env = fixture_env(base, base / "state", base / "bin")
+    env["PATH"] += ":/usr/sbin:/sbin"
+    env["TERM"] = "xterm-256color"
+    project = base / "work"
+    original_bytes = b"fixture,value\noriginal,1\n"
+    worker_file = project / "completion.csv"
+    worker_file.write_bytes(original_bytes)
+    stop = base / "stop-original-controller"
+    waiting = threading.Event()
+    release = threading.Event()
+    selected = set()
+    lock = threading.Lock()
+    problems = []
+    capture = []
+    tool_outputs = []
+
+    def choose(body):
+        observed = json.dumps(body["input"], ensure_ascii=False)
+        tool_outputs.extend(item["output"] for item in body["input"]
+                            if item.get("type") == "function_call_output")
+        if "Worker message and identity" in observed:
+            capture.append(observed)
+            waiting.set()
+            release.wait(timeout=30)
+            return None
+        with lock:
+            if "rollover-worker-file-fixture" in observed and "offline original owner prompt" not in observed and "worker" not in selected and "spawn" in selected:
+                selected.add("worker")
+                command = f"swarm teammate message --kind complete --file {shlex.quote(str(worker_file))}"
+            elif "offline original owner prompt" in observed and "spawn" not in selected:
+                selected.add("spawn")
+                command = f"swarm spawn --cli codex --dir {shlex.quote(str(project))} --prompt rollover-worker-file-fixture"
+            else:
+                return None
+        for tool in body["tools"]:
+            if tool.get("name") in ("exec_command", "shell_command"):
+                field = "cmd" if tool["name"] == "exec_command" else "command"
+                return None, tool["name"], {field: command}
+        problems.append([tool.get("name") for tool in body["tools"]])
+        return None
+
+    model, _ = model_fixture(base, False, fixture_tool=choose)
+    try:
+        place = base / "connector"
+        run(fixture, env, "create", place, base / "state", "personal", "true", project)
+        run(fixture, env, "project-access", place, "vm")
+        run(fixture, env, "bind", place, "original-room", "400")
+        run(fixture, env, "ingress", place, "original-room", "501", "settle")
+        with daemon(go, env, base / "go.log"):
+            try:
+                initial = json.loads(run(fixture, env, "activate", place, "original-room"))
+                assert initial["native_cli"] is True
+                ctl = subprocess.Popen([fixture, "vm-controller-run", place, "original-room", "701", stop],
+                                       env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    deadline = time.monotonic() + 45
+                    while not waiting.wait(0.2) and ctl.poll() is None and not problems:
+                        if time.monotonic() > deadline:
+                            break
+                    assert waiting.is_set(), (selected, problems, model.history, listed(env),
+                                              tool_outputs[-4:],
+                                              ctl.stderr.read() if ctl.poll() is not None else "running")
+                    stop.touch()
+                    _stdout, stderr = ctl.communicate(timeout=15)
+                    assert ctl.returncode == 0, stderr
+                    assert "completion.csv" in capture[0]
+                    assert len([row for row in listed(env) if row.get("role") == "manager"]) == 1
+                    worker_file.write_bytes(b"fixture,value\nchanged,2\n")
+                    assert worker_file.read_bytes() != original_bytes
+                    ledger, = (place / "discussions").glob("*/voice.db")
+                    stored, = json.loads(run(fixture, env, "vm-read-admitted-wake", ledger.parent, base / "state"))
+                    assert base64.b64decode(stored) == original_bytes
+                finally:
+                    release.set()
+                    if ctl.poll() is None:
+                        ctl.terminate()
+                        _stdout, stderr = ctl.communicate(timeout=10)
+                        if stderr:
+                            print(stderr, file=sys.stderr)
+            finally:
+                for row in listed(env):
+                    owner(env, {"op": "kill", "session_id": row["id"]})
+    finally:
+        model.shutdown()
+        model.server_close()
+
+
 if __name__ == "__main__":
     go, fixture, codex, rust_test = (str(Path(arg).resolve(strict=True)) for arg in sys.argv[1:])
+    if os.environ.get("SWARM_DISCORD_ADMITTED_WAKE") == "1":
+        with tempfile.TemporaryDirectory(prefix="dn-admit-", dir="/tmp") as directory:
+            admit_vm_worker_wake(go, fixture, codex, Path(directory))
+        print("PASS original Go admitted native worker wake fixture")
+        sys.exit(0)
     for acknowledge in (True, False):
         with tempfile.TemporaryDirectory(prefix="dn-", dir="/tmp") as directory:
             exercise(go, fixture, codex, rust_test, Path(directory), acknowledge)
