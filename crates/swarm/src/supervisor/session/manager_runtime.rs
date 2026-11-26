@@ -18,6 +18,7 @@ impl Session {
             "guild_id",
             "supervisor_socket",
             "call_place",
+            "projects",
         ] {
             if current[key] != self.manager[key] {
                 return Err(refuse("manager enrollment is no longer current"));
@@ -149,6 +150,52 @@ impl Session {
             _ => return Err(refuse("invalid manager provenance operation")),
         };
         Ok(data)
+    }
+
+    pub(in crate::supervisor) fn enrolled_worker_action(
+        &self,
+        request: &Value,
+    ) -> io::Result<(Value, Value)> {
+        let session = field(request, "session_id");
+        let action = &request["manager_worker_action"];
+        let data = crate::discord::connector_intent(&self.manager)?;
+        let state = &data["manager"];
+        let input = &state["input"];
+        let call = &action["call"];
+        let key = field(action, "key");
+        if self.manager["launch"]["manager"]["native_cli"] == true
+            || request["body_version"] != 1
+            || action["operation_id"] != request["operation_id"]
+            || state["session"] != session
+            || !input["worker_wake"].is_null()
+            || !input["turn_id"].is_string()
+            || input["worker_actions"][key] != *action
+            || call["name"] != "swarm_create"
+            || call["arguments"] != action["arguments"]
+        {
+            return Err(refuse(
+                "enrolled worker action lacks exact connector custody",
+            ));
+        }
+        let evidence = self.native_manager_proof(session)?;
+        let mut arguments = call["arguments"].clone();
+        arguments.sort_all_objects();
+        let proof = codex_proof::resolve(
+            &evidence,
+            &json!({
+                "binding":input["composer"]["manager_admission"]["binding"],
+                "tool_name":"swarm_create","arguments_hash":crate::discord::enrolled_worker::arguments_hash(&arguments)?,
+                "host_meta":call["meta"]
+            }),
+        )?;
+        if proof["native_turn_id"] != input["turn_id"]
+            || proof["native_input_id"] != input["composer"]["manager_admission"]["nonce"]
+        {
+            return Err(refuse(
+                "worker launch is outside the current enrolled native admission",
+            ));
+        }
+        crate::discord::enrolled_worker::launch(&self.manager, input, action)
     }
 
     pub(super) fn check_manager_input(

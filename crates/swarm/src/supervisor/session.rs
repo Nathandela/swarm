@@ -1139,7 +1139,10 @@ impl Session {
                     );
                 })?;
         }
-        if !self.mailbox.is_null() && !meta["checkout"].is_null() {
+        if !self.mailbox.is_null()
+            && self.mailbox["structured"] != true
+            && !meta["checkout"].is_null()
+        {
             use std::os::unix::fs::MetadataExt;
             let effective = self.verify_effective()?;
             let identity = effective.metadata()?;
@@ -2441,6 +2444,7 @@ impl Session {
     pub(super) fn mail_binding(&self, session: &str, proof: &str) -> io::Result<Value> {
         use subtle::ConstantTimeEq;
         if self.mailbox.is_null()
+            || self.mailbox["structured"] == true
             || !self.is_live()
             || proof.len() != 64
             || !bool::from(
@@ -2540,7 +2544,11 @@ impl Session {
             view["role"] = json!("worker");
             view["worker_discussion"] = self.mailbox["discussion"].clone();
             view["worker_attempt"] = self.mailbox["attempt"].clone();
-            view["worker_instance"] = json!(codex_receipt::instance(&self.token));
+            view["worker_instance"] = json!(if self.mailbox["structured"] == true {
+                codex_receipt::provider_instance(&self.agent, &self.token)
+            } else {
+                codex_receipt::instance(&self.token)
+            });
         }
         if !self.manager.is_null() {
             view["role"] = json!("manager");

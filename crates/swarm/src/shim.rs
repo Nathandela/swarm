@@ -257,7 +257,7 @@ fn serve(dir: &Path) -> io::Result<()> {
                     environment.push((key.into(), value.into()));
                 }
             }
-        } else {
+        } else if config["mailbox"]["structured"] != true {
             environment.push((crate::teammate::SOCKET_ENV.into(), owner_socket.into()));
             environment.push((
                 crate::teammate::PROOF_ENV.into(),

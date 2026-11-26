@@ -44,6 +44,31 @@ fn refusal(id: &str, code: &str, error: &str) -> Value {
 }
 
 pub(super) fn handle(state: &State, request: &Value, caps: &[&str]) -> io::Result<Value> {
+    handle_bound(state, request, caps, None)
+}
+
+pub(super) fn handle_structured(
+    state: &State,
+    request: &Value,
+    association: Value,
+    verify: &dyn Fn() -> io::Result<()>,
+) -> io::Result<Value> {
+    handle_bound(
+        state,
+        request,
+        &["owner-launch"],
+        Some((association, verify)),
+    )
+}
+
+type Structured<'a> = (Value, &'a dyn Fn() -> io::Result<()>);
+
+fn handle_bound(
+    state: &State,
+    request: &Value,
+    caps: &[&str],
+    structured: Option<Structured<'_>>,
+) -> io::Result<Value> {
     let status = request["op"] == "owner_launch_status";
     let id = field(
         request,
@@ -183,9 +208,13 @@ pub(super) fn handle(state: &State, request: &Value, caps: &[&str]) -> io::Resul
         scope["launch_operation"] = json!(id);
         scope["request_hash"] = json!(hash);
     }
-    let mailbox = match super::mail::launch_scope(state, &launch, caps, id) {
-        Ok(scope) => scope,
-        Err(err) => return Ok(refusal(id, "invalid_field", &err.to_string())),
+    let mailbox = if let Some((association, _)) = structured.as_ref() {
+        Some(association.clone())
+    } else {
+        match super::mail::launch_scope(state, &launch, caps, id) {
+            Ok(scope) => scope,
+            Err(err) => return Ok(refusal(id, "invalid_field", &err.to_string())),
+        }
     };
     if mailbox.is_some() {
         launch
@@ -215,6 +244,9 @@ pub(super) fn handle(state: &State, request: &Value, caps: &[&str]) -> io::Resul
         record["state"] = json!("outcome_unknown");
     }
     runtime::write_json(&path, &record)?;
+    if let Some((_, verify)) = structured {
+        verify()?;
+    }
     let view = match state.start(&session) {
         Ok(v) => v,
         Err(e) => return Ok(refusal(id, "outcome_unknown", &e.to_string())),

@@ -87,6 +87,9 @@ impl Dispatcher {
         if !self.owner.guild().is_empty() {
             scope["guild_id"] = json!(self.owner.guild());
         }
+        if cfg.0["projects"].is_object() {
+            scope["projects"] = cfg.0["projects"].clone();
+        }
         scope
     }
 
@@ -738,6 +741,85 @@ impl Dispatcher {
         Ok(())
     }
 
+    fn enrolled_worker_tool(
+        &self,
+        cfg: &Config,
+        inbox: &mut Inbox,
+        api: &impl Audience,
+        mut state: Value,
+        call: &Value,
+    ) -> io::Result<Value> {
+        if cfg.text("project_access") == "vm" {
+            return Err(invalid(
+                "VM managers use their separately enrolled ordinary CLI",
+            ));
+        }
+        let tool = field(call, "name");
+        let input = &state["input"];
+        let mut args = call["arguments"].clone();
+        args.sort_all_objects();
+        let proof =
+            self.owner
+                .prove_publication(&input["composer"], tool, &hash(&args)?, &call["meta"])?;
+        if proof["native_turn_id"] != input["turn_id"] {
+            return Err(invalid(
+                "worker action must belong to the current native manager turn",
+            ));
+        }
+        let session = field(&state, "session").to_owned();
+        if tool == "swarm_status" {
+            let key = field(&args, "action_id");
+            let action = &state["worker_actions"][key];
+            if args.as_object().is_none_or(|object| object.len() != 1)
+                || key.is_empty()
+                || action.is_null()
+            {
+                return Err(invalid("unknown enrolled worker action reference"));
+            }
+            return self.owner.enrolled_worker(&session, action, false);
+        }
+        let id = field(input, "source_id");
+        let revision = input["composer"]["origin"]["revision"].clone();
+        if !input["worker_wake"].is_null() || !super::config::snowflake(id) {
+            return Err(invalid(
+                "worker creation requires a current owner or team Discord message",
+            ));
+        }
+        let fresh = api
+            .current(cfg, id)?
+            .ok_or_else(|| invalid("worker creation lost its original Discord source"))?;
+        if api
+            .admit(inbox, &fresh)?
+            .is_none_or(|row| row["state"] != "accepted" || row["revision"] != revision)
+        {
+            return Err(invalid("worker creation cannot use changed Discord source"));
+        }
+        let key = super::enrolled_worker::key(input, &args)?;
+        let prior = &state["worker_actions"][&key];
+        if !prior.is_null() {
+            if prior["arguments"] != args {
+                return Err(invalid(
+                    "enrolled worker action already belongs to different arguments",
+                ));
+            }
+            return self.owner.enrolled_worker(&session, prior, false);
+        }
+        if state["worker_actions"]
+            .as_object()
+            .is_some_and(|actions| actions.len() >= 64)
+        {
+            return Err(invalid("enrolled worker action quota is full"));
+        }
+        let mut native_call = call.clone();
+        native_call["arguments"] = args.clone();
+        let action = json!({"key":key,"operation_id":operation("launch")?,"arguments":args,"call":native_call});
+        super::enrolled_worker::launch(&self.scope(cfg), input, &action)?;
+        state["worker_actions"][&key] = action.clone();
+        state["input"]["worker_actions"][&key] = action.clone();
+        inbox.set_manager(state)?;
+        self.owner.enrolled_worker(&session, &action, true)
+    }
+
     fn tool(
         &self,
         cfg: &Config,
@@ -756,7 +838,12 @@ impl Dispatcher {
             || state["input"].is_null()
             || !matches!(
                 field(&request["call"], "name"),
-                "publish" | "swarm_read_note" | "swarm_reply" | "swarm_read_attachment"
+                "publish"
+                    | "swarm_read_note"
+                    | "swarm_reply"
+                    | "swarm_read_attachment"
+                    | "swarm_create"
+                    | "swarm_status"
             )
         {
             return Err(invalid("unbound manager publication"));
@@ -771,6 +858,9 @@ impl Dispatcher {
         let call = &request["call"];
         let mut args = call["arguments"].clone();
         let tool = field(call, "name");
+        if matches!(tool, "swarm_create" | "swarm_status") {
+            return self.enrolled_worker_tool(cfg, inbox, api, state, call);
+        }
         if tool == "swarm_read_attachment" {
             if args.as_object().is_none_or(|fields| fields.len() != 3)
                 || !args["id"].as_str().is_some_and(super::config::snowflake)

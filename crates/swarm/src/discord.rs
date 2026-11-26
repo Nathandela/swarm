@@ -18,6 +18,7 @@ mod call_room;
 
 mod config;
 mod dispatcher;
+pub(crate) mod enrolled_worker;
 mod gateway;
 mod guild;
 mod local;
@@ -144,6 +145,9 @@ fn manager_scope(directory: &Path, cfg: &Config) -> io::Result<Value> {
         "owner_id":cfg.text("owner_id"),"channel_id":owner.channel(),"supervisor_socket":cfg.text("daemon_socket")});
     if !owner.guild().is_empty() {
         scope["guild_id"] = json!(owner.guild());
+    }
+    if cfg.0["projects"].is_object() {
+        scope["projects"] = cfg.0["projects"].clone();
     }
     Ok(scope)
 }

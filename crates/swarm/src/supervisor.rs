@@ -960,6 +960,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                             | "manager-retire"
                             | "manager-retire-resume-v1"
                             | manager::NATIVE_CLI_CAP
+                            | crate::discord::enrolled_worker::CAP
                     )
                 || matches!(
                     *cap,
@@ -1224,6 +1225,15 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             "manager_runtime" | "manager_input_status" | "manager_resolve_call"
                 if caps.contains(&"manager-provenance") => state.session(&request).and_then(|session| {
                     let body = session.manager_operation(&request)?;
+                    reply(&writer,state,body)
+                }),
+            "manager_worker_action" if caps.contains(&crate::discord::enrolled_worker::CAP) =>
+                state.session(&request).and_then(|session| {
+                    let (launch, association) = session.enrolled_worker_action(&request)?;
+                    let operation = field(&request,"operation_id");
+                    let body = reliable::handle_structured(state,&json!({
+                        "op":"owner_launch","operation_id":operation,"launch":launch
+                    }),association,&|| session.enrolled_worker_action(&request).map(drop))?;
                     reply(&writer,state,body)
                 }),
             "manager_retire" | "manager_retire_status" if caps.contains(&"manager-retire") =>

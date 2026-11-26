@@ -19,6 +19,19 @@ from native_fixture_sandbox import guarded, check_guards
 from rust_claude_worker_input import save
 
 
+def tool_result(request, identifier):
+    return next((item for row in request.get("messages", [])
+                 if isinstance(row.get("content"), list) for item in row["content"]
+                 if item.get("type") == "tool_result" and item.get("tool_use_id") == identifier), {})
+
+
+def mcp_object(result):
+    content = result.get("content", [])
+    if isinstance(content, str):
+        return json.loads(content)
+    return json.loads(next(block["text"] for block in content if block.get("type") == "text"))
+
+
 class Model(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -43,16 +56,36 @@ class Model(http.server.BaseHTTPRequestHandler):
         read_note = wake and "toolu_fixture_swarm_read_note" not in content
         spawn = main and self.server.vm and not discover and "toolu_fixture_vm_spawn" not in content
         if main and self.server.vm and not spawn and not discover:
-            result = next((item for row in request.get("messages", [])
-                           if isinstance(row.get("content"), list) for item in row["content"]
-                           if item.get("type") == "tool_result"
-                           and item.get("tool_use_id") == "toolu_fixture_vm_spawn"), {})
+            result = tool_result(request,"toolu_fixture_vm_spawn")
             report = json.dumps(result.get("content", ""))
             exact = not result.get("is_error") and re.search(r"ep-[0-9a-f]{8}/[0-9a-f]{24}", report)
             if not exact:
                 self.server.vm_failure = report
                 self.send_error(400)
                 return
+        structured = None
+        if main and self.server.enrolled:
+            denied = tool_result(request,"toolu_fixture_off_project")
+            created = tool_result(request,"toolu_fixture_enrolled_create")
+            replay = tool_result(request,"toolu_fixture_enrolled_replay")
+            status = tool_result(request,"toolu_fixture_enrolled_status")
+            arguments = dict(action_id="native-enrolled-job",agent="claude",
+                             cwd=str(self.server.approved),prompt="Wait for the synthetic structured worker fixture.")
+            if not denied:
+                structured = ("swarm_create","toolu_fixture_off_project",
+                              arguments | dict(cwd=str(self.server.unapproved)))
+            elif not created:
+                assert "Manager request was not confirmed." in json.dumps(denied)
+                structured = ("swarm_create","toolu_fixture_enrolled_create",arguments)
+            elif not replay:
+                assert mcp_object(created)["state"] == "created", json.dumps(created)
+                structured = ("swarm_create","toolu_fixture_enrolled_replay",arguments)
+            elif not status:
+                assert mcp_object(created) == mcp_object(replay)
+                structured = ("swarm_status","toolu_fixture_enrolled_status",
+                              dict(action_id=mcp_object(created)["action_id"]))
+            else:
+                assert mcp_object(created) == mcp_object(status)
         call_id = "toolu_fixture_parked_publish" if wake else "toolu_fixture_swarm_publish"
         may_publish = not forwarded or self.server.forwarded == "allowed"
         if forwarded and not read_attachment:
@@ -63,8 +96,8 @@ class Model(http.server.BaseHTTPRequestHandler):
                 assert not received and "Manager request was not confirmed." in content, \
                     "the changed forwarded receipt was not refused"
             self.server.forwarded_checked.write_text("classified")
-        publish = main and not discover and not spawn and not read_note and not read_attachment and may_publish and call_id not in content
-        tool = publish or spawn or discover or read_note or read_attachment
+        publish = main and not structured and not discover and not spawn and not read_note and not read_attachment and may_publish and call_id not in content
+        tool = publish or spawn or discover or read_note or read_attachment or structured
         usage = dict(input_tokens=1, output_tokens=1)
         model = request.get("model")
         message = dict(id="msg_fixture", type="message", role="assistant", model=model,
@@ -82,7 +115,9 @@ class Model(http.server.BaseHTTPRequestHandler):
                 return
             self.server.main_requests.append((publish, content, tools))
         if tool:
-            if discover:
+            if structured:
+                name, call, args = structured
+            elif discover:
                 name, call = "ToolSearch", "toolu_fixture_vm_discover"
                 args = dict(query="select:mcp__swarm_voice__publish")
             elif spawn:
@@ -189,6 +224,13 @@ def verify(swarm, provider, test, root, server):
         save(home / ".claude/settings.json", dict(permissions=dict(allow=["Bash(" + command + ")"])))
         access["project_access"] = "vm"
         env["SWARM_CLAUDE_MANAGER_FIXTURE_VM"] = "1"
+    if server.enrolled:
+        server.approved = root / "approved"
+        server.unapproved = root / "unapproved"
+        server.approved.mkdir(mode=0o700)
+        server.unapproved.mkdir(mode=0o700)
+        access.update(project_access="enrolled", projects=dict(approved=str(server.approved)))
+        env["SWARM_CLAUDE_MANAGER_FIXTURE_ENROLLED"] = "1"
     marker = root / "token"
     marker.write_text("unused synthetic Discord token")
     marker.chmod(0o600)
@@ -214,6 +256,7 @@ def verify(swarm, provider, test, root, server):
             print(json.dumps(dict(version=version, private_loopback=True, original_envelope=True,
                                   exact_main_mcp_tool=True, observed_reply=expected_posts > 0, disabled_shell_tools=not server.vm,
                                   vm_native_worker_launch=server.vm, vm_worktree_files=server.worktree,
+                                  enrolled_typed_launch=server.enrolled,
                                   parked_worker_return=server.park, forwarded_attachments=server.forwarded)))
         except Exception:
             log.flush()
@@ -262,6 +305,7 @@ if __name__ == "__main__":
     modes.add_argument("--park", action="store_true")
     modes.add_argument("--vm", action="store_true")
     modes.add_argument("--vm-worktree", action="store_true")
+    modes.add_argument("--enrolled", action="store_true")
     modes.add_argument("--forwarded", choices=("allowed", "revoked"))
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="clmgr-", dir="/tmp") as name, \
@@ -271,6 +315,7 @@ if __name__ == "__main__":
         server.park = args.park
         server.vm = args.vm or args.vm_worktree
         server.worktree = args.vm_worktree
+        server.enrolled = args.enrolled
         server.forwarded = args.forwarded
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:

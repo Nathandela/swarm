@@ -392,6 +392,57 @@ impl Manager {
         Ok(proof.clone())
     }
 
+    pub(super) fn enrolled_worker(
+        &self,
+        session: &str,
+        action: &Value,
+        launch: bool,
+    ) -> io::Result<Value> {
+        let id = field(action, "operation_id");
+        if launch {
+            let mut caps = CAPS.to_vec();
+            caps.push(super::enrolled_worker::CAP);
+            let mut client = Client::dial(Path::new(self.cfg.text("daemon_socket")), &caps)?;
+            self.cfg.check_supervisor(&client, &caps)?;
+            if let Ok(reply) = client.exchange(
+                json!({"op":"manager_worker_action","body_version":1,
+                "operation_id":id,"session_id":session,"manager_worker_action":action}),
+                "launch",
+                crate::ipc::launch_timeout(field(&action["arguments"], "agent")),
+            ) {
+                self.verify_endpoint(&client, &reply)?;
+                if reply["operation_id"] != id {
+                    return Err(invalid("uncorrelated enrolled worker response"));
+                }
+            }
+        }
+        let mut result = json!({"action_id":action["key"],"state":"outcome_unknown"});
+        let status = self.launch_status(id)?;
+        if status["state"] != "applied" {
+            return Ok(result);
+        }
+        let id = &status["session_id"];
+        let mut client = self.dial()?;
+        let child = client
+            .sessions()?
+            .into_iter()
+            .find(|row| {
+                row["id"] == *id
+                    && row["endpoint_id"] == client.endpoint()
+                    && row["role"] == "worker"
+                    && row["worker_discussion"] == self.conversation
+                    && row["worker_attempt"] == action["operation_id"]
+                    && row["agent"] == action["arguments"]["agent"]
+                    && row["cwd"] == action["arguments"]["cwd"]
+                    && valid(field(row, "worker_instance"))
+            })
+            .ok_or_else(|| invalid("enrolled worker receipt no longer matches its scope"))?;
+        result["state"] = json!("created");
+        result["session"] = child["id"].clone();
+        result["session_instance"] = child["worker_instance"].clone();
+        Ok(result)
+    }
+
     fn verify_endpoint(&self, client: &Client, reply: &Value) -> io::Result<()> {
         if reply["endpoint_id"] != client.endpoint() {
             return Err(invalid("uncorrelated historical supervisor response"));
@@ -629,6 +680,18 @@ mod tests {
             "toolu_fixture_swarm_publish"
         );
         drop(posts);
+        if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_ENROLLED").is_some() {
+            assert_eq!(runtime["native_cli"], false);
+            let rows = manager.dial().unwrap().sessions().unwrap();
+            let workers: Vec<_> = rows.iter().filter(|row| row["role"] == "worker").collect();
+            assert_eq!(workers.len(), 1);
+            assert_eq!(workers[0]["cwd"], json!(root.join("approved")));
+            let local = field(workers[0], "id").rsplit('/').next().unwrap();
+            let metadata =
+                runtime::read_json(&root.join("s/rust-v1").join(local).join("session.json"))
+                    .unwrap();
+            assert_eq!(metadata["mailbox"]["structured"], true);
+        }
         if std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_VM").is_some() {
             assert_eq!(runtime["native_cli"], true);
             let worker = manager
