@@ -34,7 +34,7 @@ pub(in crate::supervisor) fn run() -> io::Result<()> {
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
         .open(&root)?;
-    let imported = Store::open(&root, true)?.expect("opt-in store");
+    let imported = Store::open(&root, true, false)?.expect("opt-in store");
     let deleted = go_tombstones(&root)?;
     let prepared = collect(&root)?
         .into_iter()

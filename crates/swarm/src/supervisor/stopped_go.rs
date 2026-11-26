@@ -1,5 +1,6 @@
 // The Go store remains authoritative throughout stopped-session compatibility.
 pub(super) mod export;
+pub(super) mod live;
 
 use super::runtime;
 use crate::ipc::field;
@@ -13,7 +14,7 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub(super) const OPT_IN: &str = "SWARM_DAEMON_STOPPED_GO_COMPAT";
@@ -70,6 +71,7 @@ const ROSTER_CUSTODY_FIELDS: &[&str] = &[
     "exit_code",
     "shim_pid",
     "shim_start_time",
+    "shim_wire_version",
     "launch_options",
     "conversation_id",
     "env",
@@ -177,6 +179,7 @@ struct Entry {
     raw: RawFields,
     needs_sync: bool,
     exported: bool,
+    live: Option<Arc<live::Owner>>,
 }
 
 impl Entry {
@@ -298,11 +301,6 @@ fn qualified_role(meta: &Value) -> io::Result<()> {
             "unqualified Go role, lineage, workspace or native custody",
         ));
     }
-    if meta["status"]["Process"] != "exited" {
-        return Err(io::Error::other(
-            "Go session is live or has uncertain custody",
-        ));
-    }
     Ok(())
 }
 
@@ -380,6 +378,11 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
         ));
     }
     inactive(native_pid, native_birth)?;
+    launch_evidence(file, meta)?;
+    Ok(())
+}
+
+fn launch_evidence(file: &File, meta: &Value) -> io::Result<Value> {
     let launch = read_at(file, c"shim-launch.json")
         .map_err(|e| io::Error::other(format!("Go launch evidence unavailable: {e}")))?;
     // The original directory can differ on an offline copy, but the durable
@@ -408,7 +411,7 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
             "Go launch binding or native writer is unqualified",
         ));
     }
-    Ok(())
+    Ok(launch)
 }
 
 fn valid_meta(meta: &Value, id: &str) -> bool {
@@ -436,6 +439,11 @@ fn valid_meta(meta: &Value, id: &str) -> bool {
 
 fn qualified(root: &Path, file: &File, meta: &Value) -> io::Result<bool> {
     qualified_role(meta)?;
+    if meta["status"]["Process"] != "exited" {
+        return Err(io::Error::other(
+            "Go session is live or has uncertain custody",
+        ));
+    }
     match read_at(file, c"rust-origin.json") {
         Ok(origin) => export::verify(root, meta, &origin).map(|()| true),
         Err(e) if e.kind() == io::ErrorKind::NotFound => exited(file, meta).map(|()| false),
@@ -444,7 +452,7 @@ fn qualified(root: &Path, file: &File, meta: &Value) -> io::Result<bool> {
 }
 
 impl Store {
-    pub(super) fn open(root: &Path, opted_in: bool) -> io::Result<Option<Self>> {
+    pub(super) fn open(root: &Path, opted_in: bool, adopt_live: bool) -> io::Result<Option<Self>> {
         let mut rows = BTreeMap::new();
         let directory = File::open(root)?;
         for dir in fs::read_dir(root)? {
@@ -500,8 +508,15 @@ impl Store {
                     continue;
                 }
             };
-            let exported = qualified(root, &file, &meta)
-                .map_err(|e| io::Error::other(format!("Go session {id}: {e}")))?;
+            let (exported, live) = if adopt_live && meta["status"]["Process"] == "running" {
+                let owner = live::Owner::open(path, &file, &meta)
+                    .map_err(|err| io::Error::other(format!("Go session {id}: {err}")))?;
+                (false, Some(Arc::new(owner)))
+            } else {
+                let exported = qualified(root, &file, &meta)
+                    .map_err(|err| io::Error::other(format!("Go session {id}: {err}")))?;
+                (exported, None)
+            };
             rows.insert(
                 id.to_owned(),
                 Entry {
@@ -510,6 +525,7 @@ impl Store {
                     raw,
                     needs_sync: false,
                     exported,
+                    live,
                 },
             );
         }
@@ -549,6 +565,22 @@ impl Store {
         }
     }
 
+    pub(super) fn has_live(&self) -> bool {
+        self.rows
+            .lock()
+            .unwrap()
+            .values()
+            .any(|entry| entry.live.is_some())
+    }
+
+    pub(super) fn live(&self, endpoint: &str, id: &str) -> Option<Arc<live::Owner>> {
+        let (want, local) = id.split_once('/')?;
+        if want != endpoint {
+            return None;
+        }
+        self.rows.lock().unwrap().get(local)?.live.clone()
+    }
+
     pub(super) fn set_label(
         &self,
         endpoint: &str,
@@ -565,6 +597,11 @@ impl Store {
         let entry = rows
             .get_mut(id)
             .ok_or_else(|| io::Error::other("unknown stopped Go session"))?;
+        if entry.live.is_some() {
+            return Err(io::Error::other(
+                "live Go label mutation requires separate rollback qualification",
+            ));
+        }
         let path = self.root.join(id);
         let current = fs::symlink_metadata(&path)?;
         if current.mode() & 0o077 != 0
@@ -624,16 +661,30 @@ fn view(meta: &Value, endpoint: &str) -> Value {
         .find(|key| nonzero_time(&meta[*key]))
         .expect("validated creation time");
     let mut status = json!({
-        "Process": "exited", "Turn": meta["status"]["Turn"], "Interaction": meta["status"]["Interaction"]
+        "Process": meta["status"]["Process"], "Turn": meta["status"]["Turn"], "Interaction": meta["status"]["Interaction"]
     });
     if meta["status"]["Attention"] == true {
         status["Attention"] = json!(true);
     }
+    let group = if status["Process"] != "running" {
+        "completed"
+    } else if status["Attention"] == true {
+        "needs_input"
+    } else if status["Turn"] != "idle" {
+        "working"
+    } else if matches!(
+        field(&status, "Interaction"),
+        "permission" | "prompt" | "error"
+    ) {
+        "needs_input"
+    } else {
+        "ready_for_review"
+    };
     let mut row = json!({
         "id":format!("{endpoint}/{}", field(meta, "id")), "endpoint_id":endpoint,
         "agent":meta["agent_type"], "cwd":meta["cwd"],
         "created_at":meta["created_at"], "last_activity":meta["last_activity"],
-        "group_entered_at":meta[group_entered], "group":"completed", "status":status, "summary":"",
+        "group_entered_at":meta[group_entered], "group":group, "status":status, "summary":"",
     });
     for key in ["name", "tag", "backend_plan_error", "resume_error"] {
         if !field(meta, key).is_empty() {
@@ -702,6 +753,7 @@ mod tests {
             raw,
             needs_sync: false,
             exported: false,
+            live: None,
         };
         replace_meta(&entry.dir, &entry.raw, || {}).unwrap();
         let error = entry.set_label("tag", "new".into(), |_| {
