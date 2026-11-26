@@ -13,6 +13,7 @@ use subtle::ConstantTimeEq;
 
 const STARTUP_REJECTED: &str = "Worker rejected startup before the opening prompt. Worker stop verified; check the provider login and installation.";
 const QUOTA: &str = "Provider usage limit reached; worker stop verified.";
+const OPENING_PROMPT_DEADLINE_SECONDS: i128 = 10 * 60;
 
 pub(crate) struct Launch<'a> {
     pub run_id: &'a str,
@@ -243,7 +244,11 @@ impl<B: Backend> Engine<B> {
                 "incomplete",
                 "stopped",
                 None,
-                "Worker exited without a completion receipt; the workspace was kept.",
+                if attempt.prompt_started {
+                    "Worker exited without a completion receipt; the workspace was kept."
+                } else {
+                    "The opening prompt was never delivered, so the worker was stopped; the workspace was kept."
+                },
                 now,
             ),
             WorkerState::Unknown => self.transition(
@@ -254,6 +259,13 @@ impl<B: Backend> Engine<B> {
                 "Worker disappeared without a verified stop or completion receipt.",
                 now,
             ),
+            WorkerState::Running | WorkerState::NeedsInput
+                if !attempt.prompt_started
+                    && elapsed(now, attempt.started_at, OPENING_PROMPT_DEADLINE_SECONDS) =>
+            {
+                let _ = self.backend.stop(&attempt.session_id, &attempt.id);
+                Ok(())
+            }
             WorkerState::NeedsInput => self.transition(
                 run,
                 "needs-input",
@@ -796,6 +808,7 @@ mod tests {
         prompts: RefCell<Vec<String>>,
         refused: RefCell<Vec<String>>,
         stops: Cell<usize>,
+        prompt_unavailable: Cell<bool>,
         crash_after_start: Cell<bool>,
         crash_after_prompt: Cell<bool>,
         fail_project: Cell<bool>,
@@ -871,6 +884,9 @@ mod tests {
             begin: &mut dyn FnMut() -> Result<()>,
         ) -> Result<()> {
             assert!(self.session(session, attempt).is_some());
+            if self.prompt_unavailable.get() {
+                return Err("fixture private composer unavailable".into());
+            }
             begin()?;
             self.prompts.borrow_mut().push(text.into());
             if self.crash_after_prompt.replace(false) {
@@ -1096,6 +1112,50 @@ mod tests {
     }
 
     #[test]
+    fn undelivered_opening_prompt_stops_only_after_the_deadline() {
+        for worker in [WorkerState::Running, WorkerState::NeedsInput] {
+            let dir = Temp::new();
+            let backend = Fixture::default();
+            backend.prompt_unavailable.set(true);
+            let now: Timestamp = "2026-01-01T12:00:00Z".parse().unwrap();
+            let engine =
+                Engine::open(&dir.0.join("state"), Path::new("/etc/localtime"), &backend).unwrap();
+            let ids = scenario(&dir, &engine, now, "directory");
+            let run = engine.run(&ids.job, &ids.invocation, now).unwrap();
+            backend.launches.borrow_mut()[0].state = worker;
+
+            engine
+                .tick(now.checked_add(jiff::Span::new().seconds(599)).unwrap())
+                .unwrap();
+            assert_eq!(backend.stops.get(), 0);
+            engine
+                .tick(now.checked_add(jiff::Span::new().minutes(10)).unwrap())
+                .unwrap();
+            assert_eq!(backend.stops.get(), 1);
+            let waiting = engine.store.occurrence(&run).unwrap();
+            assert!(waiting.reserves());
+            assert!(!waiting.attempts[0].prompt_started);
+            assert!(backend.prompts.borrow().is_empty());
+
+            backend.launches.borrow_mut()[0].state = WorkerState::Stopped;
+            engine
+                .tick(now.checked_add(jiff::Span::new().seconds(601)).unwrap())
+                .unwrap();
+            let stopped = engine.store.occurrence(&run).unwrap();
+            assert_eq!(stopped.state, "incomplete");
+            assert_eq!(stopped.attempts[0].state, "stopped");
+            assert!(
+                stopped
+                    .detail
+                    .contains("opening prompt was never delivered")
+            );
+            assert!(!stopped.reserves());
+            assert!(Path::new(&stopped.workspace).is_dir());
+            assert_eq!(backend.launches.borrow().len(), 1);
+        }
+    }
+
+    #[test]
     fn restart_reconciles_started_worker_and_never_replays_uncertain_prompt() {
         let dir = Temp::new();
         let state = dir.0.join("state");
@@ -1131,12 +1191,15 @@ mod tests {
 
         let engine = Engine::open(&state, host, &backend).unwrap();
         for _ in 0..3 {
-            engine.tick(now).unwrap();
+            engine
+                .tick(now.checked_add(jiff::Span::new().minutes(11)).unwrap())
+                .unwrap();
         }
         let uncertain = engine.store.occurrence(&ids.invocation).unwrap();
         assert_eq!(uncertain.state, "attention");
         assert!(uncertain.reserves());
         assert_eq!(uncertain.attempts[0].id, before.attempts[0].id);
+        assert_eq!(backend.stops.get(), 0);
         assert_eq!(backend.prompts.borrow().len(), 1);
         assert_eq!(backend.launches.borrow().len(), 1);
     }

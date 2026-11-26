@@ -116,6 +116,17 @@ pub(crate) fn run(args: &[String]) -> u8 {
         eprintln!("teammate: expected {action} --id MESSAGE_ID");
         return 2;
     }
+    if action == "message"
+        && env::var_os(crate::schedule::worker::RUN).is_some_and(|s| !s.is_empty())
+        && [SOCKET_ENV, BRIDGE_ENV]
+            .iter()
+            .all(|name| env::var_os(name).is_none_or(|s| s.is_empty()))
+    {
+        eprintln!(
+            r#"teammate: this is a scheduled run with no manager to message; finish it with "$SWARM_SCHEDULE_BIN" schedule complete --summary TEXT [--link URL]"#
+        );
+        return 1;
+    }
     let id = if id.is_empty() {
         new_message_id()
     } else {

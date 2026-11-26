@@ -12,6 +12,24 @@ use std::{
     process::{Command, Output},
 };
 
+#[test]
+fn a_scheduled_worker_without_a_manager_is_directed_to_schedule_complete() {
+    let output = Command::new(support::executable())
+        .args([
+            "teammate", "message", "--kind", "complete", "--text", "done",
+        ])
+        .env_clear()
+        .env("SWARM_SCHEDULE_RUN", "run")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "teammate: this is a scheduled run with no manager to message; finish it with \"$SWARM_SCHEDULE_BIN\" schedule complete --summary TEXT [--link URL]\n"
+    );
+}
+
 fn frame(stream: &mut impl Read) -> Value {
     let mut size = [0; 4];
     stream.read_exact(&mut size).unwrap();
