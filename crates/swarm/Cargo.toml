@@ -20,5 +20,5 @@ ureq = { version = "3", features = ["json"] }
 tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 jiff = { version = "0.2", features = ["serde", "tzdb-bundle-always"] }
 bbolt-rs = { version = "=1.3.10", features = ["compat"] }
-rustix = { version = "1", features = ["fs"] }
+rustix = { version = "1", features = ["fs", "net"] }
 serde = { version = "1", features = ["derive"] }

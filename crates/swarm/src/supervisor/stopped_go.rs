@@ -318,7 +318,7 @@ fn qualified_role(meta: &Value) -> io::Result<()> {
     Ok(())
 }
 
-fn exited(file: &File, meta: &Value) -> io::Result<()> {
+fn exited(file: &File, meta: &Value) -> io::Result<Option<File>> {
     let exit = read_at(file, c"exit.json")
         .map_err(|e| io::Error::other(format!("Go exit evidence unavailable: {e}")))?;
     if meta["exit_code"].as_i64().is_none()
@@ -372,7 +372,7 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
                 ],
             )?;
         }
-        return Ok(());
+        return Ok(None);
     }
     let native = read_at(file, c"native-process.json")
         .map_err(|e| io::Error::other(format!("Go native identity unavailable: {e}")))?;
@@ -432,7 +432,7 @@ fn exited(file: &File, meta: &Value) -> io::Result<()> {
     {
         Err(io::Error::other("unexpected Go session backend custody"))
     } else {
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -806,7 +806,7 @@ fn qualified(root: &Path, file: &File, meta: &Value) -> io::Result<bool> {
     }
     match read_at(file, c"rust-origin.json") {
         Ok(origin) => export::verify(root, meta, &origin).map(|()| true),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => exited(file, meta).map(|()| false),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => exited(file, meta).map(|_| false),
         Err(e) => Err(e),
     }
 }
@@ -949,7 +949,7 @@ impl Store {
         launch: &Value,
         qualified: &str,
         id: &str,
-    ) -> io::Result<super::session::Prepared> {
+    ) -> io::Result<(super::session::Prepared, Option<File>)> {
         let rows = self.rows.lock().unwrap();
         let entry = rows
             .get(id)
@@ -979,9 +979,15 @@ impl Store {
         {
             return Err(io::Error::other("stopped Go Codex source changed"));
         }
-        exited(&entry.dir, &entry.meta)?;
         let evidence = launch_evidence(&entry.dir, &entry.meta)?;
-        codex::prepare(launch, qualified, &entry.meta, &evidence)
+        let prepared = codex::prepare(launch, qualified, &entry.meta, &evidence)?;
+        let listener = exited(&entry.dir, &entry.meta)?;
+        if !same_file(&entry.dir.metadata()?, &fs::symlink_metadata(self.root.join(id))?)
+            || read_meta(&entry.dir)? != raw
+        {
+            return Err(io::Error::other("stopped Go Codex source changed"));
+        }
+        Ok((prepared, listener))
     }
 
     pub(super) fn exported(&self, id: &str) -> io::Result<bool> {

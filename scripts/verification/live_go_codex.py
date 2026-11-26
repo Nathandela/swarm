@@ -284,8 +284,6 @@ def rehearse(go, rust, root, version, cold=False):
                 until(lambda: all(has_stopped(pid, birth) for pid, birth in identity[0]),
                       "original Go native processes joined")
                 go_held = None
-            if guard and guard.paths[0][0].is_socket():
-                refused(rust, rust_env, "Go Codex short listener custody remains")
             print("pinned Go resumed the stopped Rust-created conversation with the original Go PTY still live", flush=True)
 
     finally:

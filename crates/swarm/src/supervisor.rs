@@ -388,9 +388,10 @@ impl State {
                         "Go Codex resume requires an ordinary local source",
                     ));
                 }
-                let prepared = store.prepare_codex_resume(launch, &qualified, local)?;
+                let reservation = self.launch_gate.lock().unwrap();
+                let (prepared, _listener) = store.prepare_codex_resume(launch, &qualified, local)?;
                 runtime::private_dir(&self.root)?;
-                return self.reserve_prepared(prepared, false, None, None);
+                return self.reserve_locked(prepared, false, None, None, None, &reservation);
             }
             let session = self.session(&json!({"session_id":qualified}))?;
             if matches!(field(launch, "agent"), "claude" | "claude-code") {

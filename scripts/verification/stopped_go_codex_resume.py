@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Send three real Codex turns through a stopped Go → Rust → Go round trip."""
 
+import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import time
@@ -85,8 +87,6 @@ def exercise(go, rust, root):
         rollout_identity = rollout.stat().st_ino
         source_files = {entry.name: entry.read_bytes() for entry in original.iterdir() if entry.is_file()}
 
-        # A dead vendor alias is outside stopped compatibility until its exact
-        # fixture-owned listener and lock have been retired.
         endpoint = original / "codex.sock"
         namespace = Path("/tmp").resolve() / f"codex-daemon-{os.geteuid()}"
         alias = namespace / hashlib.sha256(os.fsencode(endpoint)).hexdigest()
@@ -99,10 +99,34 @@ def exercise(go, rust, root):
             finally:
                 endpoint.unlink()
                 endpoint.symlink_to(expected)
-        if alias.is_socket():
-            refused(rust, rust_env, "Go Codex short listener custody remains")
-            fixture.retire_listener(alias, alias.with_suffix(".lock"))
-            print("joined source retained a stale vendor listener; retired exact fixture alias", flush=True)
+        lock = alias.with_suffix(".lock")
+        stale = alias.is_socket()
+
+        def coordinates():
+            return [(entry.st_dev, entry.st_ino, entry.st_mode)
+                    for entry in (p.lstat() for p in (endpoint, alias, lock))]
+
+        if stale:
+            with lock.open("rb") as held:
+                fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                refused(rust, rust_env, "Go Codex short listener lock is held")
+            # An exact same-user socket with a real listener must still refuse
+            # even when the old Go process identities are proved dead.
+            original_socket = alias.with_suffix(".witness")
+            assert not original_socket.exists()
+            alias.rename(original_socket)
+            try:
+                with socket.socket(socket.AF_UNIX) as live:
+                    live.bind(str(alias))
+                    alias.chmod(0o600)
+                    live.listen(1)
+                    refused(rust, rust_env, "Go Codex short listener custody remains")
+            finally:
+                if alias.is_socket():
+                    alias.unlink()
+                original_socket.rename(alias)
+            socket_identity = coordinates()
+            print("joined Go .172 processes left their native vendor listener and lock on disk", flush=True)
 
         settings = launch | {"options":{"resume_from":source},
                              "env":[f"HOME={home}", "PATH=/usr/bin:/bin"]}
@@ -113,6 +137,10 @@ def exercise(go, rust, root):
                 reply = owner(rust_env, {"op":"launch", "launch": settings | changes})
                 assert reply["op"] == "error" and detail in json.dumps(reply), reply
 
+            if stale:
+                with lock.open("rb") as held:
+                    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    reject({}, "Go Codex short listener lock is held")
             reject({"cwd":str(home)}, "original checkout")
             reject({"options":{"resume_from":"foreign/" + original.name}}, "ordinary local source")
             try:
@@ -136,6 +164,8 @@ def exercise(go, rust, root):
         assert {entry.name: entry.read_bytes() for entry in original.iterdir() if entry.is_file()} == source_files
         export = [rust, "daemon", "export-stopped-go"]
         subprocess.run(export, env=rust_env, check=True, timeout=12)
+        if stale:
+            assert coordinates() == socket_identity
         exported = disk(state / local / "meta.json")
         for key in ("conversation_id", "auth_identity", "cli_identity", "launch_options", "env"):
             assert exported[key] == original_meta[key], key
@@ -156,7 +186,10 @@ def exercise(go, rust, root):
                          for event in events if event["type"] == "turn_context"]
         assert sandbox_modes == ["workspace-write"] * len(prompts), sandbox_modes
         assert all(prompt in rollout.read_text() for prompt in prompts)
-        print("PASS stopped Go → Rust → Go: three native turns on the original rollout")
+        if stale:
+            assert coordinates() == socket_identity
+        print("PASS stopped Go → Rust → Go: three native turns on the original rollout"
+              + (" with the inert source socket and lock intact" if stale else ""))
     finally:
         model.shutdown()
         model.server_close()
