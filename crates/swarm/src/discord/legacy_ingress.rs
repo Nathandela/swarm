@@ -1,4 +1,6 @@
 //! Settle a Go personal ingress candidate from the original voice controller's cutover receipt.
+pub(super) mod prepare;
+
 use super::{
     config::{Config, Place, open_owner_file, snowflake},
     legacy_discussions::operation,
@@ -877,13 +879,7 @@ fn capture_binding<'tx>(
         }
     }
     require_repaired(tx, cfg, &binding)?;
-    let minimum = field(&binding, "Boundary");
-    if !snowflake(minimum)
-        || minimum.parse::<u64>().map_err(|_| invalid())?
-            >= message.parse::<u64>().map_err(|_| invalid())?
-    {
-        return Err(invalid());
-    }
+    require_after_boundary(tx, cfg, &binding, message)?;
     let meta = tx.bucket(b"teammate_meta").ok_or_else(invalid)?;
     if meta.get(b"active_ingress_count") != Some([0; 8].as_slice()) {
         return Err(invalid());
@@ -894,12 +890,29 @@ fn capture_binding<'tx>(
             return Err(invalid());
         }
     }
-    let guards = tx.bucket(b"teammate_ingress_guard").ok_or_else(invalid)?;
+    Ok(Some(binding))
+}
+
+fn require_after_boundary<'tx>(
+    tx: &impl TxApi<'tx>,
+    cfg: &Config,
+    binding: &Value,
+    message: &str,
+) -> io::Result<()> {
+    let install = cfg.text("installation_id");
+    let channel = cfg.text("dm_channel_id");
+    let actor = cfg.text("owner_id");
+    let id = field(binding, "ID");
+    let minimum = field(binding, "Boundary");
+    if !snowflake(minimum)
+        || minimum.parse::<u64>().map_err(|_| invalid())?
+            >= message.parse::<u64>().map_err(|_| invalid())?
+    {
+        return Err(invalid());
+    }
     let expected = operation(install, minimum)?;
-    let known = guards
-        .get(format!("{install}\0{minimum}").as_bytes())
-        .ok_or_else(invalid)?;
-    let known: Value = serde_json::from_slice(known)?;
+    let key = format!("{install}\0{minimum}");
+    let known = value(tx, "teammate_ingress_guard", key.as_bytes())?.ok_or_else(invalid)?;
     if known["Disposition"] != "sent"
         || known["OperationID"] != expected
         || known["DiscussionID"] != id
@@ -910,7 +923,7 @@ fn capture_binding<'tx>(
     {
         return Err(invalid());
     }
-    Ok(Some(binding))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -981,7 +994,12 @@ mod tests {
         let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
             return;
         };
-        for acknowledge in [true, false] {
+        for (acknowledge, fresh, interrupted) in [
+            (true, false, false),
+            (true, true, false),
+            (false, true, false),
+            (true, true, true),
+        ] {
             let root = std::env::temp_dir()
                 .canonicalize()
                 .unwrap()
@@ -1000,8 +1018,24 @@ mod tests {
             let p = place.to_str().unwrap();
             run(&["create", p, root.to_str().unwrap(), "personal", "true"]);
             run(&["bind", p, "existing-dm", "400"]);
-            run(&["voice-ingress", p, "existing-dm", "701", "prepared"]);
             let place = Place::for_supervisor(&root).unwrap();
+            let current = json!({"author":{"id":"200","username":"offline fixture"},"channel_id":"400","id":"701",
+                "content":"offline original owner prompt","type":0,"attachments":[]});
+            if fresh {
+                run(&["ingress", p, "existing-dm", "501", "settle"]);
+                if interrupted {
+                    run(&["voice-ingress", p, "existing-dm", "701", "quiet-pending"]);
+                } else {
+                    run(&["voice-ingress", p, "existing-dm", "701", "quiet"]);
+                    assert!(
+                        capture_with(&place, "701", false, |_, _| Ok(current.clone())).unwrap()
+                    );
+                }
+                assert!(prepare::with(&place, "701", false, |_, _| Ok(current.clone())).unwrap());
+                assert!(prepare::with(&place, "701", false, |_, _| Ok(current.clone())).unwrap());
+            } else {
+                run(&["voice-ingress", p, "existing-dm", "701", "prepared"]);
+            }
             let cfg = place.load().unwrap();
             let (dir, id, endpoint, receipt) = {
                 let source = place.dir.join("discord.db");
@@ -1014,8 +1048,12 @@ mod tests {
                     controller(&dir, &id, &c.origin, "codex", &endpoint).unwrap();
                 (dir, id, endpoint, receipt)
             };
-            let current = json!({"author":{"id":"200"},"channel_id":"400","id":"701",
-                "content":"offline original owner prompt","type":0,"attachments":[]});
+            if fresh {
+                assert_eq!(
+                    run(&["voice-phase", dir.to_str().unwrap(), "701"]).trim(),
+                    "prepared false"
+                );
+            }
             let socket = root.join("daemon.sock");
             let owner_lock = runtime::lock(&root.join("daemon.lock")).unwrap();
             let listener = runtime::bind(&socket).unwrap();

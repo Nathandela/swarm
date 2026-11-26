@@ -21,6 +21,9 @@ func FixturePersonalIngress(dir, conversation, session string, origin schema.Mes
 	if err != nil {
 		return err
 	}
+	if phase == "quiet" {
+		return store.observeController(binding, 0, false)
+	}
 	controller := Controller{store: store, binding: binding, discussion: &DiscussionScope{
 		DiscussionID: origin.DiscussionID, InstallationID: origin.InstallationID,
 		DMOwnerID: origin.ActorID, ThreadID: origin.ChannelID,

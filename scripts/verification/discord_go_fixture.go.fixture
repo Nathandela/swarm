@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/discord"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/skeleton"
 	"github.com/Nathandela/swarm/internal/teammatemanager"
 	"github.com/Nathandela/swarm/internal/voice"
@@ -119,13 +120,20 @@ func main() {
 		check(err)
 		row, err := store.FixtureBinding(cfg.InstallationID, os.Args[3])
 		check(err)
-		origin, err := store.FixturePendingPersonal(row, cfg.OwnerID, os.Args[4])
-		check(err)
+		var origin schema.MessageOrigin
+		if os.Args[5] != "quiet" {
+			origin, err = store.FixturePendingPersonal(row, cfg.OwnerID, os.Args[4])
+			check(err)
+		}
 		root := filepath.Join(dir, "discussions")
 		check(os.Mkdir(root, 0700))
 		endpoint := skeleton.EndpointIDForStateDir(cfg.Supervisor.StateDir)
 		id := teammatemanager.CheckoutDiscussionLedgerID(root, endpoint, cfg.InstallationID, "", cfg.DMChannelID, row.ID)
-		check(voice.FixturePersonalIngress(filepath.Join(root, id), "discord-teammate-"+id, endpoint+"/fixture-manager", origin, os.Args[5]))
+		phase := os.Args[5]
+		if phase == "quiet-pending" {
+			phase = "quiet"
+		}
+		check(voice.FixturePersonalIngress(filepath.Join(root, id), "discord-teammate-"+id, endpoint+"/fixture-manager", origin, phase))
 	case "route":
 		cfg, err := discord.LoadConfig(dir)
 		check(err)

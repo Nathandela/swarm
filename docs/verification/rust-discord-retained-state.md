@@ -15,6 +15,8 @@ For an unsent original prepared DM with a live original native manager, `swarm d
 
 Use `swarm discord migrate-state --capture-personal-ingress MESSAGE_ID` to capture a new, plain owner DM in the stopped original connector’s Go ingress queue. It rechecks the enrolled source, archived consent boundary and original completed history repair. It preserves the original Go voice ledger and sends no native input. The pinned Go connector can reopen the prepared input after a downgrade. The offline fixture checks one retry and a foreign author refusal.
 
+For a captured message, `swarm discord migrate-state --prepare-personal-ingress MESSAGE_ID` prepares the exact operation in the original Go voice controller when its retained manager binding is unambiguous and the controller has no unfinished work. It writes the original connector pending source before committing the voice admission. A stop between commits leaves Go a pending DM and no native send. The witness covers full capture, preparation, native send acknowledgment or loss of acknowledgment, and original Go reopen and replay suppression. Native manager responses in the test come from a local protocol stand-in.
+
 In a disposable copy of the pinned Go repository, copy the fixture program to `cmd/swarm-discord-state-fixture/main.go`, the bindings fixture to `internal/discord/migration_fixture.go`, the route fixture to `internal/teammatemanager/migration_fixture.go`, and the voice fixture to `internal/voice/migration_fixture.go`. Build `./cmd/swarm-discord-state-fixture` in that copy and run the witness with both binaries.
 
 ```bash
