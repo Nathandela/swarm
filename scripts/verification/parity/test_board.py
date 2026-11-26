@@ -2065,6 +2065,9 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
                 raise RuntimeError("board qualification timed out")
             time.sleep(0.05)
         captured = root / "grid.json"
+        diagnostic = not captured.exists()
+        if diagnostic:
+            captured = root / "capture-timeout.json"
         if evidence is not None and captured.exists():
             receipt = json.loads(captured.read_bytes())
             receipt["tmux"] = subprocess.check_output([tmux, "-V"], text=True).strip()
@@ -2073,29 +2076,25 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             if reference_board is not None:
                 receipt["reference_board_sha256"] = p.hash_file(reference_board)
             p.write_json(evidence, receipt, replace=False)
-            if receipt.get("retired_rows"):
-                print(f"{len(receipt['retired_rows'])} retired Provider logins rows recorded in {evidence}")
-            if receipt.get("cursor_coordinates"):
-                print(f"{len(receipt['cursor_coordinates'])} hidden cursor coordinate differences recorded in {evidence}")
-            if receipt["first_divergence"] is not None:
-                raise RuntimeError(f"terminal grid or mode changed; captured in {evidence}")
-        diagnostic = root / "capture-timeout.json"
-        if evidence is not None and diagnostic.exists():
-            receipt = json.loads(diagnostic.read_bytes())
-            receipt["tmux"] = subprocess.check_output([tmux, "-V"], text=True).strip()
-            receipt["board_sha256"] = p.hash_file(client)
-            receipt["supervisor_sha256"] = p.hash_file(supervisor)
-            if reference_board is not None:
-                receipt["reference_board_sha256"] = p.hash_file(reference_board)
-            p.write_json(evidence, receipt, replace=False)
-            print(f"roster capture timeout retained in {evidence}")
+            if diagnostic:
+                print(f"roster capture timeout retained in {evidence}")
+            else:
+                if receipt.get("retired_rows"):
+                    print(f"{len(receipt['retired_rows'])} retired Provider logins rows recorded in {evidence}")
+                if receipt.get("cursor_coordinates"):
+                    print(f"{len(receipt['cursor_coordinates'])} hidden cursor coordinate differences recorded in {evidence}")
+                if receipt["first_divergence"] is not None:
+                    raise RuntimeError(f"terminal grid or mode changed; captured in {evidence}")
         if child.returncode != 0:
             raise RuntimeError(f"board qualification exited {child.returncode}")
     finally:
         if tmux is not None:
-            subprocess.run([tmux, "-S", root / "tmux.sock", "kill-server"],
-                           env=p.environment(root), stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=2, check=False)
+            try:
+                subprocess.run([tmux, "-S", root / "tmux.sock", "kill-server"],
+                               env=p.environment(root), stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=2, check=False)
+            except (OSError, subprocess.TimeoutExpired):
+                pass  # The independent process reaper still checks every fixture process.
         cleanup = p.reap(root, driver, previous)
         if cleanup["remaining"]:
             raise RuntimeError(f"fixture cleanup has survivors in {root}: {cleanup}")
