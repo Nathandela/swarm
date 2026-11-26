@@ -1,3 +1,4 @@
+mod decisions;
 use super::pty;
 use crate::ipc::field;
 use crate::providers::{codex_proof, codex_receipt};
@@ -241,7 +242,7 @@ struct Observation {
     proof: Option<codex_proof::Ledger>,
     thread: String,
     turn: Option<String>,
-    requests: std::collections::BTreeMap<String, &'static str>,
+    requests: std::collections::BTreeMap<String, decisions::Pending>,
     joined: bool,
     missing_rollout: bool,
     scheduled_turn: Option<ScheduledTurn>,
@@ -347,7 +348,15 @@ impl Observation {
                     "item/fileChange/requestApproval" => "file_change",
                     _ => "user_input",
                 };
-                self.requests.insert(message["id"].to_string(), kind);
+                let key = message["id"].to_string();
+                match self.requests.get(&key) {
+                    Some(pending) if pending.raw != *message => self.requests_unverified = true,
+                    Some(_) => {}
+                    None => {
+                        self.requests
+                            .insert(key, decisions::Pending::new(kind, message.clone()));
+                    }
+                }
             }
             "serverRequest/resolved" => {
                 self.requests.remove(&payload["requestId"].to_string());
@@ -387,6 +396,18 @@ impl Observation {
 
 pub(super) enum Action {
     Send(SemanticAction),
+    Request {
+        session: String,
+        request: String,
+        native: String,
+        answer: SyncSender<io::Result<Value>>,
+    },
+    Decide {
+        operation: String,
+        body: Value,
+        expires: Instant,
+        answer: SyncSender<io::Result<Value>>,
+    },
     Interrupt {
         expected: String,
         expires: Instant,
@@ -419,9 +440,9 @@ fn persist_observation(observation: &Observation, target: &SemanticTarget<'_>) {
             &json!({"token":target.token}),
         );
     }
-    let requests: Vec<_> = observation.requests.iter().map(|(id, kind)| {
-        let public_id = serde_json::from_str::<String>(id).unwrap_or_else(|_| id.clone());
-        let (category, summary) = match *kind {
+    let requests: Vec<_> = observation.requests.values().map(|pending| {
+        let public_id = pending.id();
+        let (category, summary) = match pending.kind {
             "command" => ("permission","Command execution approval"),
             "file_change" => ("permission","File change approval"),
             _ => ("question","User input request"),
@@ -886,6 +907,32 @@ pub(super) fn observe(
                         &target,
                     );
                     let _ = action.answer.send(result);
+                }
+                Action::Request {
+                    session,
+                    request,
+                    native,
+                    answer,
+                } => {
+                    let result = decisions::select(&mut observation, &request, &native)
+                        .and_then(|pending| pending.issue(target.token, &session, &native));
+                    let _ = answer.send(result);
+                }
+                Action::Decide {
+                    operation,
+                    body,
+                    expires,
+                    answer,
+                } => {
+                    let result = decisions::apply(
+                        &mut channel.connection,
+                        &mut observation,
+                        &target,
+                        &operation,
+                        &body,
+                        expires,
+                    );
+                    let _ = answer.send(result);
                 }
                 Action::Interrupt {
                     expected,

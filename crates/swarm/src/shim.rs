@@ -1019,6 +1019,49 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
             };
             runtime::write_control(&mut stream, &response)
         }
+        "codex_request" | "codex_decide" => {
+            let result = (|| {
+                if state.manager
+                    || state.schedule.is_some()
+                    || request["session_instance"] != codex_receipt::instance(&state.token)
+                {
+                    return Err(io::Error::other("invalid Codex decision authority"));
+                }
+                let sender = state
+                    .semantic
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("Codex app-server is unavailable"))?;
+                let (answer, response) = mpsc::sync_channel(1);
+                let action = if request["type"] == "codex_request" {
+                    codex_backend::Action::Request {
+                        session: field(&request, "session").into(),
+                        request: field(&request, "request_id").into(),
+                        native: field(&request, "native_session_id").into(),
+                        answer,
+                    }
+                } else {
+                    codex_backend::Action::Decide {
+                        operation: field(&request, "operation_id").into(),
+                        body: request["body"].clone(),
+                        expires: Instant::now() + Duration::from_secs(2),
+                        answer,
+                    }
+                };
+                sender
+                    .try_send(action)
+                    .map_err(|_| io::Error::other("Codex decision lane is unavailable"))?;
+                response
+                    .recv_timeout(Duration::from_secs(7))
+                    .map_err(|_| io::Error::other("Codex decision outcome is unknown"))?
+            })();
+            runtime::write_control(
+                &mut stream,
+                &match result {
+                    Ok(body) => json!({"type":"codex_decision_result","body":body}),
+                    Err(err) => json!({"type":"error","error":err.to_string()}),
+                },
+            )
+        }
         "codex_interrupt" => {
             let result = (|| {
                 let turn = field(&request, "expected_turn");

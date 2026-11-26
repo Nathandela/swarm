@@ -4,6 +4,7 @@ pub(crate) mod claude;
 pub(crate) mod claude_input;
 pub(crate) mod codex;
 pub(crate) mod codex_continuity;
+pub(crate) mod codex_decision_receipt;
 pub(crate) mod codex_proof;
 pub(crate) mod codex_receipt;
 pub(crate) mod hermes;

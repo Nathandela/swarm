@@ -1002,14 +1002,21 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 if request["body_version"] != 1 || !body.is_object() {
                     return Err(io::Error::other("invalid native decision envelope"));
                 }
-                let result = session.opencode_action(id,operation,"decision",body,state)?;
+                let result = if session.agent == "codex" {
+                    session.codex_decide(id,operation,body,state)?
+                } else {
+                    session.opencode_action(id,operation,"decision",body,state)?
+                };
                 reply(&writer,state,json!({"op":"native_decide","session_id":id,"operation_id":operation,"native_decision_receipt":result}))
             }),
             "native_decision_status" if caps.contains(&"native-requests-v1") => state.session(&request).and_then(|session| {
                 let id = field(&request,"session_id");
                 let operation = field(&request,"operation_id");
-                let result = session.opencode_operation_status(id,operation,"decision",&state.root)?
-                    .ok_or_else(||io::Error::other("native decision operation is unknown"))?;
+                let result = if session.agent == "codex" {
+                    session.codex_decision_status(id,operation)?
+                } else {
+                    session.opencode_operation_status(id,operation,"decision",&state.root)?
+                }.ok_or_else(||io::Error::other("native decision operation is unknown"))?;
                 reply(&writer,state,json!({"op":"native_decision_status","session_id":id,"operation_id":operation,"native_decision_receipt":result}))
             }),
             "semantic_target" if caps.contains(&"semantic-target") => state.session(&request).and_then(|session| {

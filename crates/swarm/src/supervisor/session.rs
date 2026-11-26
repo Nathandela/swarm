@@ -98,7 +98,7 @@ pub(super) struct Session {
     pub(super) supervision_pending: std::sync::atomic::AtomicBool,
     token: String,
     manager: Value,
-    agent: String,
+    pub(super) agent: String,
     resumed_from: Option<String>,
     worker_native_installation: Option<String>,
     hermes_native: bool,
@@ -1207,6 +1207,89 @@ impl Session {
         Err(io::Error::other(field(&response, "error").to_owned()))
     }
 
+    fn codex_decision_exchange(&self, mut request: Value) -> io::Result<Value> {
+        self.codex_control_authority()?;
+        let mut shim = self.dial()?;
+        shim.set_read_timeout(Some(Duration::from_secs(8)))?;
+        request["session_instance"] = json!(codex_receipt::instance(&self.token));
+        runtime::write_control(&mut shim, &request)?;
+        let response = runtime::read_control(&mut shim)?;
+        if response["type"] != "codex_decision_result" {
+            return Err(io::Error::other(field(&response, "error").to_owned()));
+        }
+        Ok(response["body"].clone())
+    }
+
+    pub(super) fn codex_decision_status(
+        &self,
+        session: &str,
+        operation: &str,
+    ) -> io::Result<Option<Value>> {
+        self.codex_control_authority()?;
+        Ok(
+            providers::codex_decision_receipt::read(&self.dir, &self.token, session, operation)?
+                .map(|record| record["receipt"].clone()),
+        )
+    }
+
+    pub(super) fn codex_decide(
+        &self,
+        session: &str,
+        operation: &str,
+        body: &Value,
+        state: &super::State,
+    ) -> io::Result<Value> {
+        use providers::codex_decision_receipt;
+        use sha2::{Digest, Sha256};
+        self.codex_control_authority()?;
+        let instance = codex_receipt::instance(&self.token);
+        if body["session"] != session
+            || body["session_instance"] != instance
+            || !codex_receipt::timely(operation)
+            || body.to_string().len() > 16 << 10
+            || body.as_object().is_none_or(|keys| {
+                keys.keys().any(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "session"
+                            | "session_instance"
+                            | "generation"
+                            | "root_id"
+                            | "native_session_id"
+                            | "request_id"
+                            | "request_hash"
+                            | "expires_at"
+                            | "kind"
+                            | "reply"
+                            | "answers"
+                    )
+                })
+            })
+        {
+            return Err(io::Error::other("invalid or stale Codex decision"));
+        }
+        let intent = codex_decision_receipt::intent(body);
+        {
+            let digest = Sha256::digest(operation);
+            let _lock = state.operation_locks[usize::from(digest[0]) % state.operation_locks.len()]
+                .lock()
+                .unwrap();
+            codex_receipt::bind_intent(&state.root, operation, session, &instance, &intent)?;
+        }
+        if let Some(receipt) = self.codex_decision_status(session, operation)? {
+            return Ok(receipt);
+        }
+        let result = self.codex_decision_exchange(
+            json!({"type":"codex_decide","operation_id":operation,"body":body}),
+        );
+        if let Some(receipt) = self.codex_decision_status(session, operation)? {
+            return Ok(receipt);
+        }
+        result.and(Err(io::Error::other(
+            "Codex decision outcome is unknown; inspect --status",
+        )))
+    }
+
     pub(super) fn native_requests(&self, session: &str, body: &Value) -> io::Result<Value> {
         if self.agent == "hermes" {
             return Err(io::Error::other(
@@ -1217,6 +1300,13 @@ impl Session {
             return self.opencode_exchange(&json!({
                 "type":"opencode_requests","session":session,"request_id":body["request_id"],"native_session_id":body["native_session_id"],
             }));
+        }
+        if self.agent == "codex" && !field(body, "request_id").is_empty() {
+            let request = self.codex_decision_exchange(json!({
+                "type":"codex_request","session":session,"request_id":body["request_id"],
+                "native_session_id":body["native_session_id"],
+            }))?;
+            return Ok(json!({"session":session,"request":request}));
         }
         if !["request_id", "native_session_id"]
             .into_iter()

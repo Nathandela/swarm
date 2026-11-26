@@ -18,9 +18,11 @@ sys.dont_write_bytecode = True
 from parity_runtime import attach, control, fixtures, read_control, read_frame
 
 
-def model_fixture(root):
+def model_fixture(root, decision_check):
     replies = []
     interrupt_open = threading.Event()
+    dispatched_tools = set()
+    received_answer = threading.Event()
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -47,6 +49,25 @@ def model_fixture(root):
                 except (BrokenPipeError, ConnectionResetError):
                     pass
                 return
+            tool = None
+            joined_input = json.dumps(body.get("input", []))
+            advertised = {item.get("name") for item in body.get("tools", [])}
+            if any(item.get("type")=="function_call_output" and "Blue" in json.dumps(item.get("output"))
+                   for item in body.get("input", [])):
+                received_answer.set()
+            if decision_check and "Native approval fixture step." in joined_input and "approval" not in dispatched_tools:
+                tool = next((name for name in ("exec_command","shell_command") if name in advertised), None)
+                if tool:
+                    dispatched_tools.add("approval")
+                    arguments = {
+                        ("cmd" if tool=="exec_command" else "command"): "printf 'fixture approved\\n' > fixture-approval-marker",
+                        "sandbox_permissions":"require_escalated", "justification":"Disposable fixture marker",
+                    }
+            if decision_check and "Native question fixture step." in joined_input and "question" not in dispatched_tools and "request_user_input" in advertised:
+                dispatched_tools.add("question")
+                tool = "request_user_input"
+                arguments = {"questions":[{"id":"choice","header":"Fixture","question":"Choose a fixture color",
+                    "options":[{"label":"Red","description":"First option"},{"label":"Blue","description":"Second option"}]}]}
             index = len(replies) + 1
             replies.append(index)
             ident = f"fixture-response-{index}"
@@ -63,6 +84,17 @@ def model_fixture(root):
                     usage={"input_tokens":10,"output_tokens":4,"total_tokens":14,
                            "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}})})
             ]
+            if tool:
+                call = {"type":"function_call","id":f"fixture-item-{index}","name":tool,
+                        "call_id":f"fixture-call-{index}","arguments":json.dumps(arguments),"status":"completed"}
+                events = [
+                    ("response.created", {"response":response.copy()}),
+                    ("response.output_item.added", {"output_index":0,"item":call}),
+                    ("response.output_item.done", {"output_index":0,"item":call}),
+                    ("response.completed", {"response":dict(response,status="completed",output=[call],
+                        usage={"input_tokens":10,"output_tokens":4,"total_tokens":14,
+                        "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}})})
+                ]
             self.send_response(200)
             self.send_header("Content-Type","text/event-stream")
             self.end_headers()
@@ -84,14 +116,18 @@ def model_fixture(root):
         f'base_url="http://127.0.0.1:{server.server_port}/v1"\nrequires_openai_auth=false\nsupports_websockets=false\n'
         f'[projects."{root}/work"]\ntrust_level="trusted"\n'
         '[tui]\nscreen_reader_detection_done=true\n[tui.model_availability_nux]\n"gpt-6.1-sol"=100\n')
+    if decision_check:
+        path = home/"config.toml"
+        path.write_text(path.read_text().replace('approval_policy="never"','approval_policy="on-request"') +
+            '\n[features]\ndefault_mode_request_user_input=true\n')
     (home/"config.toml").chmod(0o600)
     (home/"auth.json").write_text(json.dumps({"auth_mode":"apikey","OPENAI_API_KEY":"offline-fixture-only"}))
     (home/"auth.json").chmod(0o600)
-    return server,replies,interrupt_open
+    return server,replies,interrupt_open,received_answer
 
 
-def drive(root, native, guard, loopback, resume_check=False, interrupt_check=False, history_check=False):
-    model, replies, interrupt_open = model_fixture(root) if loopback else (None, [], None)
+def drive(root, native, guard, loopback, resume_check=False, interrupt_check=False, history_check=False, decision_check=False):
+    model, replies, interrupt_open, received_answer = model_fixture(root, decision_check) if loopback else (None, [], None, None)
     daemon = None
     previous = {}
     try:
@@ -251,6 +287,48 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
                 invoke("kill", conflict)
                 invoke("watch", conflict, "--until", "completed", "--timeout", "4s")
                 print("one native turn accepted across exact retries and supervisor replacement; cross-session reuse refused")
+            if decision_check:
+                fixtures.wait_for(lambda: json.loads(observation.read_text()).get("requests_available"),
+                                  "joined native observation before decisions")
+                def pending(kind):
+                    rows = json.loads(invoke("requests", identity)).get("requests", [])
+                    return next((row for row in rows if row["kind"]==kind), None)
+                def inspect(row,expected=0, overrides=None):
+                    request = ("--request-id",row["request_id"],"--native-session-id",row["native_session_id"])
+                    result = invoke("requests",identity,*request,expected=expected,overrides=overrides)
+                    return request,json.loads(result)["request"] if expected==0 else None
+                def decide(request, card, choice, *extra, expected=0, operation=None):
+                    args=("decide",identity,*request,"--request-hash",card["request_hash"],"--reply",choice,*extra)
+                    if operation:
+                        args+=("--operation-id",operation)
+                    result=invoke(*args,expected=expected)
+                    return json.loads(result) if expected==0 else None
+                invoke("send",identity,"--text","Native approval fixture step.")
+                approval=fixtures.wait_for(lambda: pending("permission"), "real Codex permission request", timeout=10)
+                request,card=inspect(approval)
+                inspect({**approval,"request_id":"forged-native-request"},expected=1)
+                decide(request,card,"always",expected=1)
+                assert not (root/"work/fixture-approval-marker").exists()
+                auth=decide(request,card,"once")
+                assert auth["state"]=="applied",auth
+                fixtures.wait_for(lambda:(root/"work/fixture-approval-marker").is_file(),"native approved marker")
+                status=json.loads(invoke("decide",identity,"--status","--operation-id",auth["operation_id"]))
+                assert status==auth
+                decide(request,card,"once",expected=1)
+                fixtures.wait_for(lambda: json.loads(invoke("interrupt",identity,"--active")) is None,"first native decision settled")
+                invoke("send",identity,"--text","Native question fixture step.")
+                question=fixtures.wait_for(lambda:pending("question"),"real Codex question",timeout=10)
+                request,card=inspect(question)
+                decide(request,card,"answer","--answers",'[["Forged"]]',expected=1)
+                answer=decide(request,card,"answer","--answers",'[["Blue"]]')
+                assert answer["state"]=="applied",answer
+                assert received_answer.wait(12), "real Codex did not feed the selected value to the model"
+                daemon.kill()
+                daemon.wait(timeout=5)
+                daemon = start(log)
+                assert json.loads((state/"owner.json").read_text())==owner
+                assert json.loads(invoke("decide",identity,"--status","--operation-id",answer["operation_id"]))==answer
+                print("owner answered installed Codex approval and question, fencing forged scope and stale request")
             if history_check:
                 def latest():
                     page = json.loads(invoke("history", identity, "--limit", "1"))
@@ -399,7 +477,7 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
         if cleanup["remaining"]:
             raise RuntimeError(f"fixture processes survived cleanup at {root}")
 
-def verify(candidate, provider, native, scratch, loopback, resume_check=False, interrupt_check=False, history_check=False):
+def verify(candidate, provider, native, scratch, loopback, resume_check=False, interrupt_check=False, history_check=False, decision_check=False):
     root = Path(tempfile.mkdtemp(prefix="sc-", dir=scratch))
     success = False
     try:
@@ -421,7 +499,7 @@ def verify(candidate, provider, native, scratch, loopback, resume_check=False, i
             (home / "config.toml").write_text(f'[projects."{root}/work"]\ntrust_level = "trusted"\n')
         guard = fixtures.guard(root)
         if sys.platform == "darwin":
-            drive(root, native, guard, loopback, resume_check, interrupt_check, history_check)
+            drive(root, native, guard, loopback, resume_check, interrupt_check, history_check, decision_check)
         else:
             if resume_check:
                 system = root/"system-policy"
@@ -439,6 +517,8 @@ def verify(candidate, provider, native, scratch, loopback, resume_check=False, i
                 command.append("--interrupt-check")
             if history_check:
                 command.append("--history-check")
+            if decision_check:
+                command.append("--decision-check")
             subprocess.run(command, cwd=root/"work",env=fixtures.environment(root),timeout=150,check=True)
         success = True
     finally:
@@ -462,18 +542,21 @@ if __name__ == "__main__":
     parser.add_argument("--resume-check",action="store_true")
     parser.add_argument("--interrupt-check",action="store_true")
     parser.add_argument("--history-check",action="store_true")
+    parser.add_argument("--decision-check",action="store_true")
     args = parser.parse_args()
     if args.resume_check and not args.loopback_model:
         parser.error("--resume-check requires --loopback-model")
     if args.interrupt_check and (not args.loopback_model or args.resume_check):
         parser.error("--interrupt-check requires a separate --loopback-model run")
+    if args.decision_check and not args.loopback_model:
+        parser.error("--decision-check requires --loopback-model")
     if args.history_check and not args.loopback_model:
         parser.error("--history-check requires --loopback-model")
     if args.loopback_model and (not args.native or not sys.platform.startswith("linux")):
         parser.error("--loopback-model requires Linux and --native")
     if args.isolated_root and not args.candidate and Path(__file__).resolve().parent == args.isolated_root/"bin":
-        drive(args.isolated_root, args.native, [], args.loopback_model,args.resume_check,args.interrupt_check,args.history_check)
+        drive(args.isolated_root, args.native, [], args.loopback_model,args.resume_check,args.interrupt_check,args.history_check,args.decision_check)
     elif args.candidate and args.provider and not args.isolated_root:
-        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model,args.resume_check,args.interrupt_check,args.history_check)
+        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model,args.resume_check,args.interrupt_check,args.history_check,args.decision_check)
     else:
         parser.error("--candidate and --provider are required")

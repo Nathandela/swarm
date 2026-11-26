@@ -1,0 +1,7 @@
+# Rust Codex decisions
+
+Ordinary owner sessions use `swarm requests` to inspect a full Codex request by native session and request ID. `swarm decide` binds its reply to the inspected card's hash, expiry, native thread, active turn, and operation ID. Available decisions include approving or declining the one command or file request, and answering each offered question with one listed option. Session-wide rules, network and directory grants, free-form answers, and secret questions require the native viewer.
+
+The shim persists the request fence and uncertain operation receipt before replying to the private provider socket. Only a native resolution for the same thread and JSON-RPC request ID marks a receipt applied. After a disconnect, `swarm decide --status --operation-id <id>` reads the saved receipt. A previously fenced request cannot send another native reply. Historical status also survives an owner replacement.
+
+On 2026-11-26, installed Codex 0.172.0 on Linux x86-64 passed the disposable loopback `parity_codex.py --native --loopback-model --decision-check` run. It refused a forged request ID, a session-wide approval, a stale request, and an unoffered answer. One-shot approval caused the actual provider to create only a disposable marker. A listed answer went back to the synthetic inference endpoint through the actual provider, and decision status survived owner replacement. Cleanup reported zero surviving processes. macOS Clippy passed. Native file-change and macOS decisions are unqualified.

@@ -256,7 +256,7 @@ pub(super) fn decide(client: &mut Client, args: &[String]) -> CliResult {
         {
             return Err((
                 1,
-                "OpenCode request content changed or the card expired".into(),
+                "native request content changed or the card expired".into(),
             ));
         }
         let kind = match (field(card, "kind"), reply) {
@@ -305,7 +305,7 @@ pub(super) fn decide(client: &mut Client, args: &[String]) -> CliResult {
     if receipt["operation_id"] != operation || receipt["session"] != session.as_str() {
         return Err((
             1,
-            format!("operation_id={operation}: uncorrelated OpenCode decision outcome"),
+            format!("operation_id={operation}: uncorrelated native decision outcome"),
         ));
     }
     json_out(receipt).map_err(report)
