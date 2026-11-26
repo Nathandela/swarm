@@ -51,6 +51,21 @@ pub(crate) fn prepare(
     };
     if agent == "codex" {
         codex::refuse_unqualified_origin(&request["env"])?;
+        let home = environment
+            .iter()
+            .rev()
+            .find(|(key, _)| key == "HOME")
+            .map_or(Path::new(""), |(_, value)| Path::new(value));
+        if let Some(native) = codex::explicit_home(&request["env"], home)? {
+            if !request["worker_discussion"].is_null()
+                || !crate::ipc::field(request, "role").is_empty()
+            {
+                return Err(io::Error::other(
+                    "alternate CODEX_HOME requires an ordinary owner session",
+                ));
+            }
+            environment.push(("CODEX_HOME".into(), native.to_string_lossy().into_owned()));
+        }
     }
     environment.retain(|(name, _)| match name.as_str() {
         "ANTHROPIC_API_KEY" => matches!(agent, "claude" | "hermes"),

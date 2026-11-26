@@ -615,9 +615,18 @@ impl Session {
         let old = &origin["profile"];
         providers::codex::refuse_unqualified_origin(&launch["env"])?;
         let mut env = runtime::launch_env(&launch["env"]);
+        let home = env
+            .iter()
+            .rev()
+            .find(|(key, _)| key == "HOME")
+            .map_or(Path::new(""), |(_, value)| Path::new(value));
+        if let Some(native) = providers::codex::explicit_home(&launch["env"], home)? {
+            env.push(("CODEX_HOME".into(), native.to_string_lossy().into_owned()));
+        }
         let current = codex_continuity::profile(&env, &cwd, &old["options"])?;
         if [
             "home",
+            "native_home",
             "native_home_id",
             "config",
             "account",
@@ -636,7 +645,8 @@ impl Session {
             .ok_or_else(|| io::Error::other("saved Codex PATH is unproved"))?;
         env.retain(|(key, _)| key != "PATH");
         env.push(("PATH".into(), path.into()));
-        let rollout = codex_continuity::rollout(Path::new(field(old, "home")), &cwd, &thread)?;
+        let rollout =
+            codex_continuity::rollout(Path::new(field(old, "native_home")), &cwd, &thread)?;
         let mut request = launch.clone();
         request["cwd"] = json!(cwd);
         request["env"] = json!(
@@ -863,6 +873,21 @@ impl Session {
         let claude_conversation = (provider.agent == "claude" && scheduled.is_some())
             .then(providers::claude::new_conversation)
             .transpose()?;
+        let codex_home = if let Some((_, origin)) =
+            provider.env.iter().find(|(key, _)| key == "CODEX_HOME")
+        {
+            if scheduled.is_some() || !manager.is_null() || !lineage["worker_discussion"].is_null()
+            {
+                return Err(io::Error::other(
+                    "alternate CODEX_HOME requires an ordinary owner session",
+                ));
+            }
+            let native = Path::new(origin);
+            let info = native.metadata()?;
+            json!({"path":native,"identity":[info.dev(),info.ino()]})
+        } else {
+            Value::Null
+        };
         let dir = root.join(&id);
         DirBuilder::new().mode(0o700).create(&dir)?;
         runtime::write_json(
@@ -889,6 +914,7 @@ impl Session {
                 "claude_resume": claude_resume,
                 "codex_resume":codex_resume,
                 "codex_options":codex_options,
+                "codex_home":codex_home,
                 "opencode_initial": initial,
 
             }),

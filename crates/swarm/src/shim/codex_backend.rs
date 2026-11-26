@@ -538,7 +538,7 @@ fn backfill_initial_history(observation: &Observation, target: &SemanticTarget<'
     let Ok(profile) = profile else { return };
     if profile["token"] == target.token {
         let items = crate::providers::codex_continuity::initial_history(
-            Path::new(field(&profile["profile"], "home")),
+            Path::new(field(&profile["profile"], "native_home")),
             target.cwd,
             &observation.thread,
         );

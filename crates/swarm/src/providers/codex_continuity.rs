@@ -147,7 +147,12 @@ pub(crate) fn profile(env: &[(String, String)], cwd: &Path, options: &Value) -> 
             "Codex native profile or checkout is not physically rooted",
         ));
     }
-    let home = root.join(".codex");
+    let explicit = value("CODEX_HOME");
+    let home = if explicit.is_empty() {
+        root.join(".codex")
+    } else {
+        super::codex::native_home(root, Path::new(explicit))?
+    };
     let info = home.symlink_metadata()?;
     // SAFETY: UID lookup has no process side effects.
     if !info.is_dir() || info.uid() != unsafe { libc::geteuid() } || info.mode() & 0o022 != 0 {
@@ -170,7 +175,15 @@ pub(crate) fn profile(env: &[(String, String)], cwd: &Path, options: &Value) -> 
         if auth["auth_mode"] == "apikey" && !field(&auth, "OPENAI_API_KEY").is_empty() {
             json!({"kind":"native-api-key","key_hash":format!("{:x}",Sha256::digest(field(&auth,"OPENAI_API_KEY")))})
         } else {
-            json!({"kind":"native","account":crate::supervisor::manager::account(root)?})
+            let id = field(&auth["tokens"], "account_id");
+            if auth["auth_mode"] != "chatgpt"
+                || id.is_empty()
+                || id.len() > 256
+                || id.chars().any(char::is_control)
+            {
+                return Err(io::Error::other("unverified native Codex account"));
+            }
+            json!({"kind":"native","account":format!("{:x}",Sha256::digest(id))})
         }
     };
     let mut project = Vec::new();
@@ -184,7 +197,7 @@ pub(crate) fn profile(env: &[(String, String)], cwd: &Path, options: &Value) -> 
         ]));
     }
     Ok(
-        json!({"home":root,"native_home_id":[info.dev(),info.ino()],"path":value("PATH"),
+        json!({"home":root,"native_home":home,"native_home_id":[info.dev(),info.ino()],"path":value("PATH"),
         "config":config(&home.join("config.toml"))?,"project":project,"account":account,
         "system_policy":"absent-v1", "cwd_config":config(&cwd.join("config.toml"))?,
         "options":options.as_object().cloned().unwrap_or_default()}),
@@ -201,11 +214,16 @@ pub(crate) fn rollout(home: &Path, cwd: &Path, thread: &str) -> io::Result<Value
     let ms = u64::from_str_radix(&compact, 16).map_err(io::Error::other)?;
     let day = OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000)
         .map_err(io::Error::other)?;
+    if !home.is_absolute() || home.canonicalize()? != home {
+        return Err(io::Error::other(
+            "Codex rollout home is not physically rooted",
+        ));
+    }
     let mut rooted = home.to_owned();
     let year = format!("{:04}", day.year());
     let month = format!("{:02}", u8::from(day.month()));
     let date = format!("{:02}", day.day());
-    for component in [".codex", "sessions", &year, &month, &date] {
+    for component in ["sessions", &year, &month, &date] {
         rooted.push(component);
         if !rooted.symlink_metadata()?.is_dir() || rooted.canonicalize()? != rooted {
             return Err(io::Error::other("Codex rollout directory is an alias"));
@@ -344,9 +362,9 @@ mod tests {
             .canonicalize()
             .unwrap()
             .join(format!("codex-proof-{}", runtime::random_id().unwrap()));
-        let home = root.join("home");
+        let home = root.join("home/.codex");
         let cwd = root.join("work");
-        let folder = home.join(".codex/sessions/2026/11/26");
+        let folder = home.join("sessions/2026/11/26");
         runtime::private_dir(&folder).unwrap();
         runtime::private_dir(&cwd).unwrap();
         let id = "01a21552-fdc6-7e60-94f0-3311a05424eb";

@@ -18,7 +18,7 @@ sys.dont_write_bytecode = True
 from parity_runtime import attach, control, fixtures, read_control, read_frame
 
 
-def model_fixture(root, decision_check):
+def model_fixture(root, decision_check, alternate_check):
     replies = []
     interrupt_open = threading.Event()
     dispatched_tools = set()
@@ -109,7 +109,7 @@ def model_fixture(root, decision_check):
     server=http.server.ThreadingHTTPServer(("127.0.0.1",0),Handler)
     server.daemon_threads=True
     threading.Thread(target=server.serve_forever,daemon=True).start()
-    home=root/"home/.codex"
+    home=root/"home"/("custom-codex" if alternate_check else ".codex")
     (home/"config.toml").write_text(
         'model="fixture"\nmodel_provider="fixture"\napproval_policy="never"\nsandbox_mode="read-only"\n'
         'cli_auth_credentials_store="file"\n[model_providers.fixture]\nname="fixture"\nwire_api="responses"\n'
@@ -126,12 +126,20 @@ def model_fixture(root, decision_check):
     return server,replies,interrupt_open,received_answer
 
 
-def drive(root, native, guard, loopback, resume_check=False, interrupt_check=False, history_check=False, decision_check=False):
-    model, replies, interrupt_open, received_answer = model_fixture(root, decision_check) if loopback else (None, [], None, None)
+def drive(root, native, guard, loopback, resume_check=False, interrupt_check=False, history_check=False, decision_check=False, alternate_check=False):
+    model, replies, interrupt_open, received_answer = model_fixture(root, decision_check, alternate_check) if loopback else (None, [], None, None)
     daemon = None
     previous = {}
     try:
+        if sys.platform=="darwin" and model:
+            from native_fixture_sandbox import check_guards, guarded
+            ports=[model.server_port]
+            check_guards(root,ports)
+            guard=guarded([],root,ports)
         env = fixtures.environment(root)
+        native_home = root/"home"/("custom-codex" if alternate_check else ".codex")
+        if alternate_check:
+            env["CODEX_HOME"]=str(native_home)
         if not native:
             env["OPENAI_API_KEY"] = "synthetic-provider-canary"
             env["ANTHROPIC_API_KEY"] = "synthetic-unrelated-canary"
@@ -153,7 +161,7 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
             fixtures.wait_for(ready, "daemon socket")
             return process
 
-        def launch(from_id=None, expected="launch"):
+        def launch(from_id=None, expected="launch", overrides=None):
             route = Path(env["SWARM_DAEMON_SOCK"])
             with socket.socket(socket.AF_UNIX) as conn:
                 conn.settimeout(16)
@@ -161,10 +169,11 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
                 control(conn, "hello", endpoint_id="", protocol_version=1)
                 endpoint = read_control(conn)["endpoint_id"]
                 options = {"resume_from":from_id} if from_id else {"sandbox":"read-only"}
-                control(conn, "launch", endpoint_id=endpoint, launch={
-                    "agent": "codex", "name": "codex fixture", "cwd": str(root / "work"),
-                    "cols": 100, "rows": 30, "options": options,
-                })
+                request = {"agent": "codex", "name": "codex fixture", "cwd": str(root / "work"),
+                    "cols": 100, "rows": 30, "options": options}
+                if overrides:
+                    request["env"]=[f"{key}={value}" for key,value in {**env,**overrides}.items()]
+                control(conn,"launch",endpoint_id=endpoint,launch=request)
                 launched = read_control(conn)
                 assert launched["op"] == expected, launched
                 return launched["session"]["id"] if expected=="launch" else launched
@@ -182,8 +191,17 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
                     invoke(*base, expected=1, overrides=wrong_origin)
                     invoke(*base, "--operation-id", operation, expected=1, overrides=wrong_origin)
                 assert json.loads(invoke("ls", "--json")) == []
+            if alternate_check:
+                retired=root/"home/swarm/logins/provider/codex/native"
+                retired.mkdir(mode=0o700,parents=True)
+                rejected=launch(expected="error",overrides={"CODEX_HOME":str(retired)})
+                assert "retired Swarm-managed" in rejected["error"],rejected
+                alias=root/"home/aliased-codex"
+                alias.symlink_to(native_home)
+                rejected=launch(expected="error",overrides={"CODEX_HOME":str(alias)})
+                assert "physical private" in rejected["error"],rejected
             identity = launch()
-            row, = json.loads(invoke("ls", "--json"))
+            row = next(row for row in json.loads(invoke("ls", "--json")) if row["id"]==identity)
             assert row["id"] == identity and row["agent"] == "codex"
             state = root / "state/rust-v1" / identity.split("/")[1]
             owner = json.loads((state / "owner.json").read_text())
@@ -268,7 +286,7 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
             daemon = start(log)
             assert json.loads((state / "owner.json").read_text()) == owner
             assert observed() == thread
-            assert json.loads(invoke("ls", "--json"))[0]["id"] == identity
+            assert any(row["id"]==identity for row in json.loads(invoke("ls", "--json")))
             if not native:
                 assert json.loads(invoke("message", identity, "--status", "--operation-id", operation)) == accepted
                 assert json.loads(invoke("message", identity, "--text", message,
@@ -375,7 +393,7 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
             print("managed Codex worker and exact native thread survived owner restart")
             if resume_check:
                 fixtures.wait_for(lambda: fixtures.generation(owner["pid"]) is None,"old managed shim reaped")
-                config=root/"home/.codex/config.toml"
+                config=native_home/"config.toml"
                 saved=config.read_bytes()
                 config.write_bytes(saved.replace(b"127.0.0.1:",b"127.0.0.2:"))
                 try:
@@ -391,12 +409,26 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
                             assert rejected["error_code"] == "invalid_field" and "system configuration" in rejected["error"]
                         finally:
                             policy.unlink()
-                rollouts = list((root/"home/.codex/sessions").rglob(f"*-{thread}.jsonl"))
+                rollouts = list((native_home/"sessions").rglob(f"*-{thread}.jsonl"))
                 assert len(rollouts) == 1
                 def native_turns():
                     events = map(json.loads, rollouts[0].read_text().splitlines())
                     return sum(row["type"]=="event_msg" and row["payload"]["type"]=="task_started" for row in events)
                 assert native_turns() == 1
+                if alternate_check:
+                    ordinary=root/"home/.codex"
+                    ordinary.mkdir(mode=0o700)
+                    for name in ("auth.json","config.toml"):
+                        shutil.copy2(native_home/name,ordinary/name)
+                    rejected=launch(identity,"error",{"CODEX_HOME":""})
+                    assert "origin or authority changed" in rejected["error"],rejected
+                    ordinary_auth=json.loads((native_home/"auth.json").read_text())
+                    alternate_auth={**ordinary_auth,"OPENAI_API_KEY":"distinct-synthetic-account"}
+                    (native_home/"auth.json").write_text(json.dumps(alternate_auth))
+                    try:
+                        assert "origin or authority changed" in launch(identity,"error")["error"]
+                    finally:
+                        (native_home/"auth.json").write_text(json.dumps(ordinary_auth))
                 resumed=launch(identity)
                 resumed_state=root/"state/rust-v1"/resumed.split("/")[1]
                 assert json.loads((resumed_state/"observation.json").read_text())["conversation_id"]==thread
@@ -428,6 +460,17 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
                         shutil.rmtree(denied)
                 invoke("kill",resumed)
                 invoke("watch",resumed,"--until","completed","--timeout","4s")
+                if alternate_check:
+                    args=("spawn","--cli","codex","--dir",str(root/"work"),"--name","alternate reliable","--prompt","A disposable reliable launch.")
+                    operation=invoke("spawn","--new-operation-id").decode().strip()
+                    invoke(*args,"--operation-id",operation,expected=1,overrides={"CODEX_HOME":str(root/"home/swarm/logins/provider/codex/native")})
+                    operation=invoke("spawn","--new-operation-id").decode().strip()
+                    reliable=invoke(*args,"--operation-id",operation).decode().strip()
+                    reliable_meta=root/"state/rust-v1"/reliable.split("/")[1]/"session.json"
+                    assert json.loads(reliable_meta.read_text())["codex_home"]["path"]==str(native_home)
+                    assert invoke(*args,"--operation-id",operation).decode().strip()==reliable
+                    invoke("kill",reliable)
+                    invoke("watch",reliable,"--until","completed","--timeout","4s")
                 print("real Codex resumed the exact prior rollout, rejected changed authority without replaying the original user turn")
 
             if not native:
@@ -477,7 +520,7 @@ def drive(root, native, guard, loopback, resume_check=False, interrupt_check=Fal
         if cleanup["remaining"]:
             raise RuntimeError(f"fixture processes survived cleanup at {root}")
 
-def verify(candidate, provider, native, scratch, loopback, resume_check=False, interrupt_check=False, history_check=False, decision_check=False):
+def verify(candidate, provider, native, scratch, loopback, resume_check=False, interrupt_check=False, history_check=False, decision_check=False, alternate_check=False):
     root = Path(tempfile.mkdtemp(prefix="sc-", dir=scratch))
     success = False
     try:
@@ -494,12 +537,12 @@ def verify(candidate, provider, native, scratch, loopback, resume_check=False, i
             shutil.copyfile(original, dest)
             dest.chmod(0o700)
         if native:
-            home = root / "home/.codex"
+            home = root/"home"/("custom-codex" if alternate_check else ".codex")
             home.mkdir(mode=0o700)
             (home / "config.toml").write_text(f'[projects."{root}/work"]\ntrust_level = "trusted"\n')
         guard = fixtures.guard(root)
         if sys.platform == "darwin":
-            drive(root, native, guard, loopback, resume_check, interrupt_check, history_check, decision_check)
+            drive(root, native, guard, loopback, resume_check, interrupt_check, history_check, decision_check, alternate_check)
         else:
             if resume_check:
                 system = root/"system-policy"
@@ -519,6 +562,8 @@ def verify(candidate, provider, native, scratch, loopback, resume_check=False, i
                 command.append("--history-check")
             if decision_check:
                 command.append("--decision-check")
+            if alternate_check:
+                command.append("--alternate-check")
             subprocess.run(command, cwd=root/"work",env=fixtures.environment(root),timeout=150,check=True)
         success = True
     finally:
@@ -536,14 +581,17 @@ if __name__ == "__main__":
     parser.add_argument("--candidate", type=fixtures.binary_path)
     parser.add_argument("--provider", type=fixtures.binary_path)
     parser.add_argument("--native", action="store_true")
-    parser.add_argument("--loopback-model",action="store_true",help="use the installed native CLI with a fixed local Responses fixture in a private Linux network namespace")
+    parser.add_argument("--loopback-model",action="store_true",help="use the installed native CLI with an OS-guarded local Responses fixture")
     parser.add_argument("--scratch", type=Path, default=Path("/tmp").resolve())
     parser.add_argument("--isolated-root", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--resume-check",action="store_true")
     parser.add_argument("--interrupt-check",action="store_true")
     parser.add_argument("--history-check",action="store_true")
     parser.add_argument("--decision-check",action="store_true")
+    parser.add_argument("--alternate-check",action="store_true")
     args = parser.parse_args()
+    if args.alternate_check and not args.resume_check:
+        parser.error("--alternate-check requires --resume-check")
     if args.resume_check and not args.loopback_model:
         parser.error("--resume-check requires --loopback-model")
     if args.interrupt_check and (not args.loopback_model or args.resume_check):
@@ -552,11 +600,11 @@ if __name__ == "__main__":
         parser.error("--decision-check requires --loopback-model")
     if args.history_check and not args.loopback_model:
         parser.error("--history-check requires --loopback-model")
-    if args.loopback_model and (not args.native or not sys.platform.startswith("linux")):
-        parser.error("--loopback-model requires Linux and --native")
+    if args.loopback_model and (not args.native or sys.platform not in ("linux","darwin")):
+        parser.error("--loopback-model requires Linux or macOS and --native")
     if args.isolated_root and not args.candidate and Path(__file__).resolve().parent == args.isolated_root/"bin":
-        drive(args.isolated_root, args.native, [], args.loopback_model,args.resume_check,args.interrupt_check,args.history_check,args.decision_check)
+        drive(args.isolated_root, args.native, [], args.loopback_model,args.resume_check,args.interrupt_check,args.history_check,args.decision_check,args.alternate_check)
     elif args.candidate and args.provider and not args.isolated_root:
-        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model,args.resume_check,args.interrupt_check,args.history_check,args.decision_check)
+        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model,args.resume_check,args.interrupt_check,args.history_check,args.decision_check,args.alternate_check)
     else:
         parser.error("--candidate and --provider are required")

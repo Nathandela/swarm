@@ -164,6 +164,21 @@ fn serve(dir: &Path) -> io::Result<()> {
     if provider["name"] == "hermes" {
         environment.extend(native::origins(&Value::Null, hermes_native)?);
     }
+    if provider["name"] == "codex" && !config["codex_home"].is_null() {
+        use std::os::unix::fs::MetadataExt;
+        let home = environment
+            .iter()
+            .rev()
+            .find(|(key, _)| key == "HOME")
+            .map_or(Path::new(""), |(_, value)| Path::new(value));
+        let native = providers::codex::explicit_home(&Value::Null, home)?
+            .ok_or_else(|| io::Error::other("reserved alternate CODEX_HOME is unavailable"))?;
+        let info = native.metadata()?;
+        if config["codex_home"] != json!({"path":native,"identity":[info.dev(),info.ino()]}) {
+            return Err(io::Error::other("alternate CODEX_HOME changed before exec"));
+        }
+        environment.push(("CODEX_HOME".into(), native.to_string_lossy().into_owned()));
+    }
     let mut app_args = vec![
         "-c".into(),
         "sandbox_workspace_write.network_access=true".into(),
@@ -351,7 +366,7 @@ fn serve(dir: &Path) -> io::Result<()> {
             if restored.is_object() {
                 let profile=profile?;
                 if profile!=restored["profile"] ||
-                    codex_continuity::rollout(Path::new(field(&profile,"home")),cwd,field(restored,"thread"))?!=restored["rollout"]
+                    codex_continuity::rollout(Path::new(field(&profile,"native_home")),cwd,field(restored,"thread"))?!=restored["rollout"]
                     || !argv.as_slice().starts_with(&["resume".into(),field(restored,"thread").into()])
                 {
                     return Err(io::Error::other("Codex resume profile, rollout or argument custody changed"));
