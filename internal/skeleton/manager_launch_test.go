@@ -61,6 +61,10 @@ func TestFreshVMManagerUsesSameProviderDefaultsAsWorker(t *testing.T) {
 		if !maps.Equal(worker.Options, manager.Options) || provider == "codex" && manager.Options["sandbox"] != "workspace-write" || slices.Contains(manager.Argv, "--dangerously-skip-permissions") {
 			t.Fatalf("%s manager has different permissions: worker=%v manager=%v argv=%v", provider, worker.Options, manager.Options, manager.Argv)
 		}
+		const noticeOverride = "notice.hide_rate_limit_model_nudge=true"
+		if slices.Contains(worker.Argv, noticeOverride) || slices.Contains(manager.Argv, noticeOverride) != (provider == "codex") {
+			t.Fatalf("unexpected %s rate-limit picker override: worker=%v manager=%v", provider, worker.Argv, manager.Argv)
+		}
 	}
 }
 

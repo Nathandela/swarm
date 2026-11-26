@@ -40,6 +40,10 @@ Explicit worker questions and completion notes are sized when the dispatcher wak
 
 Run `swarm dispatcher-guide` for the worker notification and reply workflow. To expose the same guidance through native skill discovery, install the bundled skill in the dispatcher account. For Codex use `$HOME/.agents/skills`. For Claude use `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills`.
 
+Worker notifications use the discussion's mailbox. An existing ordinary session without that binding can be inspected with `swarm peek`. Attach to the dispatcher for deliberate terminal input. `swarm message` and `swarm send --text` refuse direct dispatcher input.
+
+On launch or resume, a Codex dispatcher keeps its selected model through the optional approaching-limit picker. Swarm sets this for the dispatcher invocation. After a verified terminal quota error, Swarm can replace the dispatcher even if Codex leaves its composer unavailable. Queued Discord messages stay with the discussion.
+
 ```sh
 skill_dir="$HOME/.agents/skills/swarm-dispatcher"
 mkdir -p "$skill_dir"

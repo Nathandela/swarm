@@ -22,7 +22,12 @@ func managerAdapterSpec(m *daemon.ManagerLaunchSpec) *adapter.ManagerSpec {
 	if m == nil {
 		return nil
 	}
-	return &adapter.ManagerSpec{NativeCLI: m.NativeCLI, Command: m.Command, Args: []string{"voice", "mcp", "--socket", m.BridgeSocket, "--auth-file", m.AuthFile, "--conversation", m.ConversationID}}
+	return &adapter.ManagerSpec{
+		NativeCLI: m.NativeCLI,
+		Discord:   schema.IsDiscordManager("manager", m.ConversationID),
+		Command:   m.Command,
+		Args:      []string{"voice", "mcp", "--socket", m.BridgeSocket, "--auth-file", m.AuthFile, "--conversation", m.ConversationID},
+	}
 }
 
 func discussionAttachmentReadDir(conversationID, authFile string) string {

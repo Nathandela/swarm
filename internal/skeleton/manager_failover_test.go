@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/managerproof"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
@@ -39,8 +40,22 @@ func TestManagerQuotaRequiresTerminalFailureOfExactRootTurn(t *testing.T) {
 	d.captureCodexManagerFrame(b.Session, feed, method, raw)
 	waitCodexCustody(t, feed)
 	view, err = d.managerRuntime(b.Session, b.SessionInstance)
-	if err != nil || !view.ProviderExhausted {
+	if err != nil || view.ProviderExhausted {
+		t.Fatalf("active thread exposed quota replacement eligibility: %v %+v", err, view)
+	}
+	const threadStatus = "thread/status/changed"
+	d.captureCodexManagerFrame(b.Session, feed, threadStatus,
+		codexManagerFrame(threadStatus, b.NativeSessionID, map[string]any{"status": map[string]string{"type": "systemError"}}))
+	waitCodexCustody(t, feed)
+	view, err = d.managerRuntime(b.Session, b.SessionInstance)
+	if err != nil || !view.ProviderExhausted || view.ReadyForInput {
 		t.Fatalf("missing joined quota evidence: %v %+v", err, view)
+	}
+	req := protocol.ManagerRetireReq{Binding: b, Replacement: schema.ManagerReplaceQuota}
+	target := persist.ManagerRetirement{OperationID: "quota-retire", Replacement: req.Replacement, Instance: b.SessionInstance,
+		NativeSessionID: b.NativeSessionID, NativeGeneration: b.NativeGeneration, ShimPID: meta.ShimPID, ShimStartTime: meta.ShimStartTime}
+	if claimed, err := d.retireManager(t.Context(), b.Session, req, target); !claimed || err != nil {
+		t.Fatalf("terminal quota error did not admit retirement: claimed=%t err=%v", claimed, err)
 	}
 }
 

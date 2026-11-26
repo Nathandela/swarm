@@ -11,7 +11,9 @@ import (
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/procstart"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/shim"
+	"github.com/Nathandela/swarm/internal/status"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +21,34 @@ import (
 	"testing"
 	"time"
 )
+
+func TestDispatcherRejectsUnadmittedSemanticInput(t *testing.T) {
+	dir := t.TempDir()
+	store, err := persist.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := persist.Meta{ID: "dispatcher", AgentType: "codex", Role: "manager",
+		ManagerConversationID: schema.DiscussionConversationPrefix + "discussion",
+		Status:                status.Status{Process: status.ProcessExited}}
+	if err := store.Save(meta); err != nil {
+		t.Fatal(err)
+	}
+	core, err := daemon.Open(daemon.Config{StateDir: dir, SocketPath: filepath.Join(dir, "d.sock"), LockPath: filepath.Join(dir, "d.lock")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = core.Close() })
+	sk := &Daemon{core: core}
+	req := protocol.ComposerSendReq{Session: "machine/" + meta.ID, Text: "worker progress"}
+	code, err := sk.semanticSendTransactional("machine", "fixture", req, func() error {
+		t.Fatal("unadmitted dispatcher input reached the write boundary")
+		return nil
+	})
+	if code != protocol.CodeStructuredUnsupported || err == nil || !strings.Contains(err.Error(), "swarm teammate message") {
+		t.Fatalf("bare semantic input did not receive an actionable refusal: %s %v", code, err)
+	}
+}
 
 func codexProofFixture() managerproof.Binding {
 	return managerproof.Binding{Session: "manager", SessionInstance: "instance", ConversationID: "conversation", Provider: "codex", NativeSessionID: "01a1bc58-3571-7452-bd5c-348fe1b9d7ff", NativeGeneration: "actual-process-generation", ObservationGeneration: "observation-generation", LoginEpoch: "account"}

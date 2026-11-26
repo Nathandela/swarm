@@ -739,7 +739,7 @@ func (d *DiscussionController) Sync(ctx context.Context, emit func(DiscussionOut
 			return d.inputHold(ErrDiscussionDirectInputHeld, err)
 		}
 		if errors.Is(err, ErrControllerPaused) {
-			return d.inputHold(ErrDiscussionNativeProofHeld, err)
+			return d.inputHold(ErrDiscussionDirectInputHeld, err)
 		}
 		if errors.Is(err, ErrControllerUncertain) {
 			return d.inputHold(nil, err)

@@ -59,6 +59,7 @@ type ManagerRuntimeReq struct {
 	SessionInstance string `json:"session_instance"`
 }
 type ManagerRuntimeStatus struct {
+	NativeThreadState string                `json:"-"`
 	ProviderExhausted bool                  `json:"provider_exhausted,omitempty"`
 	NativeCLI         bool                  `json:"native_cli,omitempty"`
 	ReadyForInput     bool                  `json:"ready_for_input"`

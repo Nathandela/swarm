@@ -35,6 +35,7 @@ func (r *failingDiscussionRuntime) ManagerRuntime(session, instance string) (pro
 	s := r.status
 	if session != r.old {
 		s.ProviderExhausted = false
+		s.ReadyForInput = true
 	}
 	return s, nil
 }
@@ -70,6 +71,8 @@ func TestDiscussionReplacesFailedOwnerAcrossRestart(t *testing.T) {
 			r.retirement.State = "uncertain"
 			if cause == schema.ManagerReplaceQuota {
 				r.status.ProviderExhausted = true
+				r.status.ReadyForInput = false
+				r.status.Turn = protocol.ManagerNativeTurn{NativeTurnID: "quota-failed", State: "completed", Reason: "error"}
 			} else {
 				r.failure = managerproof.ErrQuarantined
 			}

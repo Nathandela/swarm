@@ -428,7 +428,7 @@ func (r *Registry) snapshotLocked() (Status, error) {
 	}
 	turn := r.turns[r.current]
 	if r.terminalCurrent.NativeTurnID != "" && r.terminalCurrent.NativeTurnID == r.current {
-		return Status{Binding: r.binding, ReadyForInput: r.threadState == "idle", Turn: Turn{NativeInputID: r.terminalCurrent.NativeInputID, NativeTurnID: r.current, State: "completed", Reason: r.terminalCurrent.Reason, ExternallySteered: r.terminalCurrent.ExternallySteered, ExternalInput: r.externalInput}}, nil
+		return Status{Binding: r.binding, NativeThreadState: r.threadState, ReadyForInput: r.threadState == "idle", Turn: Turn{NativeInputID: r.terminalCurrent.NativeInputID, NativeTurnID: r.current, State: "completed", Reason: r.terminalCurrent.Reason, ExternallySteered: r.terminalCurrent.ExternallySteered, ExternalInput: r.externalInput}}, nil
 	}
 	state := "unknown"
 	if r.current == "" && r.threadState == "idle" {
@@ -440,7 +440,7 @@ func (r *Registry) snapshotLocked() (Status, error) {
 			state = "completed"
 		}
 	}
-	return Status{Binding: r.binding, ReadyForInput: r.threadState == "idle" && (r.current == "" || turn.Closed || r.terminalCurrent.NativeTurnID == r.current), Turn: Turn{NativeInputID: turn.InputID, NativeTurnID: r.current, State: state, Reason: turn.Reason, ExternallySteered: turn.Unsafe, ExternalInput: r.externalInput}}, nil
+	return Status{Binding: r.binding, NativeThreadState: r.threadState, ReadyForInput: r.threadState == "idle" && (r.current == "" || turn.Closed || r.terminalCurrent.NativeTurnID == r.current), Turn: Turn{NativeInputID: turn.InputID, NativeTurnID: r.current, State: state, Reason: turn.Reason, ExternallySteered: turn.Unsafe, ExternalInput: r.externalInput}}, nil
 }
 
 // InputStatus reads only this generation's retained native lifecycle evidence.

@@ -692,7 +692,7 @@ func attachmentInstruction(manifest string) string {
 func (r *Runtime) prompt(input discord.TeammateAdmission, page discord.TeammateHistoryPage, source string, historyErr error) string {
 	var msg strings.Builder
 	if r.vmProjectAccess {
-		msg.WriteString("Send every Discord reply with the publish tool. A native final answer alone stays in the terminal. " + voice.DiscussionReplyInstructions + " Use your shell and ordinary VM commands. Start workers with swarm spawn, steer the same session with swarm message, and inspect output with swarm peek. Read swarm dispatcher-guide before delegating. Ask workers for explicit needs-input and completion notes, then return after dispatch.\n")
+		msg.WriteString("Send every Discord reply with the publish tool. A native final answer alone stays in the terminal. " + voice.DiscussionReplyInstructions + " Use your shell and ordinary VM commands. Start workers with swarm spawn, steer the worker with swarm message, and inspect output with swarm peek. Read swarm dispatcher-guide before delegating. Ask bound workers for explicit needs-input and completion notes with swarm teammate message, then return after dispatch. For an existing session without a mailbox for this discussion, inspect it on request and explain that automatic notifications are unavailable. Never tell workers to send text directly to the dispatcher session.\n")
 	} else {
 		msg.WriteString(voice.DiscussionReplyInstructions + " Use the scoped manager tools and approved project. Verify results with swarm_read.\n")
 	}

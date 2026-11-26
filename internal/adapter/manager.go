@@ -4,6 +4,7 @@ package adapter
 // references to private service custody, never speech or native credentials.
 type ManagerSpec struct {
 	NativeCLI bool
+	Discord   bool
 	Command   string
 	Args      []string
 }
