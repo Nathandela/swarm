@@ -22,7 +22,7 @@ SENTINEL = "fictional-stopped-state-key"
 RAW_MARKER = "$serde_json::private::RawValue"
 
 
-def owner(env, request=None, read_reply=True):
+def owner(env, request=None, read_reply=True, *, caps=("subscribe", "owner-launch", "attach")):
     with socket.socket(socket.AF_UNIX) as client:
         client.settimeout(4)
         client.connect(env["SWARM_DAEMON_SOCK"])
@@ -40,7 +40,7 @@ def owner(env, request=None, read_reply=True):
             assert SENTINEL.encode() not in frame
             return json.loads(frame[1:])
 
-        write(dict(op="hello", protocol_version=1, capabilities=["subscribe", "owner-launch", "attach"]))
+        write(dict(op="hello", protocol_version=1, capabilities=caps))
         hello = read()
         expected = "ep-" + hashlib.sha256(env["SWARM_DAEMON_STATE"].encode()).hexdigest()[:8]
         assert hello["op"] == "hello" and hello["endpoint_id"] == expected, hello
