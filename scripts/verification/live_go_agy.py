@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Keep an actual classic agy PTY alive through Go → Rust → Go."""
 
+from contextlib import closing
 import http.server
 import json
 import os
 from pathlib import Path
 import shlex
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -17,7 +19,7 @@ from rust_agy_handoff import HandoffModel, eventually
 from stopped_go_state import daemon, disk, fixture_env, listed, owner, private, refused
 
 
-def rehearse(go, rust, native, root, cold=False):
+def rehearse(go, rust, native, root, cold=False, stopped_source=False):
     home, work, tools, state = (root / name for name in ("home", "work", "bin", "state"))
     for path in (home, work, tools, state):
         path.mkdir(mode=0o700)
@@ -146,6 +148,80 @@ def rehearse(go, rust, native, root, cold=False):
             eventually(lambda: disk(session / "meta.json")["status"]["Process"] == "exited", "native agy exit")
             assert disk(session / "meta.json")["conversation_id"] == thread
         print("same session, native conversation and PTY across Go → Rust → Go", flush=True)
+        if stopped_source:
+            meta, launch, observed, exit_record = (
+                disk(session / name) for name in
+                ("meta.json", "shim-launch.json", "observed-cli.json", "exit.json")
+            )
+            assert meta["shim_wire_version"] == 2 and meta["shim_start_time"] > 0
+            assert meta["cli_identity"] == launch["cli_identity"] == observed
+            assert observed["path"] == launch["argv"][0] == str(wrapper)
+            assert observed["version"] == "1.5.17"
+            assert launch["cwd"] == meta["cwd"] == str(work)
+            assert launch["env"][:len(meta["env"])] == meta["env"] == request["env"]
+            assert meta["conversation_id"] == thread
+            assert exit_record["exit_code"] == meta["exit_code"] == 0
+            assert exit_record["finished_at"] == meta["last_activity"]
+            for name in ("shim.sock", "hook.sock", "native-process.json", "native-writers-stopped.json"):
+                assert not (session / name).exists()
+            summary_uri = (config / "conversation_summaries.db").as_uri() + "?mode=ro"
+            with closing(sqlite3.connect(summary_uri, uri=True)) as summaries:
+                assert summaries.execute(
+                    "SELECT workspace_uris, project_id FROM conversation_summaries WHERE conversation_id = ?",
+                    (thread,),
+                ).fetchone() == ("", "default-cli-project")
+            assert disk(config / "cache/last_conversations.json")[str(work)] == thread
+
+            resume = {"op":"launch", "launch":request | {
+                "initial_prompt":"", "options":{"resume_from":active},
+            }}
+            source_bytes = {path.name:path.read_bytes() for path in session.iterdir() if path.is_file()}
+            original_transcript = transcript.read_bytes()
+            original = work.with_name("original-work")
+            with daemon(rust, rust_env | {LIVE:"0"}, root / "rust-stopped-source.log"):
+                assert [row["id"] for row in listed(rust_env)] == [active]
+
+                def refuses_resume():
+                    with model.guard:
+                        before = len(model.calls)
+                    reply = owner(rust_env, resume)
+                    assert reply["op"] == "error" and "native account and checkout custody" in reply["error"], reply
+                    assert [row["id"] for row in listed(rust_env)] == [active]
+                    assert transcript.read_bytes() == original_transcript
+                    with model.guard:
+                        assert len(model.calls) == before
+
+                refuses_resume()
+                work.rename(original)
+                try:
+                    work.mkdir(mode=0o700)
+                    assert work.stat().st_ino != original.stat().st_ino
+                    refuses_resume()
+                finally:
+                    work.rmdir()
+                    original.rename(work)
+            assert source_bytes == {path.name:path.read_bytes() for path in session.iterdir() if path.is_file()}
+            with daemon(go, go_env, root / "go-stopped-source-rollback.log"):
+                offered = owner(go_env, resume, timeout=40)
+                assert offered["op"] == "launch", offered
+                active = offered["session"]["id"]
+                session = state / active.split("/")[-1]
+                assert disk(session / "shim-launch.json")["argv"][-2:] == ["--conversation", thread]
+                eventually(lambda: "Antigravity" in visible(go_env) or "trust the contents" in visible(go_env),
+                           "Go rollback terminal")
+                if "trust the contents" in visible(go_env):
+                    input_bytes(go_env, b"\r")
+                resumed_prompt = "AGY_ORIGINAL_GO_SOURCE_RESTORED_24F6"
+                input_bytes(go_env, resumed_prompt.encode(), enter=True)
+                assert transcript_for(resumed_prompt) == transcript
+                with model.guard:
+                    assert any(warmup in call and resumed_prompt in call for call in model.calls)
+                input_bytes(go_env, b"/exit", enter=True)
+                eventually(lambda: disk(session / "meta.json")["status"]["Process"] == "exited",
+                           "Go rollback stopped")
+                assert disk(session / "meta.json")["conversation_id"] == thread
+            print("Rust refused stopped Go agy custody; pinned Go resumed its original conversation", flush=True)
+
         if cold:
             cold_prompt = "AGY_RUST_CREATED_FOR_GO_24F4"
             with daemon(rust, rust_env, root / "rust-create.log"):
@@ -209,4 +285,5 @@ def rehearse(go, rust, native, root, cold=False):
 
 if __name__ == "__main__":
     os.umask(0o077)
-    rehearse(*(Path(arg).resolve(strict=True) for arg in sys.argv[1:5]), cold="--cold" in sys.argv[5:])
+    rehearse(*(Path(arg).resolve(strict=True) for arg in sys.argv[1:5]), cold="--cold" in sys.argv[5:],
+             stopped_source="--stopped-source" in sys.argv[5:])
