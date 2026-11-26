@@ -218,10 +218,18 @@ mod tests {
             &json!(0),
         )
         .unwrap();
+        let turn = format!("turn-{id}");
+        let call = format!("call-{id}");
         partial["source_id"] = json!(id);
         partial["binding"] = binding.clone();
+        partial["turn_id"] = json!(turn);
+        partial["native_call_id"] = json!(call);
+        partial["host_meta"]["callId"] = json!(call);
+        partial["host_meta"]["x-codex-turn-metadata"]["turn_id"] = json!(turn);
         partial["arguments"]["final"] = json!(false);
         partial["call_receipt"]["native_input_id"] = json!(actual_nonce);
+        partial["call_receipt"]["native_turn_id"] = json!(turn);
+        partial["call_receipt"]["native_call_id"] = json!(call);
         partial["output_id"] = json!(format!("partial-{id}"));
         partial["arguments"]["output_id"] = partial["output_id"].clone();
         partial["arguments_hash"] = json!(hash(&partial["arguments"]).unwrap());
@@ -230,7 +238,7 @@ mod tests {
             "state":"sent","body":"On it.","message_id":"401","rest_acknowledged":true});
         next["messages"][id] = json!({"state":"accepted","authority":"owner_direct","author":{"id":"300"},
             "operation_id":origin["request_id"],"revision":origin["revision"],"route":{"channel_id":"400"},
-            "native_binding":binding,"native_input_id":actual_nonce,"native_turn_id":"fixture-turn"});
+            "native_binding":binding,"native_input_id":actual_nonce,"native_turn_id":turn});
         let args = json!({"action_id":"start","agent":"codex","cwd":"/tmp/fixture","prompt":"Run the bounded job."});
         let composer = json!({"origin":origin,"manager_admission":{"binding":binding,"nonce":actual_nonce,"expected_external_input":0}});
         let key =
@@ -240,14 +248,14 @@ mod tests {
         next["manager"]["session"] = binding["session"].clone();
         next["manager"]["binding"] = binding.clone();
         next["manager"]["worker_actions"][&key] = action.clone();
-        next["manager"]["input"] = json!({"source_id":id,"reply_admitted_at":admitted,"turn_id":"fixture-turn",
+        next["manager"]["input"] = json!({"source_id":id,"reply_admitted_at":admitted,"turn_id":turn,
             "composer":composer,"worker_actions":{}});
         next["manager"]["input"]["worker_actions"][&key] = action.clone();
         inbox.save(next).unwrap();
         inbox
             .retire_completed_input(
                 inbox.manager().clone(),
-                &json!({"state":"completed","native_turn_id":"fixture-turn",
+                &json!({"state":"completed","native_turn_id":turn,
             "native_input_id":actual_nonce,"external_input":0}),
                 admitted + 10,
                 &[publication],

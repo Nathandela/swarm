@@ -57,7 +57,7 @@ case "$witness" in
       enrolled|enrolled-deleted|vm|park|vm-worktree|vm-revoked)
         test "$#" -le 4
         set -- "--${4:-enrolled}" ;;
-      enrolled-codex|enrolled-codex-send|enrolled-codex-send-revoked|enrolled-codex-replaced-issuer)
+      enrolled-codex|enrolled-codex-missing-reply|enrolled-codex-send|enrolled-codex-send-revoked|enrolled-codex-replaced-issuer)
         test "$#" -eq 5
         extra_provider=$(realpath "$5")
         test -x "$extra_provider"
