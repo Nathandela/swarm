@@ -15,6 +15,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
+
 	"github.com/bwmarrin/discordgo"
 	bolt "go.etcd.io/bbolt"
 )
@@ -126,6 +128,7 @@ func (t *teammateConnector) externalHandler(bearer string, w http.ResponseWriter
 	}
 	store, install := t.service.Store, t.service.Config.InstallationID
 	var receipt externalReceipt
+	var turns []schema.WorkerFirstTurnReceipt
 	var err error
 	switch r.Method {
 	case http.MethodGet:
@@ -137,6 +140,9 @@ func (t *teammateConnector) externalHandler(bearer string, w http.ResponseWriter
 				err = ErrNotFound
 			}
 			receipt = record.Receipt
+			if err == nil && receipt.State == externalAccepted && r.URL.Query().Get("include") == "worker_first_turns" {
+				turns = t.externalWorkerFirstTurns(record)
+			}
 		} else {
 			err = ErrInvalid
 		}
@@ -157,7 +163,10 @@ func (t *teammateConnector) externalHandler(bearer string, w http.ResponseWriter
 		return
 	}
 	if err == nil {
-		_ = json.NewEncoder(w).Encode(receipt)
+		_ = json.NewEncoder(w).Encode(struct {
+			externalReceipt
+			WorkerFirstTurns []schema.WorkerFirstTurnReceipt `json:"worker_first_turns,omitempty"`
+		}{receipt, turns})
 		return
 	}
 	switch {
@@ -170,6 +179,51 @@ func (t *teammateConnector) externalHandler(bearer string, w http.ResponseWriter
 	default:
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
+}
+
+func externalInputOperation(installation, event string) string {
+	return "external_" + digest([]string{installation, event})[:32]
+}
+
+func (t *teammateConnector) externalWorkerFirstTurns(record externalRecord) []schema.WorkerFirstTurnReceipt {
+	reader, ok := t.manager.(interface {
+		CheckoutStatus(TeammateDiscussion) (TeammateNativeStatus, error)
+	})
+	if !ok {
+		return nil
+	}
+	install, store := t.service.Config.InstallationID, t.service.Store
+	binding, err := store.teammateBindingByID(install, record.Receipt.DiscussionID)
+	starter := Route{GuildID: record.Scope.GuildID, ChannelID: record.Scope.ChannelID, MessageID: record.Input.MessageID}
+	thread := Route{GuildID: starter.GuildID, ChannelID: starter.MessageID, ParentID: starter.ChannelID}
+	if err != nil || binding.Route != thread || record.Receipt.ThreadID != thread.ChannelID ||
+		binding.Starter != starter || binding.FixedProject != record.Scope.Project {
+		return nil
+	}
+	var guard teammateIngressGuard
+	err = store.db.View(func(tx *bolt.Tx) error {
+		return teammateGet(tx.Bucket([]byte(teammateIngressGuardBucket)), teammateKey(install, record.Input.MessageID), &guard)
+	})
+	if err != nil || guard.Disposition != StateSent || guard.ExternalEventID != record.Input.EventID ||
+		guard.DiscussionID != binding.ID || guard.Route != binding.Starter || guard.ActorID != record.Scope.WebhookID ||
+		guard.Revision != record.Hash || guard.OperationID != externalInputOperation(install, record.Input.EventID) {
+		return nil
+	}
+	status, err := reader.CheckoutStatus(binding.TeammateDiscussion)
+	if err != nil {
+		return nil
+	}
+	var turns []schema.WorkerFirstTurnReceipt
+	for _, turn := range status.WorkerFirstTurns {
+		o := turn.Origin
+		if turn.AdmissionID == guard.OperationID && o.RequestID == guard.OperationID && o.Kind == string(AuthorityExternal) &&
+			o.InstallationID == install && o.DiscussionID == binding.ID && o.GuildID == binding.Route.GuildID &&
+			o.ChannelID == binding.Route.ChannelID && o.MessageID == record.Input.MessageID && o.Revision == guard.Revision &&
+			o.ActorID == guard.ActorID && o.RequesterID == guard.ActorID {
+			turns = append(turns, turn)
+		}
+	}
+	return turns
 }
 
 func externalRecordKey(installation, event string) []byte {
@@ -350,7 +404,7 @@ func (t *teammateConnector) processExternal(ctx context.Context, candidate teamm
 			return err
 		}
 		a = &TeammateAdmission{
-			Discussion: binding.TeammateDiscussion, OperationID: "external_" + digest([]string{cfg.InstallationID, record.Input.EventID})[:32],
+			Discussion: binding.TeammateDiscussion, OperationID: externalInputOperation(cfg.InstallationID, record.Input.EventID),
 			Revision: record.Hash, Route: candidate.Route, Authority: AuthorityExternal,
 			Author: candidate.Author, InvokerID: candidate.Author.ID, Sequence: candidate.Sequence, ExpectReply: true,
 		}

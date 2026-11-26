@@ -176,6 +176,16 @@ deadline, and accepting a retry never extends it. Once an operation has
 started, Swarm reconciles its native receipt before deciding whether it can
 dispatch. Task success and Discord publication have their own evidence.
 
+Add `&include=worker_first_turns` to the receipt GET to read verified native
+first turns from direct worker launches by this admission. The optional
+`worker_first_turns` list names the admission, original manager session and
+instance, and each worker session, instance, job, attempt, action and native
+turn. It contains only completed first turns whose proof Swarm retained.
+A missing list means no such proof was available at the time of the read.
+The read leaves the discussion and worker untouched. A first-turn receipt is
+historical evidence about that one native turn. Later turns and task results
+have their own evidence.
+
 Give the submitting service access only to this socket and its bearer. Protect
 the owner-control socket, setup credentials and state from agent processes.
 Project pinning restricts Swarm's manager tools. Use an OS execution boundary

@@ -50,6 +50,8 @@ type TeammateNativeStatus struct {
 	ExternalInput       uint64                  `json:"external_input"`
 	Generation          uint64                  `json:"generation"`
 	Jobs                []TeammateJobStatus     `json:"jobs,omitempty"`
+
+	WorkerFirstTurns []schema.WorkerFirstTurnReceipt `json:"-"`
 }
 
 type TeammateJobStatus struct {

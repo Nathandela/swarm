@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/workermail"
 )
 
 type DiscussionNativeStatus struct {
 	UnconfirmedOutputs                                                    [][]DiscussionOutput
+	WorkerFirstTurns                                                      []schema.WorkerFirstTurnReceipt
 	PendingAdmissions, PendingActions, PendingReplies, UnconfirmedReplies int
 	State, ManagerSession, ManagerInstance, Project, Diagnostic           string
 	Generation, ExternalInput                                             uint64
@@ -175,6 +177,9 @@ func (d *DiscussionController) statusFromState(st State, includeMailbox bool) (D
 		}
 		return a.AttemptID < b.AttemptID
 	})
+	if !includeMailbox {
+		result.WorkerFirstTurns = discussionWorkerFirstTurns(st, d.cfg.ConversationID)
+	}
 	if err := d.noteStatus(st, &result, includeMailbox); err != nil {
 		return result, err
 	}
