@@ -7,10 +7,11 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
-from threading import Thread
+from threading import Event, Thread
 
 from discord_retained_native import activate_original, run
 from parity_codex import model_fixture
@@ -77,13 +78,28 @@ def serve_discord():
     return rest, permissions, wait_for_capture, attempts
 
 
-def witness(base, go, fixture, codex, rust_test=None):
+def witness(base, go, fixture, codex, rust_test=None, interrupt=False):
     for part in ("home", "home/.codex", "bin", "work", "state"):
         (base / part).mkdir(mode=0o700)
     (base / "bin/codex").symlink_to(codex)
     env = fixture_env(base, base / "state", base / "bin")
     env["TERM"] = "xterm-256color"
-    source, calls = model_fixture(base, False)
+    if interrupt:
+        for namespace in ("net", "pid"):
+            name = f"SWARM_NATIVE_FIXTURE_HOST_{namespace.upper()}NS"
+            outer = int(os.environ[name])
+            if outer <= 0 or os.stat(f"/proc/self/ns/{namespace}").st_ino == outer:
+                raise RuntimeError(f"interruption requires an isolated {namespace} namespace")
+            env[name] = str(outer)
+    model_started = Event()
+    release_model = Event()
+    def hold_model(items):
+        if TEXT not in json.dumps(items):
+            raise AssertionError("the native request did not contain the captured guild prompt")
+        model_started.set()
+        assert release_model.wait(timeout=35), "fixture never released the original model request"
+        return "Native loopback reply."
+    source, calls = model_fixture(base, False, answer_for_input=hold_model if interrupt else None)
     rest, permissions, wait_for_capture, posts = serve_discord()
     go_port = str(rest.server_port)
     place = base / "connector"
@@ -112,6 +128,13 @@ def witness(base, go, fixture, codex, rust_test=None):
             start = runtime()
             assert not start.get("native_cli", False) and start["ready_for_input"], start
             assert start["binding"]["session"] == session
+            def native_input(nonce, state=None):
+                report = owner(env, {"op":"manager_input_status", "session_id":session, "body_version":1,
+                    "manager_input_status_request":{"binding":start["binding"], "nonce":nonce}},
+                    caps=("manager-provenance",)).get("manager_input_status")
+                if report and report["native_input_id"] == nonce and report["state"] in ("running", "completed"):
+                    if state is None or report["state"] == state:
+                        return report
             try:
                 if rust_test is None:
                     invoke("guild-record", place, "original-room", "701", "201", "fixture external")
@@ -188,6 +211,45 @@ def witness(base, go, fixture, codex, rust_test=None):
                 assert row["source_id"] == f"discussion:{OP}" and row["origin"]["revision"] == REV, row
                 assert row["origin"]["guild_id"] == "300" and row["origin"]["kind"] == "external"
                 assert not row.get("phase") and not row.get("native_input_id") and calls == [] and posts == []
+                if interrupt:
+                    marker = base / "withheld-ack"
+                    log = base / "interrupted-owner.log"
+                    args = [fixture, "guild-advance", place, go_port, "advance", marker]
+                    own_pid_ns = str(os.stat("/proc/self/ns/pid").st_ino)
+                    refused = subprocess.run(args, env=env | {"SWARM_NATIVE_FIXTURE_HOST_PIDNS": own_pid_ns},
+                                             capture_output=True, timeout=5)
+                    assert refused.returncode != 0 and b"voice: invalid input or transition" in refused.stderr
+                    assert not marker.exists() and pending() == [accepted] and calls == [] and posts == []
+                    print("PASS acknowledgment withholding refused a matching PID namespace before native submission", flush=True)
+                    with log.open("wb") as output:
+                        controller = subprocess.Popen(args, env=env, stdout=output, stderr=subprocess.STDOUT)
+                        controller_fd = os.pidfd_open(controller.pid)
+                        try:
+                            await_value(lambda: marker.exists() and marker.stat().st_size > 0 and model_started.is_set())
+                            receipt = json.loads(marker.read_bytes())
+                            if receipt["pid"] != controller.pid:
+                                raise AssertionError("the withheld receipt belongs to a different process")
+                            operation, nonce = receipt["operation"], receipt["nonce"]
+                            before = await_value(lambda: native_input(nonce, "running"))
+                            if len(calls) != 1 or posts or controller.poll() is not None:
+                                raise AssertionError("the original effect or live controller could not be verified")
+                            signal.pidfd_send_signal(controller_fd, signal.SIGKILL)
+                            assert controller.wait(timeout=5) == -signal.SIGKILL
+                        except Exception:
+                            print(log.read_text(), file=sys.stderr)
+                            raise
+                        finally:
+                            try:
+                                if controller.poll() is None:
+                                    signal.pidfd_send_signal(controller_fd, signal.SIGTERM)
+                                    controller.wait(timeout=5)
+                            finally:
+                                os.close(controller_fd)
+                    assert pending() == [accepted]
+                    interrupted = native(voice)
+                    assert interrupted["phase"] == "executing" and interrupted["source_cutover"]
+                    assert (interrupted["operation_id"], interrupted["native_input_id"]) == (operation, nonce)
+                    assert runtime()["binding"] == start["binding"]
                 invoke("guild-advance", place, go_port, "advance")
                 assert pending() == []
                 row = native(voice)
@@ -196,11 +258,12 @@ def witness(base, go, fixture, codex, rust_test=None):
                 assert len(row["native_input_id"]) == 64 and row["request"]["manager_admission"]["nonce"] == row["native_input_id"]
                 assert row["request"]["session"] == session and row["request"]["session_instance"] == instance
                 await_value(lambda: len(calls) == 1)
-                native_proof = owner(env, {"op":"manager_input_status", "session_id":session, "body_version":1,
-                    "manager_input_status_request":{"binding":start["binding"], "nonce":row["native_input_id"]}},
-                    caps=("manager-provenance",))["manager_input_status"]
-                assert native_proof["native_input_id"] == row["native_input_id"]
-                assert native_proof["state"] in ("running", "completed")
+                native_proof = await_value(lambda: native_input(row["native_input_id"]))
+                if interrupt:
+                    keys = ("sequence", "source_id", "operation_id", "native_input_id", "request")
+                    assert [row[k] for k in keys] == [interrupted[k] for k in keys]
+                    assert row["phase"] == "running" and row["native_turn_id"] == before["native_turn_id"]
+                    assert native_proof["native_turn_id"] == before["native_turn_id"]
                 semantic = owner(env, {"op":"semantic_status", "session_id":session,
                     "operation_id":row["operation_id"]}, caps=("semantic-send",))["semantic_receipt"]
                 assert semantic["operation_id"] == row["operation_id"] and semantic["session"] == session
@@ -209,6 +272,11 @@ def witness(base, go, fixture, codex, rust_test=None):
                 invoke("guild-advance", place, go_port, "advance")
                 assert native(voice) == row and len(calls) == 1 and posts == []
                 assert runtime()["binding"] == start["binding"] and voice.with_name("bridge.auth").read_bytes() == credential
+                if interrupt:
+                    release_model.set()
+                    completed = await_value(lambda: native_input(row["native_input_id"], "completed"))
+                    assert completed["native_turn_id"] == before["native_turn_id"] and len(calls) == 1 and posts == []
+                    print("PASS Go recovered the exact executing operation after SIGKILL at the withheld native acknowledgment", flush=True)
                 print("PASS same Go sending operation produced one authenticated native nonce and no Discord posts", flush=True)
                 sending["Admission"]["Discussion"].pop("supervisor_socket")
                 return sending
@@ -220,6 +288,7 @@ def witness(base, go, fixture, codex, rust_test=None):
                     if original["role"] == "manager":
                         owner(env, {"op": "kill", "session_id": original["id"]})
     finally:
+        release_model.set()
         rest.shutdown()
         rest.server_close()
         source.shutdown()
@@ -228,8 +297,12 @@ def witness(base, go, fixture, codex, rust_test=None):
 
 if __name__ == "__main__":
     assert os.stat("/proc/self/ns/net").st_ino != int(os.environ["SWARM_NATIVE_FIXTURE_HOST_NETNS"])
-    with tempfile.TemporaryDirectory(prefix="gp-") as root:
-        first = witness(Path(root).resolve(), *sys.argv[1:4])
-    if len(sys.argv) == 5:
+    if len(sys.argv) == 6 and sys.argv[5] == "--interrupt-after-native":
         with tempfile.TemporaryDirectory(prefix="gp-") as root:
-            assert first == witness(Path(root).resolve(), *sys.argv[1:]), "Rust differs from Go's sending row"
+            witness(Path(root).resolve(), *sys.argv[1:5], interrupt=True)
+    else:
+        with tempfile.TemporaryDirectory(prefix="gp-") as root:
+            first = witness(Path(root).resolve(), *sys.argv[1:4])
+        if len(sys.argv) == 5:
+            with tempfile.TemporaryDirectory(prefix="gp-") as root:
+                assert first == witness(Path(root).resolve(), *sys.argv[1:]), "Rust differs from Go's sending row"

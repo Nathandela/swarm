@@ -32,3 +32,12 @@ func (r *Runtime) FixtureNativeParentSettled(bound discord.TeammateDiscussion, m
 	defer r.release(entry)
 	return entry.voice.FixtureNativeParentSettled(message)
 }
+
+func (r *Runtime) FixtureWithholdGuildAck(ctx context.Context, bound discord.TeammateDiscussion, marker string) error {
+	entry, err := r.discussion(bound, nil, false)
+	if err != nil {
+		return err
+	}
+	defer r.release(entry)
+	return entry.voice.FixtureWithholdGuildAck(ctx, marker)
+}

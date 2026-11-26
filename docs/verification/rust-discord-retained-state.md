@@ -78,6 +78,8 @@ The isolated Linux witness compares Rust's prepared row with the row written by 
 
 Run `python3 scripts/verification/discord_retained_guild_prepare.py PINNED_GO PINNED_GO_FIXTURE CODEX RUST_TEST_BINARY` inside an isolated Linux network namespace. Set `SWARM_NATIVE_FIXTURE_HOST_NETNS` to the outer network namespace inode. The Rust binary is the `cargo test --locked -p swarm --bin swarm --no-run` test executable.
 
+Append `--interrupt-after-native` to exercise recovery from an interrupted Go controller. Use a separate Linux PID namespace as well and set `SWARM_NATIVE_FIXTURE_HOST_PIDNS` to the outer PID namespace inode. The fixture holds the signed supervisor's actual acknowledgment at the controller boundary. It signals only the fixture child through its pidfd, after the synthetic inference server receives the exact guild prompt and the supervisor reports the matching native input running. Go reopens the same Voice record in `executing`, recovers the same operation, nonce and native turn, and settles the original connector row. The model then completes its one request. Replaying the Discord message adds no work and the fixture records zero Discord POSTs.
+
 Run the nine tests that use the pinned Go helper built above as an explicit group.
 
 ```sh

@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +18,55 @@ import (
 	"github.com/Nathandela/swarm/internal/workermail"
 	bolt "go.etcd.io/bbolt"
 )
+
+type fixtureWithheldGuildAck struct {
+	*ProtocolControllerClient
+	ctx    context.Context
+	marker string
+}
+
+func (r fixtureWithheldGuildAck) SemanticSend(operation string, request protocol.ComposerSendReq) error {
+	if request.ManagerAdmission == nil {
+		return ErrInvalid
+	}
+	if err := r.ProtocolControllerClient.SemanticSend(operation, request); err != nil {
+		return err
+	}
+	receipt, err := json.Marshal(map[string]any{"pid": os.Getpid(), "operation": operation, "nonce": request.ManagerAdmission.Nonce})
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(r.marker, receipt, 0600); err != nil {
+		return err
+	}
+	// The real supervisor already replied. Leave the controller at its durable executing cut.
+	<-r.ctx.Done()
+	return r.ctx.Err()
+}
+
+func (d *DiscussionController) FixtureWithholdGuildAck(ctx context.Context, marker string) error {
+	for _, namespace := range []string{"net", "pid"} {
+		current, err := os.Readlink("/proc/self/ns/" + namespace)
+		if err != nil {
+			return err
+		}
+		outer, err := strconv.ParseUint(os.Getenv("SWARM_NATIVE_FIXTURE_HOST_"+strings.ToUpper(namespace)+"NS"), 10, 64)
+		if err != nil || outer == 0 || current == fmt.Sprintf("%s:[%d]", namespace, outer) {
+			return ErrInvalid
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.controller == nil {
+		return ErrStale
+	}
+	client, ok := d.controller.runtime.(*ProtocolControllerClient)
+	if !ok {
+		return ErrStale
+	}
+	d.controller.runtime = fixtureWithheldGuildAck{client, ctx, marker}
+	return nil
+}
 
 func FixturePersonalIngress(dir, conversation, session string, origin schema.MessageOrigin, phase, project string) error {
 	store, err := OpenStore(dir)
