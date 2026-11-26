@@ -113,9 +113,6 @@ fn resolve_slot(
     {
         return Err(invalid("dispatcher supervisor identity changed"));
     }
-    if caps.iter().any(|cap| !client.supports(cap)) {
-        return Err(invalid("linked dispatcher capability was not negotiated"));
-    }
     if client.endpoint() == local_endpoint {
         return Ok(None);
     }
