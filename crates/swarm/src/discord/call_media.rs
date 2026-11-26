@@ -152,6 +152,31 @@ impl Media {
 
     pub(super) fn poll(&mut self) -> io::Result<Option<Event>> {
         let exited = crate::supervisor::runtime::child_exited(&self.child)?;
+        // A terminating helper can queue audio before its final rekey fault.
+        for _ in 0..32 {
+            let Some(event) = self.read_event(exited)? else {
+                if exited {
+                    continue;
+                }
+                return Ok(None);
+            };
+            if self.ready && event["type"] == "fault" && event["code"] == "dave_changed" {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "DAVE epoch changed",
+                ));
+            }
+            if !exited {
+                return self.validate(event).map(Some);
+            }
+            if !self.ready || event["type"] == "fault" {
+                break;
+            }
+        }
+        Err(invalid("call helper exited"))
+    }
+
+    fn read_event(&mut self, exited: bool) -> io::Result<Option<Value>> {
         if !self.buffered.contains(&b'\n') {
             let mut chunk = [0_u8; MAX_LINE + 1];
             // MSG_DONTWAIT leaves the separate bounded write behavior intact.
@@ -188,25 +213,12 @@ impl Media {
             return Err(invalid("call helper event exceeds pipe limit"));
         }
         let Some(split) = split else {
-            return if exited {
-                Err(invalid("call helper exited"))
-            } else {
-                Ok(None)
-            };
+            return Ok(None);
         };
-        let event: Value = serde_json::from_slice(&self.buffered[..split])
+        let event = serde_json::from_slice(&self.buffered[..split])
             .map_err(|_| invalid("invalid call helper event"))?;
         self.buffered.drain(..=split);
-        if self.ready && event["type"] == "fault" && event["code"] == "dave_changed" {
-            return Err(io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                "DAVE epoch changed",
-            ));
-        }
-        if exited {
-            return Err(invalid("call helper exited"));
-        }
-        self.validate(event).map(Some)
+        Ok(Some(event))
     }
 
     fn validate(&mut self, event: Value) -> io::Result<Event> {
@@ -310,11 +322,10 @@ read -r server
 printf '%s
 ' '{"type":"ready"}'
 read -r clear
-printf '%s
-' '{"type":"fault","code":"dave_changed"}'
+printf '%s\n' '{"type":"audio","userId":"4","pcm":"FRAME"}' '{"type":"fault","code":"dave_changed"}'
 exit 1
 "#;
-        fs::write(&helper, script).unwrap();
+        fs::write(&helper, script.replace("FRAME", &"A".repeat(PCM_ENCODED))).unwrap();
         fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
         let mut media =
             Media::start(&Helper::Fixture(helper), "1", "2", "3", vec!["4".into()]).unwrap();
@@ -324,7 +335,11 @@ exit 1
         media.gateway(&json!({"t":"VOICE_SERVER_UPDATE","d":{"guild_id":"1","endpoint":"voice.invalid","token":"fixture"}})).unwrap();
         assert!(matches!(wait(&mut media).unwrap(), Event::Ready));
         media.silence().unwrap();
-        std::thread::sleep(Duration::from_millis(20));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !crate::supervisor::runtime::child_exited(&media.child).unwrap() {
+            assert!(Instant::now() < deadline, "fixture helper did not exit");
+            std::thread::sleep(Duration::from_millis(2));
+        }
         assert!(
             matches!(wait(&mut media),Err(err) if err.kind() == io::ErrorKind::ConnectionAborted)
         );
