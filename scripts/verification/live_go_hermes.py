@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import signal
 import socket
 import sqlite3
 import subprocess
@@ -56,8 +57,11 @@ PROMPTS = ("SWARM_GO_HERMES_FIRST", "SWARM_RUST_HERMES_CONTINUED", "SWARM_GO_HER
 def wait_for(check, label):
     end = time.monotonic() + 30
     while time.monotonic() < end:
-        if result := check():
-            return result
+        try:
+            if result := check():
+                return result
+        except (ConnectionError, TimeoutError):
+            pass
         time.sleep(.1)
     raise AssertionError(f"timed out waiting for {label}")
 
@@ -175,7 +179,7 @@ def rehearse(go, rust, hermes, root, gateway_backed=False):
                 gateway = subprocess.Popen(guarded(
                     [str(hermes), "gateway", "run", "--no-supervise", "--force"], root, ports),
                     env=go_env | {"HERMES_ALLOW_ROOT_GATEWAY": "1"}, cwd=work,
-                    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+                    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             _, descriptor = wait_for(gateway_identity, "private Hermes gateway")
             ports.append(int(descriptor["api_origin"].rsplit(":", 1)[1]))
             check_guards(root, ports)
@@ -236,7 +240,6 @@ def rehearse(go, rust, hermes, root, gateway_backed=False):
                                   capture_output=True, text=True, timeout=15)
         assert exported.returncode and "use the original Go supervisor" in exported.stderr, exported.stderr
         assert gateway_identity() == baseline[-1]
-        print("Pinned Go → Rust → pinned Go retained the Hermes classic PTY and completed three turns in one native conversation.")
     finally:
         try:
             if active and not (session / "exit.json").exists():
@@ -245,14 +248,15 @@ def rehearse(go, rust, hermes, root, gateway_backed=False):
                     wait_for(lambda: (session / "exit.json").exists(), "fixture cleanup")
         finally:
             if gateway and gateway.poll() is None:
-                gateway.terminate()
+                os.killpg(gateway.pid, signal.SIGTERM)
                 try:
-                    gateway.wait(timeout=10)
+                    gateway.wait(timeout=25)
                 except subprocess.TimeoutExpired:
-                    gateway.kill()
-                    gateway.wait(timeout=5)
+                    os.killpg(gateway.pid, signal.SIGKILL)
+                    gateway.wait(timeout=15)
             model.shutdown()
             model.server_close()
+    print("Pinned Go → Rust → pinned Go retained the Hermes classic PTY and completed three turns in one native conversation.")
 
 
 if __name__ == "__main__":
