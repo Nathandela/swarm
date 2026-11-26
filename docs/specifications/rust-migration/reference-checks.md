@@ -59,7 +59,7 @@ Once v0.29.25 became available, the original checksum manifest verified with the
 
 ## v0.29.24 and v0.29.25 release reconciliation
 
-On November 26 the GitHub releases API reported v0.29.25 as the latest stable release, published at 15:49 UTC. The GitHub tag comparisons resolved to the same commits and file sets as the local Go checkout. The independent Discord call oracle remains `da7b9f2d`. [v0.29.24 source comparison](https://github.com/Nathandela/swarm/compare/v0.29.23...v0.29.24) · [v0.29.25 source comparison](https://github.com/Nathandela/swarm/compare/v0.29.24...v0.29.25) · [GitHub stable release](https://github.com/Nathandela/swarm/releases/tag/v0.29.25)
+On November 26 the GitHub releases API reported v0.29.25 as the latest stable release at the initial reconciliation, published at 15:49 UTC. The GitHub tag comparisons resolved to the same commits and file sets as the local Go checkout. The independent Discord call oracle remains `da7b9f2d`. [v0.29.24 source comparison](https://github.com/Nathandela/swarm/compare/v0.29.23...v0.29.24) · [v0.29.25 source comparison](https://github.com/Nathandela/swarm/compare/v0.29.24...v0.29.25) · [v0.29.25 release](https://github.com/Nathandela/swarm/releases/tag/v0.29.25)
 
 | Go release change | Rust behavior and evidence | Remaining qualification |
 | --- | --- | --- |
@@ -72,7 +72,18 @@ On November 26 the GitHub releases API reported v0.29.25 as the latest stable re
 
 The complete v0.29.25 normal source round passed 97 test-bearing packages with eight packages containing no tests. The runner was the macOS arm64 host using the Darwin x86_64 Go 1.26.5 toolchain under Rosetta, with umask `022` and `-count=1 -p=1 -parallel=1 -timeout 35m`. The normal round log SHA-256 is `aa9740e40bf391148b6f3d8f4c0d2b802c5f72533713687bbdd1a12fe0cb5f0c`. The separately downloaded signed v0.29.25 binaries and the Rust qualification arms use the native architectures listed above.
 
-Go `main` also advanced six commits past the signed tag to `7f67c067f153f4c1cdd13f3cb20d9610dc6ca9cf`. The unreleased change broadens the worker attachment formats, makes filenames stable through Discord, refuses hidden and credential paths, and adds an opt-in live test. The final merge retains the v0.29.25 HTTP 413 handling. Beads `agents-tracker-8fp1.9.2` tracks this source comparison and the corresponding Rust work. [Unreleased Go main comparison](https://github.com/Nathandela/swarm/compare/v0.29.25...7f67c067f153f4c1cdd13f3cb20d9610dc6ca9cf)
+## v0.29.26 worker attachments
+
+Go `main` advanced six commits past the previous signed tag to `7f67c067f153f4c1cdd13f3cb20d9610dc6ca9cf`. GitHub published that exact source as v0.29.26 at 17:20 UTC. It broadens worker attachment formats, makes filenames stable through Discord, refuses hidden and credential paths, and adds an opt-in live test. The final merge retains the v0.29.25 HTTP 413 handling. Beads `agents-tracker-8fp1.9.2` tracks the parity work. [v0.29.26 source comparison](https://github.com/Nathandela/swarm/compare/v0.29.25...v0.29.26) · [v0.29.26 release](https://github.com/Nathandela/swarm/releases/tag/v0.29.26)
+
+The original checksum manifest verified with the pinned Ed25519 key, and the verifier rejected a one-byte change. Both signed executables ran natively and reported `swarm 0.29.26 (go1.26.11)`.
+
+| Executed v0.29.26 reference | Signed archive SHA-256 | Extracted Swarm SHA-256 |
+| --- | --- | --- |
+| Darwin arm64 (universal archive) | `5444440e83ff2806fa1a1f60496e4892c7eeb826ab13dd61be7abcdf597273d6` | `b6b621cb6cf91b71e17cba54fff91a3cdda3c862e145b029c42e51f6728bf663` |
+| `tf_nathan` Linux x86_64 | `58cc17331cc8357f0bf5a8b639afa010b50d1d0b3d8d8e78c8d4bf455149ca9e` | `629ffb0eca67906dfefcbe3f0e5c63e648f8973c05bcd486fd83a15dd3d8859b` |
+
+The six new offline Go attachment tests passed from exact source on macOS arm64 and isolated Linux x86_64, including the unsafe file-set subtests. The native Mac compiler was Go 1.26.10 and also produced the Linux test executables. Log SHA-256 is `acf747d858759400344a269b2c1dacdd29179b36a9e497ffd45e4193e4337511` on macOS and `91066987d9d3caa05daeddd58c3d84b00ef12ceca5211e1a76390544cd8f06e1` on Linux. Rust's paired capture and attachment-only loopback checks read the same Go source and retained the original v0.29.25 publication behavior. Live user-origin attachment delivery remains open. [Rust attachment witness](../../verification/rust-discord-retained-state.md)
 
 ## M0 source build repeatability on Apple Silicon
 

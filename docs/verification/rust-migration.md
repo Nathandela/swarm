@@ -6,7 +6,7 @@ Nathan approved preserving the combining accent after reattach, delivering exact
 
 ## Current Go reference
 
-The latest stable comparison is signed Go v0.29.25 at `44d796734fc60f6f9b9d6705dca44736f0c5741b`. The current source comparison is Go main at `7f67c067f153f4c1cdd13f3cb20d9610dc6ca9cf`, which adds unreleased changes to Discord worker files. The release reconciliation records the Rust evidence and remaining gates for each change in v0.29.24 and v0.29.25. [Release comparisons and signatures](../specifications/rust-migration/reference-checks.md#v02924-and-v02925-release-reconciliation)
+The latest stable comparison is signed Go v0.29.26 at `7f67c067f153f4c1cdd13f3cb20d9610dc6ca9cf`. Both native binaries verified and ran. The release reconciliation records Rust evidence for the scheduled opening fixes, quieter Discord threads and the expanded worker file types. [v0.29.24 and v0.29.25 reconciliation](../specifications/rust-migration/reference-checks.md#v02924-and-v02925-release-reconciliation) · [v0.29.26 reference and evidence](../specifications/rust-migration/reference-checks.md#v02926-worker-attachments)
 
 ## November 26 combined implementation
 
