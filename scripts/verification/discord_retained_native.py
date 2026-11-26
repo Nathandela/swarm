@@ -45,7 +45,8 @@ def exercise(go, fixture, codex, rust_test, base):
                 assert auth.stat().st_mode & 0o777 == 0o600
                 original_credential = auth.read_bytes()
                 assert calls == []
-                test_env = env | {"SWARM_TEST_DISCORD_ACTIVE_ROOT": str(base / "state")}
+                test_env = env | {"SWARM_TEST_DISCORD_ACTIVE_ROOT": str(base / "state"),
+                                  "SWARM_TEST_DISCORD_ACTIVE_FIXTURE": fixture}
                 run(rust_test, test_env, "retained_original_go_native_manager_roundtrip", "--nocapture")
                 await_value(lambda: len(calls) >= 1)
                 reopened = json.loads(run(fixture, env, "activate", place, "original-room"))

@@ -346,22 +346,31 @@ pub(super) fn with(
         println!("The original Go queue has this personal DM.");
         return Ok(true);
     }
-    let _config = place.lock()?;
-    let _bridge = runtime::lock(&place.dir.join("bridge.lock"))?;
+    let expected = fs::symlink_metadata(&source)?;
+    let mut lease = ConnectorLease::open(place, &cfg, message, &expected)?;
+    under_lease(place, &cfg, message, &mut lease, fetch)
+}
+
+pub(super) fn under_lease(
+    place: &Place,
+    cfg: &Config,
+    message: &str,
+    lease: &mut ConnectorLease,
+    fetch: impl FnOnce(&Config, &str) -> io::Result<Value>,
+) -> io::Result<bool> {
     if prepared_config(place, message)?.0 != cfg.0 {
         return Err(invalid());
     }
-    let (source_pin, mut db) = bounded_writer(writable_pin(&source)?)?;
-    let mut tx = db.begin_rw().map_err(io::Error::other)?;
-    let input = fetch(&cfg, message)?;
+    let mut tx = lease.db.begin_rw().map_err(io::Error::other)?;
+    let input = fetch(cfg, message)?;
     let text = input["content"]
         .as_str()
         .filter(|s| !s.trim().is_empty() && s.len() <= 4096 && !s.contains('\0'))
         .ok_or_else(invalid)?;
-    let (key, row, origin, c) = incoming(&tx, &cfg, message, &input)?;
-    require_repaired(&tx, &cfg, &c.binding)?;
-    require_after_boundary(&tx, &cfg, &c.binding, message)?;
-    let (directory, id, endpoint) = voice_location(place, &cfg, &c)?;
+    let (key, row, origin, c) = incoming(&tx, cfg, message, &input)?;
+    require_repaired(&tx, cfg, &c.binding)?;
+    require_after_boundary(&tx, cfg, &c.binding, message)?;
+    let (directory, id, endpoint) = voice_location(place, cfg, &c)?;
     open_owner_file(&directory.join("voice.initialized"))?;
     let voice_path = directory.join("voice.db");
     let (voice_pin, mut voice_db) = bounded_writer(writable_pin(&voice_path)?)?;
@@ -374,7 +383,7 @@ pub(super) fn with(
         }
         return Err(invalid());
     }
-    let mut voice = read_voice(&voice_tx, &id, &cfg, &endpoint)?;
+    let mut voice = read_voice(&voice_tx, &id, cfg, &endpoint)?;
     let settings = crate::manager_prompt::load(place.supervisor_root())?;
     let (voice_key, admission) =
         make_admission(&mut voice, &origin, &row["Author"], text, &settings)?;
@@ -382,7 +391,7 @@ pub(super) fn with(
         .ok_or_else(invalid)?
         .put(&key, go_bytes(&row)?)
         .map_err(io::Error::other)?;
-    if candidate(&tx, &cfg, message)?
+    if candidate(&tx, cfg, message)?
         .ok_or_else(invalid)?
         .pending_count
         != 1
@@ -390,7 +399,7 @@ pub(super) fn with(
         return Err(invalid());
     }
     stage(&mut voice_tx, voice, &voice_key, &admission)?;
-    if !identity(&source_pin, &source)? || !identity(&voice_pin, &voice_path)? {
+    if !identity(&lease.pin, &lease.source)? || !identity(&voice_pin, &voice_path)? {
         return Err(invalid());
     }
     // Connector first. If interrupted, Go sees a genuine pending input with

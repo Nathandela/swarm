@@ -7,7 +7,7 @@ use super::{
     legacy_state::{bounded_writer, verify_controls_place, writable_pin},
 };
 use crate::{checkout::state::receipts::open_bolt, ipc::field, supervisor, supervisor::runtime};
-use bbolt_rs::{BucketApi, BucketRwApi, DbApi, DbRwAPI, TxApi, TxRwApi, TxRwRefApi};
+use bbolt_rs::{Bolt, BucketApi, BucketRwApi, DbApi, DbRwAPI, TxApi, TxRwApi, TxRwRefApi};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -330,6 +330,50 @@ fn scope(place: &Place, message: &str) -> io::Result<Config> {
     Ok(cfg)
 }
 
+struct ConnectorLease {
+    _configuration: (fs::File, fs::File),
+    _bridge: fs::File,
+    source: PathBuf,
+    pin: fs::File,
+    db: Bolt,
+}
+
+impl ConnectorLease {
+    fn open(
+        place: &Place,
+        cfg: &Config,
+        message: &str,
+        expected: &fs::Metadata,
+    ) -> io::Result<Self> {
+        let configuration = place.lock()?;
+        let bridge = runtime::lock(&place.dir.join("bridge.lock"))?;
+        if scope(place, message)?.0 != cfg.0 {
+            return Err(invalid());
+        }
+        let source = place.dir.join("discord.db");
+        let original = writable_pin(&source)?;
+        let found = original.metadata()?;
+        if (expected.dev(), expected.ino()) != (found.dev(), found.ino()) {
+            return Err(invalid());
+        }
+        let (pin, db) = bounded_writer(original)?;
+        if !identity(&pin, &source)? {
+            return Err(invalid());
+        }
+        Ok(Self {
+            _configuration: configuration,
+            _bridge: bridge,
+            source,
+            pin,
+            db,
+        })
+    }
+
+    fn source_unchanged(&self) -> io::Result<bool> {
+        identity(&self.pin, &self.source)
+    }
+}
+
 fn voice_location(
     place: &Place,
     cfg: &Config,
@@ -393,25 +437,35 @@ pub(super) fn settle(place: &Place, message: &str, dry_run: bool) -> io::Result<
             return Ok(true);
         }
     }
-    let _config = place.lock()?;
-    let _bridge = runtime::lock(&place.dir.join("bridge.lock"))?;
-    if place.load()?.0 != cfg.0 || place.dir.join("bridge.sock").symlink_metadata().is_ok() {
-        return Err(invalid());
-    }
-    verify_controls_place(place, &cfg)?;
-    let original = writable_pin(&source)?;
-    let opened = original.metadata()?;
-    if (source_identity.dev(), source_identity.ino()) != (opened.dev(), opened.ino()) {
-        return Err(invalid());
-    }
-    let (pin, mut db) = bounded_writer(original)?;
-    let mut tx = db.begin_rw().map_err(io::Error::other)?;
-    let Some(row) = candidate(&tx, &cfg, message)? else {
+    let mut lease = ConnectorLease::open(place, &cfg, message, &source_identity)?;
+    settle_under_lease(place, &cfg, message, &mut lease)
+}
+
+fn settle_under_lease(
+    place: &Place,
+    cfg: &Config,
+    message: &str,
+    lease: &mut ConnectorLease,
+) -> io::Result<bool> {
+    let mut tx = lease.db.begin_rw().map_err(io::Error::other)?;
+    let Some(row) = candidate(&tx, cfg, message)? else {
         println!("Original personal ingress is already settled.");
         return Ok(true);
     };
-    let (mut c, voice, _voice_db, voice_path, phase) = stage(row)?;
-    if !identity(&pin, &source)? || !identity(&voice, &voice_path)? {
+    let (directory, id, endpoint) = voice_location(place, cfg, &row)?;
+    let (voice, _voice_db, receipt) = controller(
+        &directory,
+        &id,
+        &row.origin,
+        cfg.text("manager_cli"),
+        &endpoint,
+    )?;
+    let phase = field(&receipt.admission, "phase");
+    let mut c = row;
+    if receipt.admission["source_cutover"] != true
+        || !identity(&lease.pin, &lease.source)?
+        || !identity(&voice, &directory.join("voice.db"))?
+    {
         return Err(invalid());
     }
     let boundary = c.binding["Boundary"].as_str().ok_or_else(invalid)?;
@@ -585,14 +639,42 @@ fn dispatch_with(
 ) -> io::Result<bool> {
     let cfg = scope(place, message)?;
     let source = place.dir.join("discord.db");
-    let (source_pin, db) = open_bolt(&source, 64 << 20)?;
-    let c = {
-        let tx = db.begin().map_err(io::Error::other)?;
-        let c = candidate(&tx, &cfg, message)?.ok_or_else(invalid)?;
-        require_repaired(&tx, &cfg, &c.binding)?;
-        c
-    };
-    let (directory, id, endpoint) = voice_location(place, &cfg, &c)?;
+    let expected = fs::symlink_metadata(&source)?;
+    if dry_run {
+        let (_pin, db) = open_bolt(&source, 64 << 20)?;
+        let c = pending_dispatch(&db, &cfg, message)?;
+        let (directory, id, endpoint) = voice_location(place, &cfg, &c)?;
+        let (_pin, _voice, receipt) = controller(
+            &directory,
+            &id,
+            &c.origin,
+            cfg.text("manager_cli"),
+            &endpoint,
+        )?;
+        validate_prepared(&receipt)?;
+        println!("Verified a prepared original personal DM with no native cutover recorded.");
+        return Ok(true);
+    }
+    let mut lease = ConnectorLease::open(place, &cfg, message, &expected)?;
+    dispatch_under_lease(place, &cfg, message, &mut lease, fetch)
+}
+
+fn pending_dispatch(db: &impl DbApi, cfg: &Config, message: &str) -> io::Result<Candidate> {
+    let tx = db.begin().map_err(io::Error::other)?;
+    let c = candidate(&tx, cfg, message)?.ok_or_else(invalid)?;
+    require_repaired(&tx, cfg, &c.binding)?;
+    Ok(c)
+}
+
+fn dispatch_under_lease(
+    place: &Place,
+    cfg: &Config,
+    message: &str,
+    lease: &mut ConnectorLease,
+    fetch: impl FnOnce(&Config) -> io::Result<Value>,
+) -> io::Result<bool> {
+    let c = pending_dispatch(&lease.db, cfg, message)?;
+    let (directory, id, endpoint) = voice_location(place, cfg, &c)?;
     let (voice_pin, voice_db, receipt) = controller(
         &directory,
         &id,
@@ -601,18 +683,9 @@ fn dispatch_with(
         &endpoint,
     )?;
     validate_prepared(&receipt)?;
-    if dry_run {
-        println!("Verified a prepared original personal DM with no native cutover recorded.");
-        return Ok(true);
-    }
     let voice_identity = voice_pin.metadata()?;
     drop(voice_db);
     drop(voice_pin);
-    let _config = place.lock()?;
-    let _bridge = runtime::lock(&place.dir.join("bridge.lock"))?;
-    if scope(place, message)?.0 != cfg.0 || !identity(&source_pin, &source)? {
-        return Err(invalid());
-    }
     let voice_path = directory.join("voice.db");
     let (write_pin, mut writer) = bounded_writer(writable_pin(&voice_path)?)?;
     let written_identity = write_pin.metadata()?;
@@ -674,9 +747,10 @@ fn dispatch_with(
         return Err(invalid());
     }
     open_owner_file(&directory.join("bridge.auth"))?;
-    let fresh = fetch(&cfg)?;
+    let fresh = fetch(cfg)?;
     if original_revision(&fresh, &c.origin)? != c.origin["revision"]
         || !identity(&write_pin, &voice_path)?
+        || !lease.source_unchanged()?
     {
         return Err(invalid());
     }
@@ -729,7 +803,6 @@ fn capture_with(
     let identity = fs::symlink_metadata(&source)?;
     let install = cfg.text("installation_id");
     let channel = cfg.text("dm_channel_id");
-    let actor = cfg.text("owner_id");
     let key = format!("{install}\0{message}").into_bytes();
     let active_key = format!("{install}\0{channel}").into_bytes();
     {
@@ -744,22 +817,26 @@ fn capture_with(
         println!("Original Go ingress can accept a new owner DM after source verification.");
         return Ok(true);
     }
-    let _cfg = place.lock()?;
-    let _bridge = runtime::lock(&place.dir.join("bridge.lock"))?;
-    if scope(place, message)?.0 != cfg.0 {
-        return Err(invalid());
-    }
-    let file = writable_pin(&source)?;
-    let opened = file.metadata()?;
-    if (opened.dev(), opened.ino()) != (identity.dev(), identity.ino()) {
-        return Err(invalid());
-    }
-    let (pin, mut db) = bounded_writer(file)?;
-    let mut tx = db.begin_rw().map_err(io::Error::other)?;
-    let Some(mut binding) = capture_binding(&tx, &cfg, message, &key, &active_key)? else {
+    let mut lease = ConnectorLease::open(place, &cfg, message, &identity)?;
+    capture_under_lease(&cfg, message, &mut lease, fetch)
+}
+
+fn capture_under_lease(
+    cfg: &Config,
+    message: &str,
+    lease: &mut ConnectorLease,
+    fetch: impl FnOnce(&Config, &str) -> io::Result<Value>,
+) -> io::Result<bool> {
+    let install = cfg.text("installation_id");
+    let channel = cfg.text("dm_channel_id");
+    let actor = cfg.text("owner_id");
+    let key = format!("{install}\0{message}").into_bytes();
+    let active_key = format!("{install}\0{channel}").into_bytes();
+    let mut tx = lease.db.begin_rw().map_err(io::Error::other)?;
+    let Some(mut binding) = capture_binding(&tx, cfg, message, &key, &active_key)? else {
         return Ok(true);
     };
-    let input = fetch(&cfg, message)?;
+    let input = fetch(cfg, message)?;
     original_revision(
         &input,
         &json!({"message_id":message,"channel_id":channel,"actor_id":actor}),
@@ -768,7 +845,7 @@ fn capture_with(
         .as_str()
         .filter(|name| !name.is_empty() && name.len() <= 256 && !name.chars().any(char::is_control))
         .ok_or_else(invalid)?;
-    if !self::identity(&pin, &source)? {
+    if !identity(&lease.pin, &lease.source)? {
         return Err(invalid());
     }
     let sequence = {
@@ -1176,16 +1253,29 @@ mod tests {
         let place = Place::for_supervisor(Path::new(&root)).unwrap();
         let current = json!({"author":{"id":"200","username":"synthetic owner"},"channel_id":"400","id":"701",
             "content":"Retained real native loopback input.", "type":0, "attachments":[]});
-        assert!(capture_with(&place, "701", false, |_, _| Ok(current.clone())).unwrap());
-        assert!(prepare::with(&place, "701", false, |_, _| Ok(current.clone())).unwrap());
-        assert!(dispatch_with(&place, "701", false, |_| Ok(current)).unwrap());
-        let cfg = place.load().unwrap();
-        let request = {
-            let source = place.dir.join("discord.db");
-            let (_pin, db) = open_bolt(&source, 64 << 20).unwrap();
-            let c = candidate(&db.begin().unwrap(), &cfg, "701")
-                .unwrap()
+        let cfg = scope(&place, "701").unwrap();
+        let source = place.dir.join("discord.db");
+        let expected = fs::symlink_metadata(&source).unwrap();
+        let mut lease = ConnectorLease::open(&place, &cfg, "701", &expected).unwrap();
+        assert!(open_bolt(&source, 64 << 20).is_err());
+        if let Some(fixture) = std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_FIXTURE") {
+            let other = Command::new(fixture)
+                .arg("activate")
+                .arg(&place.dir)
+                .arg("original-room")
+                .output()
                 .unwrap();
+            assert!(!other.status.success());
+            assert!(String::from_utf8_lossy(&other.stderr).contains("timeout"));
+        }
+        assert!(capture_under_lease(&cfg, "701", &mut lease, |_, _| Ok(current.clone())).unwrap());
+        assert!(
+            prepare::under_lease(&place, &cfg, "701", &mut lease, |_, _| Ok(current.clone()))
+                .unwrap()
+        );
+        assert!(dispatch_under_lease(&place, &cfg, "701", &mut lease, |_| Ok(current)).unwrap());
+        let request = {
+            let c = pending_dispatch(&lease.db, &cfg, "701").unwrap();
             let (directory, id, endpoint) = voice_location(&place, &cfg, &c).unwrap();
             let (_pin, _db, receipt) =
                 controller(&directory, &id, &c.origin, "codex", &endpoint).unwrap();
@@ -1227,7 +1317,7 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        assert!(settle(&place, "701", false).unwrap());
+        assert!(settle_under_lease(&place, &cfg, "701", &mut lease).unwrap());
     }
 
     #[test]
