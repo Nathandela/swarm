@@ -104,6 +104,14 @@ pub(crate) fn connector_intent(scope: &Value) -> io::Result<Value> {
     Ok(data)
 }
 
+pub(crate) fn lock_manager_mail_effect(scope: &Value) -> io::Result<std::fs::File> {
+    let place = Path::new(ipc::field(&scope["launch"]["manager"], "auth_file"))
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| invalid("missing manager mailbox custody directory"))?;
+    crate::supervisor::runtime::lock(&place.join(".rust-manager-mail-effect.lock"))
+}
+
 pub(crate) fn verify_connector_input(
     scope: &Value,
     operation: &str,

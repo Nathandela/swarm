@@ -23,7 +23,7 @@
 +				}
 +				if _, err := os.Stat(".fixture-mail-wake-enabled"); err == nil {
 +					go func() {
-+						for range 150 {
++						for range 375 {
 +							if _, err := os.Stat(".fixture-mail-complete"); err == nil {
 +								s.broadcast("turn/completed", map[string]any{"threadId": fakeThreadID, "turn": map[string]any{"id": turn, "status": "completed"}})
 +								s.broadcast("thread/status/changed", map[string]any{"threadId": fakeThreadID, "status": map[string]any{"type": "idle"}})

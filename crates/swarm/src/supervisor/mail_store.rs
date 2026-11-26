@@ -253,6 +253,7 @@ pub(crate) fn lookup(root: &Path, binding: &Value, id: &str) -> io::Result<Value
 pub(crate) fn pending(
     root: &Path,
     discussion: &str,
+    after: u64,
     matches: impl Fn(&Value) -> bool,
 ) -> io::Result<Vec<Value>> {
     let path = match open_path(root, false) {
@@ -270,7 +271,8 @@ pub(crate) fn pending(
     };
     let prefix = format!("{discussion}\0");
     let mut cursor = pending.cursor();
-    let mut row = cursor.seek(&prefix);
+    let start = [prefix.as_bytes(), &after.saturating_add(1).to_be_bytes()].concat();
+    let mut row = cursor.seek(&start);
     let mut result = Vec::new();
     while let Some((order_key, key)) = row {
         let key = key.ok_or_else(absent)?;
@@ -314,7 +316,7 @@ pub(crate) fn manager_note(
             && (!reply || note["Kind"] == "needs-input")
     };
     if !reply && args.as_object().is_some_and(|obj| obj.is_empty()) {
-        let rows: Vec<_> = pending(root, discussion, same)?.into_iter()
+        let rows: Vec<_> = pending(root, discussion, 0, same)?.into_iter()
             .map(|note| {
                 let mut row = json!({"id":note["ID"],"session":note["Session"],"session_instance":note["Instance"],
                     "kind":note["Kind"],"state":note["State"]});
@@ -456,6 +458,37 @@ pub(super) fn settle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pending_pages_past_twelve_failed_source_checks() -> io::Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("mail-page-{}", super::super::runtime::random_id()?));
+        super::super::runtime::private_dir(&root)?;
+        let binding = json!({"Discussion":"discussion","Parent":"manager","Session":"endpoint/worker",
+            "Instance":"worker","Attempt":"old","Agent":"codex","Project":"/project","ParentInputHash":"old"});
+        for index in 0..13 {
+            submit(
+                &root,
+                &binding,
+                &format!("note-{index}"),
+                "complete",
+                "Queued",
+                true,
+                &[],
+            )?;
+        }
+        let first = pending(&root, "discussion", 0, |_| true)?;
+        assert_eq!(first.len(), 12);
+        let next = pending(
+            &root,
+            "discussion",
+            first[11]["Sequence"].as_u64().unwrap(),
+            |_| true,
+        )?;
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0]["ID"], "note-12");
+        std::fs::remove_dir_all(&root)
+    }
+
     #[test]
     fn older_scope_cannot_starve_current_manager_mail() -> io::Result<()> {
         let root = std::env::temp_dir().join(format!(
@@ -692,7 +725,10 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(pending(&root, "discussion", |_| true).unwrap(), [created]);
+        assert_eq!(
+            pending(&root, "discussion", 0, |_| true).unwrap(),
+            [created]
+        );
         let filter = json!({"session":"endpoint/worker","session_instance":"worker-incarnation","id":"question"});
         assert!(
             manager_note(
@@ -708,7 +744,11 @@ mod tests {
         let seen = manager_note(&root, "discussion", "manager", "input", &filter, false).unwrap();
         assert_eq!(seen["text"], "Which path?");
         assert_eq!(seen["state"], "ingested");
-        assert!(pending(&root, "discussion", |_| true).unwrap().is_empty());
+        assert!(
+            pending(&root, "discussion", 0, |_| true)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             manager_note(&root, "discussion", "manager", "input", &filter, false).unwrap(),
             seen

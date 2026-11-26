@@ -440,6 +440,9 @@ fn submit(
             "semantic authority expired before dispatch",
         ));
     }
+    let _manager_effect = manager_nonce
+        .map(|_| crate::discord::lock_manager_mail_effect(target.manager))
+        .transpose()?;
     if let Some(nonce) = manager_nonce {
         let proof = observation
             .proof

@@ -902,60 +902,100 @@ mod tests {
                         .unwrap()
                         .unwrap();
                     let deadline = Instant::now() + Duration::from_secs(8);
-                    let wake = loop {
-                        dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
-                        let wake = &inbox.manager()["input"];
-                        if !wake["worker_wake"].is_null() && !wake["turn_id"].is_null() {
-                            break wake.clone();
-                        }
-                        assert!(
-                            Instant::now() < deadline,
-                            "did not observe a mailbox wake: {}",
-                            inbox.manager()
-                        );
-                        std::thread::sleep(Duration::from_millis(30));
-                    };
-                    assert_ne!(wake["turn_id"], turn["native_turn_id"]);
-                    assert_eq!(wake["source_id"], "401");
-                    assert!(field(&wake["composer"], "text").contains("Finished"));
-                    for _ in 0..3 {
-                        dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
-                        assert_eq!(inbox.manager()["input"], wake);
-                    }
-                    let mut wake_host = host.clone();
-                    wake_host["callId"] = json!("fixture-wake-read");
-                    wake_host["x-codex-turn-metadata"]["turn_id"] = wake["turn_id"].clone();
-                    let mut proxy = Command::new(binary)
-                        .arg("manager-mcp")
-                        .arg(&bridge_socket)
-                        .arg(&auth)
-                        .arg(field(&native["binding"], "conversation_id"))
-                        .arg(local)
-                        .stdin(Stdio::piped())
-                        .stdout(Stdio::piped())
-                        .spawn()
-                        .unwrap();
-                    writeln!(
-                        proxy.stdin.take().unwrap(),
-                        "{}",
-                        json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
-                        "params":{"name":"swarm_read_note","arguments":{},"_meta":wake_host}})
-                    )
-                    .unwrap();
-                    let deadline = Instant::now() + Duration::from_secs(5);
-                    while proxy.try_wait().unwrap().is_none() {
-                        dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
-                        assert!(Instant::now() < deadline, "wake note tool timed out");
-                        std::thread::sleep(Duration::from_millis(15));
-                    }
-                    let response = proxy.wait_with_output().unwrap();
-                    let result: Value = serde_json::from_slice(&response.stdout).unwrap();
-                    assert!(result["result"]["isError"].is_null(), "{result}");
-                    let selected: Value =
-                        serde_json::from_str(field(&result["result"]["content"][0], "text"))
+                    let cancel = std::env::var_os("SWARM_NATIVE_MAIL_CANCEL_FIXTURE").is_some();
+                    if cancel {
+                        let lock = super::super::lock_manager_mail_effect(&dispatcher.scope(&cfg))
                             .unwrap();
-                    assert_eq!(selected["id"], wake["worker_wake"]["id"]);
-                    assert_eq!(selected["state"], "ingested");
+                        loop {
+                            let attempt = dispatcher.tick(&cfg, &mut inbox, &fake);
+                            if !inbox.manager()["input"]["worker_wake"].is_null() {
+                                attempt.unwrap();
+                                break;
+                            }
+                            attempt.unwrap();
+                            assert!(
+                                Instant::now() < deadline,
+                                "did not reserve mailbox wake: {}, observed {:?}",
+                                inbox.manager(),
+                                manager.input_status(&composer)
+                            );
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                        let refused = inbox.manager()["input"]["composer"].clone();
+                        assert_eq!(manager.input_status(&refused).unwrap()["state"], "unknown");
+                        let mut replacement = fake.source.clone();
+                        replacement["id"] = json!("407");
+                        replacement["content"] = json!("Independent DM after withdrawn source");
+                        let other = FixtureAudience {
+                            source: replacement.clone(),
+                            posts: std::cell::RefCell::new(Vec::new()),
+                        };
+                        dispatcher.tick(&cfg, &mut inbox, &other).unwrap();
+                        assert_eq!(inbox.manager()["input"]["composer"], refused);
+                        drop(lock);
+                        dispatcher.tick(&cfg, &mut inbox, &other).unwrap();
+                        assert!(inbox.manager()["input"].is_null());
+                        assert_eq!(manager.input_status(&refused).unwrap()["state"], "unknown");
+                        inbox.admit(&replacement).unwrap().unwrap();
+                        dispatcher.tick(&cfg, &mut inbox, &other).unwrap();
+                        assert_eq!(inbox.manager()["input"]["source_id"], "407");
+                        assert!(inbox.manager()["input"]["worker_wake"].is_null());
+                    } else {
+                        let wake = loop {
+                            dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                            let wake = &inbox.manager()["input"];
+                            if !wake["worker_wake"].is_null() && !wake["turn_id"].is_null() {
+                                break wake.clone();
+                            }
+                            assert!(
+                                Instant::now() < deadline,
+                                "did not observe a mailbox wake: {}",
+                                inbox.manager()
+                            );
+                            std::thread::sleep(Duration::from_millis(30));
+                        };
+                        assert_ne!(wake["turn_id"], turn["native_turn_id"]);
+                        assert_eq!(wake["source_id"], "401");
+                        assert!(field(&wake["composer"], "text").contains("Finished"));
+                        for _ in 0..3 {
+                            dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                            assert_eq!(inbox.manager()["input"], wake);
+                        }
+                        let mut wake_host = host.clone();
+                        wake_host["callId"] = json!("fixture-wake-read");
+                        wake_host["x-codex-turn-metadata"]["turn_id"] = wake["turn_id"].clone();
+                        let mut proxy = Command::new(binary)
+                            .arg("manager-mcp")
+                            .arg(&bridge_socket)
+                            .arg(&auth)
+                            .arg(field(&native["binding"], "conversation_id"))
+                            .arg(local)
+                            .stdin(Stdio::piped())
+                            .stdout(Stdio::piped())
+                            .spawn()
+                            .unwrap();
+                        writeln!(
+                            proxy.stdin.take().unwrap(),
+                            "{}",
+                            json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                        "params":{"name":"swarm_read_note","arguments":{},"_meta":wake_host}})
+                        )
+                        .unwrap();
+                        let deadline = Instant::now() + Duration::from_secs(5);
+                        while proxy.try_wait().unwrap().is_none() {
+                            dispatcher.tick(&cfg, &mut inbox, &fake).unwrap();
+                            assert!(Instant::now() < deadline, "wake note tool timed out");
+                            std::thread::sleep(Duration::from_millis(15));
+                        }
+                        let response = proxy.wait_with_output().unwrap();
+                        let result: Value = serde_json::from_slice(&response.stdout).unwrap();
+                        assert!(result["result"]["isError"].is_null(), "{result}");
+                        let selected: Value =
+                            serde_json::from_str(field(&result["result"]["content"][0], "text"))
+                                .unwrap();
+                        assert_eq!(selected["id"], wake["worker_wake"]["id"]);
+                        assert_eq!(selected["state"], "ingested");
+                    }
                     assert_eq!(fake.posts.borrow().len(), 1);
                 }
             }

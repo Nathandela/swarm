@@ -40,6 +40,7 @@ pub(super) struct Dispatcher {
     socket: PathBuf,
     socket_identity: (u64, u64),
     credential: String,
+    mail_cursor: std::cell::Cell<u64>,
 }
 
 impl Dispatcher {
@@ -67,6 +68,7 @@ impl Dispatcher {
             launch,
             socket,
             credential,
+            mail_cursor: std::cell::Cell::new(0),
             socket_identity: (meta.dev(), meta.ino()),
         };
         this.listener.set_nonblocking(true)?;
@@ -165,22 +167,52 @@ impl Dispatcher {
                     .readout
                     .try_send(super::call_runtime::Readout::Acknowledge(origin));
             }
-            if phase == "unknown"
-                && !state["input"]["worker_wake"].is_null()
-                && status["ready_for_input"] == true
-            {
+            if phase == "unknown" && !state["input"]["worker_wake"].is_null() {
                 let input = &state["input"];
                 let id = field(input, "source_id");
-                if let Some(source) = api.current(cfg, id)?
-                    && inbox.admit(&source)?.is_some_and(|current| {
-                        current["state"] == "accepted"
-                            && current["revision"] == input["worker_wake"]["owner_revision"]
+                let revision = &input["worker_wake"]["owner_revision"];
+                let wake_key = field(&input["worker_wake"], "key").to_owned();
+                let source = if inbox.matches_owner_admission(id, revision) {
+                    match api.current(cfg, id) {
+                        Ok(source) => source,
+                        Err(_) => return Ok(()),
+                    }
+                } else {
+                    None
+                };
+                let expired = !crate::providers::codex_receipt::timely(field(input, "operation"));
+                if source.is_none() || expired {
+                    let _effect = match super::lock_manager_mail_effect(&self.scope(cfg)) {
+                        Ok(lock) => lock,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                        Err(error) => return Err(error),
+                    };
+                    let observed = self.owner.input_status(&input["composer"])?;
+                    if observed["state"] == "unknown"
+                        && observed["external_input"]
+                            == input["composer"]["manager_admission"]["expected_external_input"]
+                        && field(&observed, "native_turn_id").is_empty()
+                    {
+                        if source.is_none() {
+                            inbox.withdraw(id)?;
+                        } else if let Some(wakes) = state["worker_wakes"].as_object_mut() {
+                            wakes.shift_remove(&wake_key);
+                        }
+                        state["input"] = Value::Null;
+                        inbox.set_manager(state)?;
+                    }
+                    return Ok(());
+                }
+                if status["ready_for_input"] == true
+                    && let Some(source) = source
+                    && inbox.admit(&source).ok().flatten().is_some_and(|current| {
+                        current["state"] == "accepted" && current["revision"] == *revision
                     })
                 {
-                    // Native preparation is written before the provider effect. Only an
-                    // unprepared wake can repeat, and always with the identical operation.
-                    self.owner
-                        .send(field(input, "operation"), &input["composer"])?;
+                    // The shim serializes native preparation with cancellation.
+                    let _ = self
+                        .owner
+                        .send(field(input, "operation"), &input["composer"]);
                 }
             }
             self.deliver(cfg, inbox, api, &state, millis()?)?;
@@ -280,20 +312,34 @@ impl Dispatcher {
         let notes = crate::supervisor::mail_store::pending(
             &root,
             field(binding, "conversation_id"),
+            self.mail_cursor.get(),
             |note| {
                 note["Parent"] == parent
                     && mail_wake::key(note).is_ok_and(|key| state["worker_wakes"][key].is_null())
                     && inbox.worker_mail_anchor(binding, note).is_some()
             },
         )?;
+        if notes.is_empty() {
+            self.mail_cursor.set(0);
+        }
         for note in notes {
+            self.mail_cursor.set(
+                note["Sequence"]
+                    .as_u64()
+                    .ok_or_else(|| invalid("invalid worker wake order"))?,
+            );
             let (id, accepted) = inbox
                 .worker_mail_anchor(binding, &note)
                 .ok_or_else(|| invalid("worker wake has no current owner anchor"))?;
-            let Some(source) = api.current(cfg, &id)? else {
-                continue;
+            let source = match api.current(cfg, &id) {
+                Ok(Some(source)) => source,
+                Ok(None) => {
+                    inbox.withdraw(&id)?;
+                    continue;
+                }
+                Err(_) => continue,
             };
-            if inbox.admit(&source)?.is_none_or(|current| {
+            if inbox.admit(&source).ok().flatten().is_none_or(|current| {
                 current["state"] != "accepted" || current["revision"] != accepted["revision"]
             }) {
                 continue;
@@ -312,7 +358,10 @@ impl Dispatcher {
             });
             state["worker_wakes"][&key] = json!(true);
             inbox.set_manager(state)?;
-            return self.owner.send(&semantic, &composer);
+            if self.owner.send(&semantic, &composer).is_err() {
+                eprintln!("discord: worker mailbox wake awaits native admission reconciliation");
+            }
+            return Ok(());
         }
         Ok(())
     }
@@ -527,7 +576,7 @@ impl Dispatcher {
             } else {
                 let wake = &input["worker_wake"];
                 if args.as_object().is_some_and(|fields| !fields.is_empty())
-                    && (args["id"] != wake["id"]
+                    && (!args["id"].is_null() && args["id"] != wake["id"]
                         || !args["session"].is_null()
                             && args["session"] != wake["binding"]["Session"]
                         || !args["session_instance"].is_null()

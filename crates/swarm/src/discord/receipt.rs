@@ -490,6 +490,11 @@ pub(super) fn hash(value: &Value) -> io::Result<String> {
 }
 
 impl Inbox {
+    pub(super) fn matches_owner_admission(&self, source: &str, revision: &Value) -> bool {
+        let current = &self.data["messages"][source];
+        current["state"] == "accepted" && current["revision"] == *revision
+    }
+
     pub(super) fn worker_mail_anchor(
         &self,
         binding: &Value,
