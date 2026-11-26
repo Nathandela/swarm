@@ -347,9 +347,12 @@ pub(crate) fn rollout(home: &Path, cwd: &Path, thread: &str) -> io::Result<Value
         .into_iter()
         .flatten()
     {
-        if let Some(path) = find_rollout_day(home, candidate, thread)? {
-            found = Some(path);
-            break;
+        if let Some(path) = find_rollout_day(home, candidate, thread)?
+            && found.replace(path).is_some()
+        {
+            return Err(io::Error::other(
+                "ambiguous Codex native rollout across dates",
+            ));
         }
     }
     let path = found.ok_or_else(|| io::Error::other("exact Codex native rollout not found"))?;
@@ -795,6 +798,14 @@ mod tests {
             rollout(&home, &cwd, id).unwrap()["path"],
             after_midnight.to_str().unwrap()
         );
+        fs::copy(&after_midnight, &file).unwrap();
+        assert!(
+            rollout(&home, &cwd, id)
+                .unwrap_err()
+                .to_string()
+                .contains("ambiguous")
+        );
+        fs::remove_file(&file).unwrap();
         fs::rename(&after_midnight, &file).unwrap();
         let saved = file.with_extension("saved");
         fs::rename(&file, &saved).unwrap();
