@@ -133,8 +133,10 @@ impl Unit<'_> {
 
     fn verify_systemd(
         &self,
-        loaded_body: Option<&str>,
-        process_body: Option<&str>,
+        manager_bodies: &[&str],
+        process_bodies: &[&str],
+        disk_body: Option<&str>,
+        allow_unloaded: bool,
     ) -> io::Result<()> {
         let active = self.systemd_state("is-active")?;
         let output = (self.runner)(
@@ -179,12 +181,12 @@ impl Unit<'_> {
             .get("ExecMainPID")
             .and_then(|s| s.parse::<u32>().ok())
             .ok_or_else(|| invalid("Discord unit PID is unavailable"))?;
-        let disk_body = self.read()?;
-        let bodies = [loaded_body, disk_body.as_deref()]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        let loaded_matches = bodies.iter().any(|body| {
+        if self.read()?.as_deref() != disk_body {
+            return Err(invalid(
+                "Discord service unit changed during manager operation",
+            ));
+        }
+        let loaded_matches = manager_bodies.iter().any(|body| {
             let Ok(program) = definition::bound_systemd_program(body) else {
                 return false;
             };
@@ -207,52 +209,40 @@ impl Unit<'_> {
                 && dropins.is_empty()
                 && systemd_exec_matches(exec_start, &program, &argv)
         });
-        if !loaded_matches
-            && (loaded_body.is_some()
-                || !fragment.is_empty()
-                || !dropins.is_empty()
-                || !exec_start.is_empty())
-        {
-            return Err(invalid(if bodies.is_empty() {
-                "loaded Discord service has no owned definition"
-            } else {
-                "loaded Discord unit differs from its previous definition"
-            }));
-        }
-        if loaded_body.is_none() && disk_body.is_none() && !fragment.is_empty()
-            || !dropins.is_empty()
-            || (bodies.is_empty() && !exec_start.is_empty())
-            || (active && pid != 0 && bodies.is_empty())
-        {
-            return Err(invalid("loaded Discord service has no owned definition"));
+        if !loaded_matches {
+            let unloaded = fragment.is_empty() && dropins.is_empty() && exec_start.is_empty();
+            if !allow_unloaded || !unloaded {
+                return Err(invalid(if manager_bodies.is_empty() {
+                    "loaded Discord service has no owned definition"
+                } else {
+                    "loaded Discord unit differs from its previous definition"
+                }));
+            }
         }
         if active && pid == 0 {
             return Err(invalid("active Discord service has no main process"));
         }
         if active {
-            let processes = [process_body, disk_body.as_deref()]
-                .into_iter()
-                .flatten()
-                .any(|body| {
-                    let Ok(program) = definition::bound_systemd_program(body) else {
-                        return false;
-                    };
-                    let Ok(place) = definition::bound_place(self.platform, body) else {
-                        return false;
-                    };
-                    let Ok(place) = place.into_os_string().into_string() else {
-                        return false;
-                    };
-                    let argv = vec![
-                        program.clone(),
-                        "discord".to_owned(),
-                        "run".to_owned(),
-                        "--state-dir".to_owned(),
-                        place,
-                        "--unattended".to_owned(),
-                    ];
-                    verify_systemd_process(pid, &program, &argv).is_ok()
-                });
+            let processes = process_bodies.iter().any(|body| {
+                let Ok(program) = definition::bound_systemd_program(body) else {
+                    return false;
+                };
+                let Ok(place) = definition::bound_place(self.platform, body) else {
+                    return false;
+                };
+                let Ok(place) = place.into_os_string().into_string() else {
+                    return false;
+                };
+                let argv = vec![
+                    program.clone(),
+                    "discord".to_owned(),
+                    "run".to_owned(),
+                    "--state-dir".to_owned(),
+                    place,
+                    "--unattended".to_owned(),
+                ];
+                verify_systemd_process(pid, &program, &argv).is_ok()
+            });
             if !processes {
                 return Err(invalid(
                     "running Discord process differs from its previous command",
@@ -266,7 +256,8 @@ impl Unit<'_> {
         if self.platform == Platform::Systemd {
             let enabled = self.systemd_state("is-enabled")?;
             let active = self.systemd_state("is-active")?;
-            self.verify_systemd(expected_body, expected_body)?;
+            let bodies = expected_body.into_iter().collect::<Vec<_>>();
+            self.verify_systemd(&bodies, &bodies, expected_body, true)?;
             return Ok((enabled, active));
         }
         let target = format!("gui/{}/{LABEL}", runtime::uid());
@@ -294,10 +285,16 @@ impl Unit<'_> {
     ) -> io::Result<()> {
         match self.platform {
             Platform::Systemd => {
-                self.verify_systemd(previous_body, previous_body)?;
+                let allowed = [previous_body, body]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>();
+                self.verify_systemd(&allowed, &allowed, body, true)?;
                 *changed = true;
                 self.run("systemctl", &["--user", "daemon-reload"])?;
-                self.verify_systemd(body, previous_body)?;
+                let loaded = body.into_iter().collect::<Vec<_>>();
+                let running = previous_body.into_iter().chain(body).collect::<Vec<_>>();
+                self.verify_systemd(&loaded, &running, body, false)?;
                 *changed = true;
                 self.run(
                     "systemctl",
@@ -307,7 +304,7 @@ impl Unit<'_> {
                         SERVICE,
                     ],
                 )?;
-                self.verify_systemd(body, previous_body)?;
+                self.verify_systemd(&loaded, &running, body, false)?;
                 *changed = true;
                 self.run(
                     "systemctl",
@@ -830,6 +827,65 @@ mod ownership_tests {
             program,
             "/usr/bin/dbus-daemon --foreign"
         ));
+    }
+
+    #[test]
+    fn systemd_never_adopts_a_valid_replacement_at_the_unit_path() {
+        for phase in ["install", "stop", "rollback"] {
+            let dir = std::env::temp_dir()
+                .join(format!("swarm-unit-swap-{}-{phase}", std::process::id()));
+            fs::create_dir_all(&dir).unwrap();
+            let path = dir.join(SERVICE);
+            let a = definition::render(
+                Platform::Systemd,
+                Path::new("/bin/swarm-a"),
+                Path::new("/tmp/a"),
+            )
+            .unwrap();
+            let b = definition::render(
+                Platform::Systemd,
+                Path::new("/bin/swarm-b"),
+                Path::new("/tmp/b"),
+            )
+            .unwrap();
+            fs::write(&path, &a).unwrap();
+            let report_a = systemd_report(&path, &a);
+            let report_b = systemd_report(&path, &b);
+            let shows = Cell::new(0);
+            let mutations = RefCell::new(Vec::new());
+            let runner = |name: &str, args: &[&str]| -> io::Result<Output> {
+                if args.contains(&"show") {
+                    let count = shows.get();
+                    shows.set(count + 1);
+                    if (phase == "rollback" && count == 0) || (phase != "rollback" && count == 1) {
+                        fs::write(&path, &b)?;
+                        return Ok(output(&report_b, "", true));
+                    }
+                    return Ok(output(&report_a, "", true));
+                }
+                if args.contains(&"is-active") {
+                    return Ok(output("inactive\n", "", false));
+                }
+                if args.contains(&"is-enabled") {
+                    return Ok(output("enabled\n", "", true));
+                }
+                mutations.borrow_mut().push(format!("{name} {args:?}"));
+                Ok(output("", "", true))
+            };
+            let service = unit(Platform::Systemd, path.clone(), &runner);
+            let result = match phase {
+                "install" => service.install(Path::new("/bin/swarm-new"), Path::new("/tmp/new")),
+                "stop" => service.stop(Path::new("/tmp/a")),
+                _ => {
+                    let mut changed = false;
+                    service.apply_manager(true, false, Some(&b), Some(&a), &mut changed)
+                }
+            };
+            assert!(result.is_err(), "{phase} accepted the replacement unit");
+            assert!(mutations.borrow().is_empty(), "{phase} mutated the manager");
+            assert_eq!(fs::read_to_string(&path).unwrap(), b);
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 }
 

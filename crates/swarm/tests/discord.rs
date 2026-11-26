@@ -324,6 +324,10 @@ case "$1:$2" in
   --user:is-active) echo inactive; exit 3 ;;
   --user:show)
     unit="$HOME/.config/systemd/user/swarm-discord.service"
+    if [ -f "$HOME/swap-unit-on-show" ]; then
+      /bin/cp "$HOME/swap-body" "$unit"
+      /bin/rm "$HOME/swap-unit-on-show"
+    fi
     if [ -f "$HOME/loaded" ] && [ -f "$unit" ]; then
       fragment="$unit"
       command=$(/usr/bin/sed -n 's/^ExecStart=:"\([^"]*\)" discord run --state-dir "\([^"]*\)" --unattended$/\1|\2/p' "$unit")
@@ -432,6 +436,29 @@ esac
         String::from_utf8_lossy(&disconnected.stderr)
     );
     assert!(!unit.exists() && !fixture.0.join("active").exists());
+
+    #[cfg(target_os = "linux")]
+    {
+        assert_eq!(json_output(install(&one))["installed"], true);
+        let body_a = fs::read_to_string(&unit).unwrap();
+        let body_b = body_a.replace(one.to_str().unwrap(), two.to_str().unwrap());
+        assert_ne!(body_a, body_b);
+        fixture.private("swap-body", &body_b);
+        fixture.private("swap-unit-on-show", "switch");
+        let before = fs::read_to_string(fixture.0.join("operations"))
+            .unwrap()
+            .lines()
+            .count();
+        let output = run(&["disconnect", "--state-dir", one.to_str().unwrap()]);
+        assert!(!output.status.success());
+        assert_eq!(fs::read_to_string(&unit).unwrap(), body_b);
+        let operations = fs::read_to_string(fixture.0.join("operations")).unwrap();
+        assert!(operations.lines().skip(before).all(|line| {
+            !["daemon-reload", "disable", "stop", "restart"]
+                .iter()
+                .any(|op| line.contains(op))
+        }));
+    }
 
     fs::write(&unit, "foreign unit").unwrap();
     assert!(!install(&one).status.success());
