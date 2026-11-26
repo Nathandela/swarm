@@ -126,7 +126,7 @@ pub(super) fn read_voice<'tx>(
     let state: Value = serde_json::from_slice(&raw_conversation)?;
     let binding = &state["binding"];
     if binding["conversation_id"] != conversation
-        || !matches!(binding["native_cli"], Value::Null | Value::Bool(false))
+        || !native_cli_matches(&binding["native_cli"], cfg.text("project_access") == "vm")
         || binding["provider"] != cfg.text("manager_cli")
         || !field(binding, "session_id").starts_with(&format!("{endpoint}/"))
         || [

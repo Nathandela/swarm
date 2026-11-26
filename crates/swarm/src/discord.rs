@@ -393,7 +393,13 @@ impl<'a> Request<'a> {
                 ]
             }
             "migrate-state" => {
-                flags = &["dry-run", "rollback", "controls", "activate-personal"];
+                flags = &[
+                    "dry-run",
+                    "rollback",
+                    "controls",
+                    "activate-personal",
+                    "inspect-personal-vm",
+                ];
                 &[
                     "settle-personal-ingress",
                     "dispatch-personal-ingress",
@@ -550,6 +556,21 @@ fn execute(req: &Request<'_>) -> io::Result<bool> {
             ];
             let export = req.get("read-personal-publication-file");
             let source = req.get("read-personal-source-attachment");
+            if req.on("inspect-personal-vm") {
+                if req.on("controls")
+                    || req.on("rollback")
+                    || req.on("activate-personal")
+                    || export.is_some()
+                    || source.is_some()
+                    || ["file-id", "file-sha256", "offset"]
+                        .iter()
+                        .any(|flag| req.get(flag).is_some())
+                    || personal.iter().any(|(flag, _)| req.get(flag).is_some())
+                {
+                    return Err(invalid("select one migration operation"));
+                }
+                return legacy_ingress::activation::inspect_vm(&place);
+            }
             if export.is_some() && source.is_some() {
                 return Err(invalid("select one original attachment source"));
             }

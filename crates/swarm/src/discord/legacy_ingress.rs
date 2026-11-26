@@ -339,11 +339,23 @@ fn retained_config(place: &Place) -> io::Result<Config> {
     }
 }
 
+fn native_cli_matches(flag: &Value, vm: bool) -> bool {
+    if vm {
+        flag == true
+    } else {
+        matches!(flag, Value::Null | Value::Bool(false))
+    }
+}
+
 fn personal_enrollment(place: &Place) -> io::Result<Config> {
+    personal_config(place, false)
+}
+
+fn personal_config(place: &Place, vm: bool) -> io::Result<Config> {
     let cfg = place.load()?;
     verify_controls_place(place, &cfg)?;
     if cfg.text("mode") != "personal"
-        || cfg.text("project_access") == "vm"
+        || (cfg.text("project_access") == "vm") != vm
         || !cfg.0["calls"].is_null()
         || !cfg.0["previous_supervisor"].is_null()
     {
@@ -1263,6 +1275,92 @@ mod tests {
     }
 
     #[test]
+    fn retained_original_go_vm_inspection() {
+        if std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_VM").is_none() {
+            return;
+        }
+        use super::super::{Request, execute};
+        let root = std::env::var("SWARM_TEST_DISCORD_ACTIVE_ROOT").unwrap();
+        let place = Place::for_supervisor(Path::new(&root)).unwrap();
+        let connector = place.dir.join("discord.db");
+        let voice = fs::read_dir(place.dir.join("discussions"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path()
+            .join("voice.db");
+        let before = [fs::read(&connector).unwrap(), fs::read(&voice).unwrap()];
+        let run = |flag: &str| {
+            let args = ["migrate-state".to_owned(), flag.to_owned()];
+            execute(&Request::parse(&args).unwrap())
+        };
+        assert!(run("--inspect-personal-vm").unwrap());
+        assert!(run("--activate-personal").is_err());
+        assert!(!activation::selected(&place).unwrap());
+        assert_eq!(
+            before,
+            [fs::read(&connector).unwrap(), fs::read(&voice).unwrap()]
+        );
+
+        let cfg = place.load().unwrap();
+        let checkout = Path::new(cfg.text("work_dir"));
+        let saved = checkout.with_extension("moved");
+        let other = checkout.with_extension("substitute");
+        runtime::private_dir(&other).unwrap();
+        fs::rename(checkout, &saved).unwrap();
+        std::os::unix::fs::symlink(&other, checkout).unwrap();
+        assert!(run("--inspect-personal-vm").is_err());
+        fs::remove_file(checkout).unwrap();
+        fs::rename(saved, checkout).unwrap();
+        assert_eq!(
+            before,
+            [fs::read(&connector).unwrap(), fs::read(&voice).unwrap()]
+        );
+    }
+
+    #[test]
+    fn retained_original_go_vm_pending_file_stays_in_original_mailbox() {
+        let (Some(root), Some(fixture), Ok(conversation)) = (
+            std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_ROOT"),
+            std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_FIXTURE"),
+            std::env::var("SWARM_TEST_DISCORD_ACTIVE_VM_CONVERSATION"),
+        ) else {
+            return;
+        };
+        let place = Place::for_supervisor(Path::new(&root)).unwrap();
+        let cfg = place.load().unwrap();
+        let checkout = Path::new(cfg.text("work_dir"));
+        let worker_file = checkout.join("completion.csv");
+        let original_data = b"fixture,value\noriginal,1\n";
+        fs::write(&worker_file, original_data).unwrap();
+        let seed = Command::new(fixture)
+            .arg("worker-file")
+            .arg(&root)
+            .arg(checkout)
+            .arg(&worker_file)
+            .arg(&conversation)
+            .output()
+            .unwrap();
+        assert!(
+            seed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&seed.stderr)
+        );
+        let mailbox = place.supervisor_root().join("dispatcher-mail.db");
+        let before = fs::read(&mailbox).unwrap();
+        fs::write(&worker_file, b"changed after Go captured the completion").unwrap();
+        assert!(
+            activation::inspect_vm(&place)
+                .unwrap_err()
+                .to_string()
+                .contains("pending completion")
+        );
+        assert!(!activation::selected(&place).unwrap());
+        assert_eq!(before, fs::read(mailbox).unwrap());
+    }
+
+    #[test]
     fn retained_original_go_native_manager_roundtrip() {
         let Some(root) = std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_ROOT") else {
             return;
@@ -1312,6 +1410,14 @@ mod tests {
             }
         }
         let place = Place::for_supervisor(Path::new(&root)).unwrap();
+        // Config alone cannot turn an already running restricted Go manager into VM authority.
+        let config = place.dir.join("config.json");
+        let original = place.load().unwrap();
+        let mut spoofed = original.0.clone();
+        spoofed["project_access"] = json!("vm");
+        runtime::write_json(&config, &spoofed).unwrap();
+        assert!(activation::inspect_vm(&place).is_err());
+        runtime::write_json(&config, &original.0).unwrap();
         let current = json!({"author":{"id":"200","username":"synthetic owner"},"channel_id":"400","id":"701",
             "content":"Use project former. Retained real native loopback input.", "type":0, "attachments":[]});
         let mut second = current.clone();
