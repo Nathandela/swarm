@@ -3,6 +3,7 @@ pub(crate) mod agy_input;
 pub(crate) mod claude;
 pub(crate) mod claude_input;
 pub(crate) mod codex;
+pub(crate) mod codex_context_guard;
 pub(crate) mod codex_continuity;
 pub(crate) mod codex_proof;
 pub(crate) mod codex_receipt;

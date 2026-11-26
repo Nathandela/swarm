@@ -1,3 +1,4 @@
+mod context_guard;
 use super::pty;
 use crate::ipc::field;
 use crate::providers::{codex_proof, codex_receipt};
@@ -7,7 +8,7 @@ use serde_json::{Value, json};
 use std::io;
 use std::net::Shutdown;
 use std::os::unix::{net::UnixStream, process::CommandExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::thread;
@@ -56,6 +57,7 @@ pub(super) struct Channel {
     connection: WebSocket<UnixStream>,
     pid: u32,
     birth: u64,
+    user_agent: String,
     restored: Option<Observation>,
 }
 
@@ -228,21 +230,21 @@ fn connect(
         }),
     )?;
     let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
+    let user_agent = loop {
         if let Some(message) = read(&mut connection)?
             && message["id"] == 1
         {
             if !message["result"].is_object() {
                 return Err(io::Error::other("Codex app-server refused to initialize"));
             }
-            break;
+            break field(&message["result"], "userAgent").to_owned();
         }
         if Instant::now() >= deadline {
             return Err(io::Error::other(
                 "Codex app-server initialization timed out",
             ));
         }
-    }
+    };
     send(&mut connection, json!({"method":"initialized","params":{}}))?;
     connection
         .get_mut()
@@ -257,6 +259,7 @@ fn connect(
         connection,
         pid,
         birth,
+        user_agent,
         restored: None,
     })
 }
@@ -268,7 +271,28 @@ fn send(ws: &mut WebSocket<UnixStream>, message: Value) -> io::Result<()> {
 
 fn read(ws: &mut WebSocket<UnixStream>) -> io::Result<Option<Value>> {
     match ws.read() {
-        Ok(Message::Text(message)) => Ok(Some(serde_json::from_str(message.as_str())?)),
+        Ok(Message::Text(message)) => {
+            let mut frame: Value = serde_json::from_str(message.as_str())?;
+            let guard_evidence = matches!(
+                field(&frame, "method"),
+                "thread/tokenUsage/updated" | "thread/compacted"
+            ) || frame["params"]["item"]["type"] == "contextCompaction";
+            if guard_evidence {
+                if message.len() > 64 << 10
+                    || !crate::providers::codex_context_guard::unique_keys(message.as_str())
+                {
+                    return Ok(Some(json!({
+                        "method":"swarm/guard_evidence_gap","params":{
+                            "threadId":frame["params"]["threadId"],"item":frame["params"]["item"]
+                        }
+                    })));
+                }
+                if frame["jsonrpc"] == "2.0" {
+                    frame.as_object_mut().unwrap().shift_remove("jsonrpc");
+                }
+            }
+            Ok(Some(frame))
+        }
         Ok(Message::Close(_)) => Err(io::Error::other("Codex app-server closed the stream")),
         Ok(_) => Ok(None),
         Err(Error::Io(error))
@@ -285,6 +309,8 @@ fn read(ws: &mut WebSocket<UnixStream>) -> io::Result<Option<Value>> {
 
 #[derive(Default)]
 struct Observation {
+    guard: Option<context_guard::Guard>,
+    legacy_system_helper: bool,
     proof: Option<codex_proof::Ledger>,
     thread: String,
     turn: Option<String>,
@@ -330,8 +356,12 @@ impl Observation {
             // The installed viewer starts a proven ephemeral title generator
             // after a reply. It never owns the native rollout or the PTY.
             if thread["ephemeral"] == true
-                && thread["threadSource"] == "thread_title"
                 && thread["source"] == "vscode"
+                && (thread["threadSource"] == "thread_title"
+                    || self.legacy_system_helper
+                        && thread["threadSource"] == "system"
+                        && thread["path"].is_null()
+                        && thread["parentThreadId"].is_null())
             {
                 return false;
             }
@@ -452,16 +482,17 @@ fn persist_observation(observation: &Observation, target: &SemanticTarget<'_>) {
             &json!({"token":target.token}),
         );
     }
-    let _ = runtime::write_json(
-        &target.dir.join("observation.json"),
-        &json!({
-            "token":target.token, "conversation_id":observation.thread, "status":observation.status(),
-            "backend_available":!observation.ambiguous, "requests_available":observation.joined && !observation.ambiguous && !observation.requests_unverified,
-            "schedule_ready":target.schedule.is_some() && observation.schedule_ready(),
-            "manager_ingress_ready": observation.can_enter_joined_thread(true) && observation.idle
-                && !observation.ambiguous && !observation.requests_unverified && observation.requests.is_empty(),
-        }),
-    );
+    let mut view = json!({
+        "token":target.token, "conversation_id":observation.thread, "status":observation.status(),
+        "backend_available":!observation.ambiguous, "requests_available":observation.joined && !observation.ambiguous && !observation.requests_unverified,
+        "schedule_ready":target.schedule.is_some() && observation.schedule_ready(),
+        "manager_ingress_ready": observation.can_enter_joined_thread(true) && observation.idle
+            && !observation.ambiguous && !observation.requests_unverified && observation.requests.is_empty(),
+    });
+    if let Some(guard) = &observation.guard {
+        view["context_guard"] = guard.view();
+    }
+    let _ = runtime::write_json(&target.dir.join("observation.json"), &view);
 }
 
 fn capture_history(observation: &mut Observation, message: &Value, target: &SemanticTarget<'_>) {
@@ -557,7 +588,16 @@ fn backfill_initial_history(observation: &Observation, target: &SemanticTarget<'
 
 fn observe_frame(observation: &mut Observation, message: &Value, target: &SemanticTarget<'_>) {
     capture_history(observation, message, target);
-    if observation.apply(message, target.cwd) {
+    let changed = observation.apply(message, target.cwd);
+    let updated = observation.guard.as_mut().is_some_and(|guard| {
+        let before = guard.view();
+        guard.frame(message);
+        if observation.ambiguous {
+            guard.disconnected();
+        }
+        before != guard.view()
+    });
+    if changed || updated {
         persist_observation(observation, target);
     }
 }
@@ -676,6 +716,9 @@ fn submit(
             ));
         }
     }
+    if let Some(guard) = observation.guard.as_mut() {
+        guard.owner_input();
+    }
     observation.fresh_no_rollout = false;
     observation.idle = false;
     let mut params = json!({"threadId":observation.thread,
@@ -782,20 +825,21 @@ impl ScheduledTurn {
 
 pub(super) fn observe(
     mut channel: Channel,
-    cwd: PathBuf,
-    dir: PathBuf,
-    token: String,
-    schedule: Option<worker::Binding>,
+    state: std::sync::Arc<super::State>,
     actions: Receiver<SemanticAction>,
     manager: Value,
+    guard_version: Option<String>,
 ) {
+    let dir = &state.dir;
+    let token = &state.token;
+    let cwd = &state.working_dir;
     let resumed = channel.restored.is_some();
     let mut observation = channel.restored.take().unwrap_or_default();
     let target = SemanticTarget {
-        cwd: &cwd,
-        dir: &dir,
-        token: &token,
-        schedule: schedule.as_ref(),
+        cwd,
+        dir,
+        token,
+        schedule: state.schedule.as_ref(),
         manager: &manager,
     };
     if resumed {
@@ -807,7 +851,27 @@ pub(super) fn observe(
     let mut next_history = Instant::now();
     let mut next_join = Some(Instant::now());
     let mut quiet = false;
+    let guard_version = guard_version.filter(|version| {
+        channel
+            .user_agent
+            .split(['/', ' ', '(', ')', ';', '\t'])
+            .any(|part| part == version)
+            && crate::providers::codex_context_guard::support(version)
+                != crate::providers::codex_context_guard::Support::Unsupported
+    });
+    // 0.151.0's hidden title turn has the native ephemeral system tag;
+    // current builds name it thread_title explicitly.
+    observation.legacy_system_helper = guard_version.as_deref() == Some("0.151.0");
     loop {
+        if observation.guard.is_none()
+            && let Some(version) = &guard_version
+            && !observation.thread.is_empty()
+        {
+            observation.guard =
+                context_guard::Guard::bind(state.clone(), &observation.thread, version, &channel);
+            persist_observation(&observation, &target);
+        }
+
         if !observation.thread.is_empty()
             && !observation.ambiguous
             && !observation.joined
@@ -851,6 +915,18 @@ pub(super) fn observe(
                 &target,
             );
             let _ = action.answer.send(result);
+        }
+        if quiet && let Some(mut guard) = observation.guard.take() {
+            let before = guard.view();
+            let result = guard.tick(&mut channel, &observation, &mut serial);
+            let changed = before != guard.view();
+            observation.guard = Some(guard);
+            if changed {
+                persist_observation(&observation, &target);
+            }
+            if result.is_err() {
+                break;
+            }
         }
         let reading = Instant::now();
         match read(&mut channel.connection) {
@@ -914,14 +990,14 @@ pub(super) fn observe(
                         if observation.proof.is_none() {
                             let binding = json!({
                                 "session":format!("{}/{}", field(&manager,"endpoint_id"),field(&manager,"session_id")),
-                                "session_instance":codex_receipt::instance(&token),
+                                "session_instance":codex_receipt::instance(token),
                                 "conversation_id":manager["launch"]["manager"]["conversation_id"],
                                 "provider":"codex","native_session_id":observation.thread,
                                 "native_generation":format!("{}:{}",channel.pid,channel.birth),
                                 "observation_generation":codex_receipt::hash(&format!("{}:{}:{}",token,channel.pid,channel.birth)),
                                 "login_epoch":manager["account"]
                             });
-                            let Ok(proof) = codex_proof::Ledger::open(&dir, &binding) else {
+                            let Ok(proof) = codex_proof::Ledger::open(dir, &binding) else {
                                 break;
                             };
                             if runtime::write_json(&dir.join("manager-binding.json"),&json!({
@@ -943,14 +1019,16 @@ pub(super) fn observe(
             Err(_) => break,
         }
     }
-    let _ = runtime::write_json(
-        &dir.join("observation.json"),
-        &json!({
-            "token":token, "conversation_id":observation.thread,
-            "status":{"Process":"running","Turn":"unknown","Interaction":"none"},
-            "backend_available":false,
-        }),
-    );
+    let mut terminal = json!({
+        "token":token,"conversation_id":observation.thread,
+        "status":{"Process":"running","Turn":"unknown","Interaction":"none"},
+        "backend_available":false,
+    });
+    if let Some(guard) = observation.guard.as_mut() {
+        guard.disconnected();
+        terminal["context_guard"] = guard.view();
+    }
+    let _ = runtime::write_json(&dir.join("observation.json"), &terminal);
     let _ = channel.connection.get_ref().shutdown(Shutdown::Both);
 }
 

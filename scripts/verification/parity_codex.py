@@ -23,8 +23,10 @@ sys.dont_write_bytecode = True
 from parity_runtime import attach, control, fixtures, read_control, read_frame
 
 
-def model_fixture(root, alternate_check):
+def model_fixture(root, alternate_check, guard_check=False):
     replies = []
+    history=[]
+    release_pressure=threading.Event()
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -44,6 +46,13 @@ def model_fixture(root, alternate_check):
             if body.get("model") != "fixture":
                 self.send_error(400, "fixture model required")
                 return
+            joined=json.dumps(body.get("input",[]))
+            continuation="This session's context was automatically compacted" in joined
+            pressure="A synthetic context pressure turn." in joined
+            high=guard_check and pressure and not any(row["high"] for row in history)
+            history.append(dict(path=self.path,continuation=continuation,high=high))
+            if high:
+                release_pressure.wait(timeout=8)
             index = len(replies) + 1
             replies.append(index)
             ident = f"fixture-response-{index}"
@@ -57,7 +66,7 @@ def model_fixture(root, alternate_check):
                 ("response.output_text.delta", {"item_id":item["id"],"output_index":0,"content_index":0,"delta":text}),
                 ("response.output_item.done", {"output_index":0,"item":item}),
                 ("response.completed", {"response":dict(response,status="completed",output=[item],
-                    usage={"input_tokens":10,"output_tokens":4,"total_tokens":14,
+                    usage={"input_tokens":82_000 if high else 10,"output_tokens":4,"total_tokens":82_004 if high else 14,
                            "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}})})
             ]
             self.send_response(200)
@@ -81,14 +90,19 @@ def model_fixture(root, alternate_check):
         f'base_url="http://127.0.0.1:{server.server_port}/v1"\nrequires_openai_auth=false\nsupports_websockets=false\n'
         f'[projects."{root}/work"]\ntrust_level="trusted"\n'
         '[tui]\nscreen_reader_detection_done=true\n[tui.model_availability_nux]\n"gpt-6.1-sol"=100\n')
+    if guard_check:
+        path=home/"config.toml"
+        path.write_text("model_context_window=100000\nmodel_auto_compact_token_limit=95000\n"+path.read_text())
     (home/"config.toml").chmod(0o600)
     (home/"auth.json").write_text(json.dumps({"auth_mode":"apikey","OPENAI_API_KEY":"offline-fixture-only"}))
     (home/"auth.json").chmod(0o600)
+    server.history=history
+    server.release_pressure=release_pressure
     return server,replies
 
 
-def drive(root, native, guard, loopback, resume_check=False, history_check=False, alternate_check=False, reattach_check=False):
-    model, replies = model_fixture(root, alternate_check) if loopback else (None, [])
+def drive(root, native, guard, loopback, resume_check=False, history_check=False, alternate_check=False, reattach_check=False, guard_check=False):
+    model, replies = model_fixture(root, alternate_check, guard_check) if loopback else (None, [])
     daemon = None
     previous = {}
     try:
@@ -132,6 +146,9 @@ def drive(root, native, guard, loopback, resume_check=False, history_check=False
                 options = {"resume_from":from_id} if from_id else {"sandbox":"read-only"}
                 request = {"agent": "codex", "name": "codex fixture", "cwd": str(root / "work"),
                     "cols": 100, "rows": 30, "options": options}
+                if guard_check and not from_id:
+                    request["initial_prompt"]="Warm up the isolated context guard fixture."
+                    request["options"]={}
                 if overrides:
                     request["env"]=[f"{key}={value}" for key,value in {**env,**overrides}.items()]
                 control(conn,"launch",endpoint_id=endpoint,launch=request)
@@ -240,7 +257,7 @@ def drive(root, native, guard, loopback, resume_check=False, history_check=False
                     return json.loads(observation.read_text()).get("conversation_id")
                 return None
 
-            if loopback:
+            if loopback and not guard_check:
                 invoke("send",identity,"--text","Return the fixed local fixture response.")
             try:
                 thread = fixtures.wait_for(observed, "exact app-server thread", timeout=10)
@@ -316,6 +333,64 @@ def drive(root, native, guard, loopback, resume_check=False, history_check=False
                 invoke("kill", conflict)
                 invoke("watch", conflict, "--until", "completed", "--timeout", "4s")
                 print("one native turn accepted across exact retries and supervisor replacement; cross-session reuse refused")
+            if guard_check:
+                def settings(operation, **payload):
+                    with socket.socket(socket.AF_UNIX) as conn:
+                        conn.settimeout(4)
+                        conn.connect(env["SWARM_DAEMON_SOCK"])
+                        control(conn,"hello",endpoint_id="",protocol_version=1,capabilities=["context-guard-settings"])
+                        hello=read_control(conn)
+                        control(conn,operation,endpoint_id=hello["endpoint_id"],**payload)
+                        reply=read_control(conn)
+                        assert reply["op"]==operation,reply
+                        return reply["context_guard_settings"]
+                def guard_view():
+                    row=next(row for row in json.loads(invoke("ls","--json")) if row["id"]==identity)
+                    return row.get("context_guard")
+                guard=fixtures.wait_for(guard_view,"authenticated 0.151 Context Guard projection")
+                assert guard["support"]=="automatic",guard
+                fixtures.wait_for(lambda: json.loads(observation.read_text()).get("requests_available"),
+                                  "joined before raising usage")
+                current=settings("context_guard_get")
+                settings("context_guard_set",context_guard_set={"expected_revision":current["revision"],
+                    "auto_compact":{"enabled":True,"threshold_percent":80}})
+                fixtures.wait_for(lambda:guard_view().get("phase")=="armed","revisioned auto policy")
+                accepted=json.loads(invoke("message",identity,"--text","A synthetic context pressure turn."))
+                assert accepted["state"]=="native_accepted",accepted
+                try:
+                    controller, exact, _ = attach(env["SWARM_DAEMON_SOCK"], identity)
+                    with controller:
+                        model.release_pressure.set()
+                        occupied=fixtures.wait_for(lambda: guard_view() if guard_view().get("usage_percent",0)>=80 else None,
+                            "exact native occupancy from 0.151")
+                        print("native exact context occupancy:",occupied)
+                        time.sleep(.8)
+                        assert guard_view()["phase"]=="pending_idle"
+                        assert not any(row["continuation"] for row in model.history)
+                        control(controller,"detach",**exact)
+                        while True:
+                            tag, body=read_frame(controller)
+                            if tag==1:
+                                assert json.loads(body)["op"]=="detach"
+                                break
+                    fixtures.wait_for(lambda:guard_view().get("phase")=="latched","native compaction confirmed",timeout=15)
+                    fixtures.wait_for(lambda:any(row["continuation"] for row in model.history),
+                                      "native continuation reached only the loopback model",timeout=15)
+                    daemon.kill()
+                    daemon.wait(timeout=5)
+                    daemon=start(log)
+                    assert json.loads((state/"owner.json").read_text())==owner
+                    fixtures.wait_for(lambda:guard_view() and guard_view().get("last_result")=="compacted",
+                                      "guard projection survived owner restart")
+                    assert sum(row["continuation"] for row in model.history)==1
+                    print("controller lease fenced compaction; after detach native compact and single continuation survived owner restart")
+                finally:
+                    (root/"effects/context-guard-screen").write_bytes(invoke("peek",identity))
+                    (root/"effects/context-guard-history.json").write_text(json.dumps(model.history))
+                    (root/"effects/context-guard-view.json").write_text(json.dumps(guard_view()))
+                invoke("kill",identity)
+                invoke("watch",identity,"--until","completed","--timeout","4s")
+                return
             if history_check:
                 def history_page(limit=1, before=""):
                     with socket.socket(socket.AF_UNIX) as conn:
@@ -488,6 +563,7 @@ def drive(root, native, guard, loopback, resume_check=False, history_check=False
             daemon.terminate()
             daemon.wait(timeout=4)
         if model:
+            model.release_pressure.set()
             model.shutdown()
             model.server_close()
         cleanup = fixtures.reap(root, None, previous)
@@ -495,7 +571,7 @@ def drive(root, native, guard, loopback, resume_check=False, history_check=False
         if cleanup["remaining"]:
             raise RuntimeError(f"fixture processes survived cleanup at {root}")
 
-def verify(candidate, provider, native, scratch, loopback, resume_check=False, history_check=False, alternate_check=False, reattach_check=False):
+def verify(candidate, provider, native, scratch, loopback, resume_check=False, history_check=False, alternate_check=False, reattach_check=False, guard_check=False):
     root = Path(tempfile.mkdtemp(prefix="sc-", dir=scratch))
     success = False
     try:
@@ -517,7 +593,7 @@ def verify(candidate, provider, native, scratch, loopback, resume_check=False, h
             (home / "config.toml").write_text(f'[projects."{root}/work"]\ntrust_level = "trusted"\n')
         guard = fixtures.guard(root)
         if sys.platform == "darwin":
-            drive(root, native, guard, loopback, resume_check, history_check, alternate_check, reattach_check)
+            drive(root, native, guard, loopback, resume_check, history_check, alternate_check, reattach_check, guard_check)
         else:
             if resume_check:
                 system = root/"system-policy"
@@ -537,6 +613,8 @@ def verify(candidate, provider, native, scratch, loopback, resume_check=False, h
                 command.append("--alternate-check")
             if reattach_check:
                 command.append("--reattach-check")
+            if guard_check:
+                command.append("--context-guard-check")
             subprocess.run(command, cwd=root/"work",env=fixtures.environment(root),timeout=150,check=True)
         success = True
     finally:
@@ -561,7 +639,10 @@ if __name__ == "__main__":
     parser.add_argument("--history-check",action="store_true")
     parser.add_argument("--alternate-check",action="store_true")
     parser.add_argument("--reattach-check",action="store_true")
+    parser.add_argument("--context-guard-check",action="store_true")
     args = parser.parse_args()
+    if args.context_guard_check and not args.loopback_model:
+        parser.error("--context-guard-check requires --loopback-model")
     if args.reattach_check and (not args.loopback_model or sys.platform!="linux"):
         parser.error("--reattach-check requires private Linux loopback inference")
     if args.alternate_check and not args.resume_check:
@@ -573,8 +654,8 @@ if __name__ == "__main__":
     if args.loopback_model and (not args.native or sys.platform not in ("linux","darwin")):
         parser.error("--loopback-model requires Linux or macOS and --native")
     if args.isolated_root and not args.candidate and Path(__file__).resolve().parent == args.isolated_root/"bin":
-        drive(args.isolated_root, args.native, [], args.loopback_model,args.resume_check,args.history_check,args.alternate_check,args.reattach_check)
+        drive(args.isolated_root, args.native, [], args.loopback_model,args.resume_check,args.history_check,args.alternate_check,args.reattach_check,args.context_guard_check)
     elif args.candidate and args.provider and not args.isolated_root:
-        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model,args.resume_check,args.history_check,args.alternate_check,args.reattach_check)
+        verify(args.candidate, args.provider, args.native, args.scratch.resolve(), args.loopback_model,args.resume_check,args.history_check,args.alternate_check,args.reattach_check,args.context_guard_check)
     else:
         parser.error("--candidate and --provider are required")

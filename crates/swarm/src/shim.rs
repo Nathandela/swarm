@@ -107,6 +107,8 @@ struct State {
     claude_schedule: Option<String>,
     manager: bool,
     terminal_input: AtomicBool,
+    context_guard_busy: AtomicBool,
+    context_guard_activity: AtomicU64,
     opencode: Option<Arc<opencode_backend::Backend>>,
     dir: PathBuf,
     working_dir: PathBuf,
@@ -663,6 +665,8 @@ fn serve(dir: &Path) -> io::Result<()> {
         claude_schedule,
         manager: !scope.is_null(),
         terminal_input: AtomicBool::new(false),
+        context_guard_busy: AtomicBool::new(false),
+        context_guard_activity: AtomicU64::new(0),
         dir: dir.to_owned(),
         working_dir: PathBuf::from(working_dir),
         observations: Mutex::new(ProviderObservation {
@@ -716,17 +720,24 @@ fn serve(dir: &Path) -> io::Result<()> {
         });
     }
     if let Some(channel) = channel {
-        let (cwd, dir, token) = (
-            state.working_dir.clone(),
-            state.dir.clone(),
-            state.token.clone(),
-        );
         let mut manager = scope.clone();
         if !manager.is_null() {
             manager["session_id"] = config["id"].clone();
         }
+        let guard_version = (schedule.is_none()
+            && manager.is_null()
+            && config["worker_discussion"].is_null()
+            && field(&config, "role").is_empty())
+        .then(|| field(provider, "version").to_owned());
+        let backend_state = state.clone();
         thread::spawn(move || {
-            codex_backend::observe(channel, cwd, dir, token, schedule, action_receiver, manager)
+            codex_backend::observe(
+                channel,
+                backend_state,
+                action_receiver,
+                manager,
+                guard_version,
+            )
         });
     }
     if let Some(opencode) = opencode {
@@ -1324,7 +1335,10 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 }
                 let _authority = state.control.lock().unwrap();
                 // shortcut: terminal edits make draft state uncertain until the native TUI exposes a verified empty composer.
-                if *_authority != 0 || state.terminal_input.load(Ordering::Acquire) {
+                if *_authority != 0
+                    || state.context_guard_busy.load(Ordering::Acquire)
+                    || state.terminal_input.load(Ordering::Acquire)
+                {
                     return Err(io::Error::other("Codex terminal draft is not proven empty"));
                 }
                 let sender = state
@@ -1370,6 +1384,12 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                 return Err(io::Error::other("invalid shim input payload"));
             }
             let _guard = state.control.lock().unwrap();
+            if state.context_guard_busy.load(Ordering::Acquire) {
+                return runtime::write_control(
+                    &mut stream,
+                    &json!({"type":"error","error":"Codex Context Guard has a native action active"}),
+                );
+            }
             state.terminal_input.store(true, Ordering::Release);
             if let Err(e) = write_input(
                 state,
@@ -1471,7 +1491,10 @@ fn maintenance_stop(state: &State, request: &Value) -> io::Result<()> {
         return Err(busy());
     }
     let _control = state.control.lock().unwrap();
-    if *_control != 0 || state.terminal_input.load(Ordering::Acquire) {
+    if *_control != 0
+        || state.terminal_input.load(Ordering::Acquire)
+        || state.context_guard_busy.load(Ordering::Acquire)
+    {
         return Err(busy());
     }
     if !runtime::valid_id(nonce)
@@ -1992,6 +2015,7 @@ fn attach(mut stream: UnixStream, state: &State) -> io::Result<()> {
             let _ = previous.conn.shutdown(Shutdown::Both);
         }
         *owner = generation;
+        state.context_guard_activity.fetch_add(1, Ordering::AcqRel);
     }
 
     stream.set_read_timeout(None)?;

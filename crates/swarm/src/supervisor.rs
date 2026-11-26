@@ -1,5 +1,5 @@
 mod claude_takeover;
-mod context_guard;
+pub(crate) mod context_guard;
 mod handoff;
 pub(crate) mod mail;
 pub(crate) mod mail_files;
