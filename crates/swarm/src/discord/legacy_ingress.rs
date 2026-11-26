@@ -1320,6 +1320,47 @@ mod tests {
     }
 
     #[test]
+    fn retained_original_go_vm_pending_file_stays_in_original_mailbox() {
+        let (Some(root), Some(fixture), Ok(conversation)) = (
+            std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_ROOT"),
+            std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_FIXTURE"),
+            std::env::var("SWARM_TEST_DISCORD_ACTIVE_VM_CONVERSATION"),
+        ) else {
+            return;
+        };
+        let place = Place::for_supervisor(Path::new(&root)).unwrap();
+        let cfg = place.load().unwrap();
+        let checkout = Path::new(cfg.text("work_dir"));
+        let worker_file = checkout.join("completion.csv");
+        let original_data = b"fixture,value\noriginal,1\n";
+        fs::write(&worker_file, original_data).unwrap();
+        let seed = Command::new(fixture)
+            .arg("worker-file")
+            .arg(&root)
+            .arg(checkout)
+            .arg(&worker_file)
+            .arg(&conversation)
+            .output()
+            .unwrap();
+        assert!(
+            seed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&seed.stderr)
+        );
+        let mailbox = place.supervisor_root().join("dispatcher-mail.db");
+        let before = fs::read(&mailbox).unwrap();
+        fs::write(&worker_file, b"changed after Go captured the completion").unwrap();
+        assert!(
+            activation::inspect_vm(&place)
+                .unwrap_err()
+                .to_string()
+                .contains("pending completion")
+        );
+        assert!(!activation::selected(&place).unwrap());
+        assert_eq!(before, fs::read(mailbox).unwrap());
+    }
+
+    #[test]
     fn retained_original_go_native_manager_roundtrip() {
         let Some(root) = std::env::var_os("SWARM_TEST_DISCORD_ACTIVE_ROOT") else {
             return;

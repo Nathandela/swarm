@@ -122,6 +122,10 @@ def exercise(go, fixture, codex, rust_test, base, acknowledge, vm=False):
                     reopened = json.loads(run(fixture, env, "activate", place, "original-room"))
                     assert reopened.pop("generation") == binding.pop("generation") + 1
                     assert reopened == binding and auth.read_bytes() == original_credential
+                    test_env["SWARM_TEST_DISCORD_ACTIVE_VM_CONVERSATION"] = binding["conversation_id"]
+                    run(rust_test, test_env, "retained_original_go_vm_pending_file_stays_in_original_mailbox",
+                        "--nocapture")
+                    assert posts == [] and calls == []
                     return
                 if not acknowledge:
                     test_env["SWARM_TEST_DISCORD_LOST_PUBLICATION_ACK"] = "1"

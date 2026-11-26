@@ -16,6 +16,7 @@ import (
 	"github.com/Nathandela/swarm/internal/skeleton"
 	"github.com/Nathandela/swarm/internal/teammatemanager"
 	"github.com/Nathandela/swarm/internal/voice"
+	"github.com/Nathandela/swarm/internal/workermail"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -53,6 +54,26 @@ func main() {
 		check(err)
 		check(store.SetOptOut(target, true))
 		check(store.Close())
+		return
+	}
+	if action == "worker-file" || action == "worker-file-read" {
+		checkout := os.Args[3]
+		binding := workermail.Binding{Discussion: os.Args[5], Parent: "fixture-manager",
+			Session: "fixture-endpoint/fixture-worker", Instance: "fixture-instance",
+			Attempt: "vm-child-fixture", Agent: "codex", Project: checkout}
+		if action == "worker-file-read" {
+			note, err := workermail.Lookup(dir, binding, "fixture-note")
+			check(err)
+			data, err := workermail.ReadFile(dir, binding, note.ID, note.Files[0].ID)
+			check(err)
+			_, err = os.Stdout.Write(data)
+			check(err)
+		} else {
+			files, err := workermail.CaptureFiles(checkout, []string{os.Args[4]})
+			check(err)
+			_, err = workermail.Submit(dir, binding, "fixture-note", "complete", "Fixture file", true, files...)
+			check(err)
+		}
 		return
 	}
 	if action == "project-access" {

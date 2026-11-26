@@ -1,5 +1,6 @@
 //! Durable ownership handoff for a stopped original personal connector.
 use super::*;
+use bbolt_rs::CursorApi;
 
 const MARKER: &str = ".rust-personal-handoff-v1.json";
 
@@ -84,6 +85,9 @@ pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<
         &endpoint,
     )?;
     let stored = &state.conversation["binding"];
+    if cfg.text("project_access") == "vm" {
+        require_no_pending_vm_mail(place, field(stored, "conversation_id"))?;
+    }
     let caps = ["semantic-send", "manager-provenance", "message-origin"];
     let (mut owner, rows) = super::super::migrate_supervisor::verified_owner(
         place.supervisor_root(),
@@ -134,6 +138,27 @@ pub(super) fn ready(place: &Place, cfg: &Config, db: &impl DbApi) -> io::Result<
         return Err(invalid());
     }
     open_owner_file(&directory.join("bridge.auth"))?;
+    Ok(())
+}
+
+fn require_no_pending_vm_mail(place: &Place, discussion: &str) -> io::Result<()> {
+    let path = place.supervisor_root().join("dispatcher-mail.db");
+    let (_pin, db) = match open_bolt(&path, 256 << 20) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        result => result?,
+    };
+    let tx = db.begin().map_err(io::Error::other)?;
+    let pending = tx.bucket(b"pending").ok_or_else(invalid)?;
+    let prefix = format!("{discussion}\0");
+    let mut cursor = pending.cursor();
+    if cursor
+        .seek(prefix.as_bytes())
+        .is_some_and(|(key, _)| key.starts_with(prefix.as_bytes()))
+    {
+        return Err(io::Error::other(
+            "original VM worker mailbox has a pending completion or request",
+        ));
+    }
     Ok(())
 }
 
@@ -246,4 +271,65 @@ pub(in crate::discord) fn disconnect(place: &Place) -> io::Result<()> {
         runtime::write_json(&place.dir.join("config.json"), &verified.0)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_vm_completion_is_read_only_and_discussion_scoped() {
+        let Some(fixture) = std::env::var_os("SWARM_TEST_GO_DISCORD_FIXTURE") else {
+            return;
+        };
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("vm-mail-{}", runtime::random_id().unwrap()));
+        runtime::private_dir(&root).unwrap();
+        let place = Place::fixture(root.clone());
+        require_no_pending_vm_mail(&place, "retained-room").unwrap();
+        let worker_file = root.join("completion.csv");
+        let original = b"fixture,value\noriginal,1\n";
+        fs::write(&worker_file, original).unwrap();
+        let run = |action| {
+            std::process::Command::new(&fixture)
+                .arg(action)
+                .arg(&root)
+                .arg(&root)
+                .arg(&worker_file)
+                .arg("retained-room")
+                .output()
+                .unwrap()
+        };
+        let result = run("worker-file");
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let mailbox = root.join("dispatcher-mail.db");
+        let before = fs::read(&mailbox).unwrap();
+        require_no_pending_vm_mail(&place, "another-room").unwrap();
+        assert!(
+            require_no_pending_vm_mail(&place, "retained-room")
+                .unwrap_err()
+                .to_string()
+                .contains("pending completion")
+        );
+        assert_eq!(before, fs::read(&mailbox).unwrap());
+        fs::write(&worker_file, b"fixture,value\nchanged,2\n").unwrap();
+        let duplicate = run("worker-file");
+        assert!(!duplicate.status.success());
+        assert!(String::from_utf8_lossy(&duplicate.stderr).contains("conflicting note"));
+        let reopened = run("worker-file-read");
+        assert!(
+            reopened.status.success(),
+            "{}",
+            String::from_utf8_lossy(&reopened.stderr)
+        );
+        assert_eq!(reopened.stdout, original);
+        assert_eq!(before, fs::read(mailbox).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
 }
