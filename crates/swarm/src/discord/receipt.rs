@@ -227,7 +227,9 @@ impl Inbox {
         if !edited.is_null() && !edited.as_str().is_some_and(|stamp| stamp.len() <= 64) {
             return Ok(None);
         }
-        if !self.data["messages"][id].is_null() && self.data["messages"][id]["state"] == "withdrawn"
+        if self.data["messages"][id]["state"] == "withdrawn"
+            || (self.data["messages"][id]["state"] == "rejected"
+                && self.data["messages"][id]["edited_at"] == *edited)
         {
             return Ok(None);
         }
@@ -337,7 +339,9 @@ impl Inbox {
             return Ok(Some(old.clone()));
         }
         if !old.is_null()
-            && (old["edited_at"] == *edited || edited.is_null() || old["state"] != "prepared")
+            && (old["edited_at"] == *edited
+                || edited.is_null()
+                || !matches!(old["state"].as_str(), Some("prepared" | "rejected")))
         {
             return Err(invalid(
                 "Discord admission conflicts with the persisted source",
@@ -432,6 +436,17 @@ impl Inbox {
             .values()
             .find(|row| row["state"] == "prepared" && row["voice_origin"].is_object())
             .cloned()
+    }
+
+    pub(super) fn reject_oversized_input(&mut self, id: &str, revision: &Value) -> io::Result<()> {
+        let source = &self.data["messages"][id];
+        if source["state"] != "prepared" || source["revision"] != *revision {
+            return Err(invalid("manager input changed before size refusal"));
+        }
+        let mut next = self.data.clone();
+        next["messages"][id]["state"] = json!("rejected");
+        next["messages"][id]["error"] = json!("manager input exceeds native dispatch limit");
+        self.save(next)
     }
 
     pub(super) fn withdraw(&mut self, id: &str) -> io::Result<()> {

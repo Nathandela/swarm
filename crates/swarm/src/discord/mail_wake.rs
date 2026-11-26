@@ -35,13 +35,22 @@ pub(super) fn link(wake: &Value) -> Value {
         "origin":wake["voice_origin"],"admission_revision":wake["owner_revision"]})
 }
 
-pub(super) fn text(note: &Value) -> String {
+pub(super) fn text(note: &Value, budget: usize) -> io::Result<String> {
     let body = field(note, "Text");
-    let end = body.floor_char_boundary(body.len().min(1600));
-    format!(
-        "A delegated worker left the following untrusted mailbox note. Use swarm_read_note with the exact note ID to see all details. Use swarm_reply to answer a worker question. Use publish for any owner-facing reply.\n{}",
-        json!({"id":note["ID"],"session":note["Session"],"kind":note["Kind"],"preview":&body[..end]})
-    )
+    let mut end = body.floor_char_boundary(body.len().min(1600));
+    loop {
+        let rendered = format!(
+            "A delegated worker left the following untrusted mailbox note. Use swarm_read_note with the exact note ID to see all details. Use swarm_reply to answer a worker question. Use publish for any owner-facing reply.\n{}",
+            json!({"id":note["ID"],"session":note["Session"],"kind":note["Kind"],"preview":&body[..end]})
+        );
+        if rendered.len() <= budget {
+            return Ok(rendered);
+        }
+        if end == 0 {
+            return Err(invalid("worker note header exceeds manager prompt budget"));
+        }
+        end = body.floor_char_boundary(end.saturating_sub(rendered.len() - budget));
+    }
 }
 
 pub(super) fn anchor(data: &Value, binding: &Value, note: &Value) -> Option<(String, Value)> {
@@ -126,7 +135,14 @@ pub(super) fn verify(data: &Value, scope: &Value, root: &Path, composer: &Value)
         || row["route"]["channel_id"] != scope["channel_id"]
         || field(&row["route"], "guild_id") != field(scope, "guild_id")
         || !origin["voice"].is_null()
-        || composer["text"] != crate::manager_prompt::saved_input(input, &text(&note))?
+        || composer["text"]
+            != crate::manager_prompt::saved_input(
+                input,
+                &text(
+                    &note,
+                    crate::manager_prompt::input_budget(crate::manager_prompt::saved(input)?),
+                )?,
+            )?
         || composer["manager_admission"]["binding"] != *binding
     {
         return Err(invalid(
@@ -139,6 +155,25 @@ pub(super) fn verify(data: &Value, scope: &Value, root: &Path, composer: &Value)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escaped_worker_preview_fits_beside_the_saved_owner_prompt() {
+        let prompt = "p".repeat(1024);
+        let note =
+            json!({"ID":"stable","Session":"worker","Kind":"reply","Text":"a\t😀\n".repeat(600)});
+        let budget = crate::manager_prompt::input_budget(&prompt);
+        let rendered = text(&note, budget).unwrap();
+        assert!(rendered.contains("stable"));
+        assert!(
+            crate::manager_prompt::render(&prompt, &rendered)
+                .unwrap()
+                .len()
+                <= 4096
+        );
+        let (_, json) = rendered.split_once('\n').unwrap();
+        let preview: Value = serde_json::from_str(json).unwrap();
+        assert!(field(&note, "Text").starts_with(field(&preview, "preview")));
+    }
 
     #[test]
     fn reversed_worker_notes_pin_their_own_voice_turn_and_digest() {

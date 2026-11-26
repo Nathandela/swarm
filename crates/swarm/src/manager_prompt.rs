@@ -8,6 +8,16 @@ use std::path::Path;
 
 const NAME: &str = "starting-prompt";
 const LIMIT: usize = 1024;
+const HEADER: &str = "Current owner settings (supersede earlier settings)\n";
+const INPUT: &str = "\n\nCurrent input\n";
+
+pub(crate) fn input_budget(prompt: &str) -> usize {
+    if prompt.is_empty() {
+        4096
+    } else {
+        4096usize.saturating_sub(HEADER.len() + prompt.len() + INPUT.len())
+    }
+}
 
 fn validate(text: &str) -> io::Result<()> {
     if text.len() > LIMIT || text.chars().any(char::is_control) {
@@ -98,29 +108,31 @@ pub(crate) fn save(root: &Path, text: &str) -> io::Result<()> {
 
 pub(crate) fn render(prompt: &str, input: &str) -> io::Result<String> {
     validate(prompt)?;
-    let rendered = if prompt.is_empty() {
-        input.to_owned()
-    } else {
-        format!(
-            "Current owner settings (supersede earlier settings)\n{prompt}\n\nCurrent input\n{input}"
-        )
-    };
-    if !crate::schedule::worker::prompt_fits(&rendered, false) {
+    if input.len() > input_budget(prompt) {
         return Err(io::Error::other(
             "manager input exceeds native dispatch limit",
         ));
     }
-    Ok(rendered)
+    Ok(if prompt.is_empty() {
+        input.to_owned()
+    } else {
+        format!("{HEADER}{prompt}{INPUT}{input}")
+    })
 }
 
-pub(crate) fn saved_input(input: &serde_json::Value, text: &str) -> io::Result<String> {
+pub(crate) fn saved(input: &serde_json::Value) -> io::Result<&str> {
     let prompt = match input.get("starting_prompt") {
         None => "",
         Some(value) => value
             .as_str()
             .ok_or_else(|| io::Error::other("invalid saved manager prompt"))?,
     };
-    render(prompt, text)
+    validate(prompt)?;
+    Ok(prompt)
+}
+
+pub(crate) fn saved_input(input: &serde_json::Value, text: &str) -> io::Result<String> {
+    render(saved(input)?, text)
 }
 
 #[cfg(test)]

@@ -297,6 +297,9 @@ impl Dispatcher {
             (id, current)
         };
         let starting_prompt = crate::manager_prompt::load(&self.owner.supervisor_root()?)?;
+        if field(&current, "text").len() > crate::manager_prompt::input_budget(&starting_prompt) {
+            return inbox.reject_oversized_input(&id, &current["revision"]);
+        }
         let composer = self.owner.composer(&current, &status, &starting_prompt)?;
         let semantic = operation("semantic")?;
         state["input"] = json!({"operation":semantic,"composer":composer,"source_id":id,"starting_prompt":starting_prompt});
@@ -509,8 +512,11 @@ impl Dispatcher {
                 .shift_remove("voice_origin");
             wake_input["operation_id"] = json!(format!("mail_{key}"));
             wake_input["revision"] = json!(key);
-            wake_input["text"] = json!(mail_wake::text(&note));
             let starting_prompt = crate::manager_prompt::load(&root)?;
+            wake_input["text"] = json!(mail_wake::text(
+                &note,
+                crate::manager_prompt::input_budget(&starting_prompt)
+            )?);
             let mut composer = self.owner.composer(&wake_input, status, &starting_prompt)?;
             let semantic = operation("semantic")?;
             let mut wake = json!({"key":key,"binding":mail_wake::identity(&note),"id":note["ID"],"owner_revision":accepted_revision});
@@ -1067,7 +1073,7 @@ mod tests {
     }
 
     fn source(cfg: &Config, id: &str) -> Value {
-        json!({"id":id, "type":0, "channel_id":cfg.text("dm_channel_id"),"content":"hello",
+        json!({"id":id, "type":0, "channel_id":cfg.text("dm_channel_id"),"content":if id=="100" {"x".repeat(3500)} else {"hello".into()},
             "author":{"id":cfg.text("owner_id")},"attachments":[]})
     }
 
@@ -1133,7 +1139,10 @@ mod tests {
                     assert_eq!(self.composer["origin"]["installation_id"], "fixture");
                     assert_eq!(self.composer["origin"]["actor_id"], "300");
                     assert_eq!(self.composer["origin"]["channel_id"], "400");
-                    assert_eq!(self.composer["text"], "hello");
+                    assert_eq!(
+                        self.composer["text"],
+                        crate::manager_prompt::render(&"P".repeat(800), "hello").unwrap()
+                    );
                     json!({"op":"ok","operation_id":request["operation_id"]})
                 }
                 "manager_input_status" => {
@@ -1246,13 +1255,21 @@ mod tests {
             })
         };
         let mut inbox = Inbox::open(&dir, &cfg).unwrap();
-        inbox.checkpoint("100").unwrap();
+        inbox.checkpoint("99").unwrap();
+        crate::manager_prompt::save(&dir, &"P".repeat(800)).unwrap();
+        inbox.admit(&source(&cfg, "100")).unwrap();
         inbox.admit(&source(&cfg, "101")).unwrap();
         let dispatcher = Dispatcher::open(&cfg, &dir).unwrap().unwrap();
         let api = MockDiscord {
             outcome: RefCell::new(Post::RateLimited(60_000)),
             posted: RefCell::new(Vec::new()),
         };
+        dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+        assert_eq!(state.lock().unwrap().sends, 0);
+        drop(inbox);
+        let mut inbox = Inbox::open(&dir, &cfg).unwrap();
+        assert_eq!(inbox.next_prepared().unwrap()["route"]["message_id"], "101");
+        assert!(inbox.admit(&source(&cfg, "100")).unwrap().is_none());
         dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
         assert_eq!(state.lock().unwrap().sends, 1);
         assert!(api.posted.borrow().is_empty());
