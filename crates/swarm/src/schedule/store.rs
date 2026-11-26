@@ -545,7 +545,7 @@ impl Store {
         prompt: String,
         now: Timestamp,
     ) -> Result<Template> {
-        self.save_template_if_current(existing, name, prompt, None, now)
+        self.save_template_inner(existing, name, prompt, None, None, now)
     }
 
     pub fn save_template_if_current(
@@ -554,6 +554,26 @@ impl Store {
         name: String,
         prompt: String,
         expected_updated_at: Option<Timestamp>,
+        endpoint_id: &str,
+        now: Timestamp,
+    ) -> Result<Template> {
+        self.save_template_inner(
+            existing,
+            name,
+            prompt,
+            expected_updated_at,
+            Some(endpoint_id),
+            now,
+        )
+    }
+
+    fn save_template_inner(
+        &self,
+        existing: Option<&str>,
+        name: String,
+        prompt: String,
+        expected_updated_at: Option<Timestamp>,
+        endpoint_id: Option<&str>,
         now: Timestamp,
     ) -> Result<Template> {
         validate_text(&name, &prompt)?;
@@ -577,6 +597,31 @@ impl Store {
             template.name = name;
             template.prompt = prompt;
             template.updated_at = now;
+            let mut templates: Vec<Template> = records(tx, TEMPLATES)?;
+            if let Some(existing) = templates.iter_mut().find(|item| item.id == template.id) {
+                *existing = template.clone();
+            } else {
+                templates.push(template.clone());
+            }
+            templates.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+            let list = serde_json::json!({"op":"schedule_templates","templates":templates});
+            if serde_json::to_vec(&list)?.len() > crate::ipc::wire::MAX_FRAME.saturating_sub(1024) {
+                return Err(
+                    "personal template list would exceed the owner socket frame limit".into(),
+                );
+            }
+            if let Some(endpoint_id) = endpoint_id {
+                let change = serde_json::json!({
+                    "op":"schedule_template_change",
+                    "template":template,
+                    "endpoint_id":endpoint_id,
+                });
+                if serde_json::to_vec(&change)?.len() >= crate::ipc::wire::MAX_FRAME {
+                    return Err(
+                        "personal template reply exceeds the owner socket frame limit".into(),
+                    );
+                }
+            }
             put(tx, TEMPLATES, &template.id, &template)?;
             Ok(template)
         })

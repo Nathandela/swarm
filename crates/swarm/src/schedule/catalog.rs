@@ -177,7 +177,7 @@ impl TemplateChange {
     }
 }
 
-pub(crate) fn change_template(root: &Path, request: &Value) -> Result<Value> {
+pub(crate) fn change_template(root: &Path, request: &Value, endpoint_id: &str) -> Result<Value> {
     let change: TemplateChange = serde_json::from_value(request["change"].clone())?;
     let store = Store::open(root, Path::new("/etc/localtime"))?;
     match change {
@@ -198,6 +198,7 @@ pub(crate) fn change_template(root: &Path, request: &Value) -> Result<Value> {
                 name,
                 prompt,
                 expected_updated_at,
+                endpoint_id,
                 jiff::Timestamp::now(),
             )?;
             Ok(json!({"op":TEMPLATE_CHANGE,"template":template}))
@@ -263,6 +264,10 @@ mod tests {
         }
     }
 
+    fn change(temp: &Temp, request: &Value) -> Result<Value> {
+        change_template(&temp.0, request, "fixture-endpoint")
+    }
+
     #[test]
     fn template_catalog_operations_preserve_go_written_template() {
         let temp = Temp::with_go_catalog();
@@ -277,19 +282,13 @@ mod tests {
 
         let database = temp.0.join("schedules/state.db");
         let unchanged = fs::read(&database).unwrap();
-        assert!(change_template(
-            &temp.0,
+        assert!(change(
+            &temp,
             &json!({"change":{"kind":"save","id":original.id,"name":"No fence","prompt":"No fence"}}),
         )
         .is_err());
         assert_eq!(fs::read(&database).unwrap(), unchanged);
-        assert!(
-            change_template(
-                &temp.0,
-                &json!({"change":{"kind":"delete","id":original.id}}),
-            )
-            .is_err()
-        );
+        assert!(change(&temp, &json!({"change":{"kind":"delete","id":original.id}}),).is_err());
         assert_eq!(fs::read(&database).unwrap(), unchanged);
 
         store
@@ -301,27 +300,27 @@ mod tests {
             )
             .unwrap();
         let before_stale = fs::read(&database).unwrap();
-        assert!(change_template(
-            &temp.0,
+        assert!(change(
+            &temp,
             &json!({"change":{"kind":"save","id":original.id,"name":"Stale","prompt":"Stale","expected_updated_at":original.updated_at}}),
         )
         .is_err());
         assert_eq!(fs::read(&database).unwrap(), before_stale);
-        assert!(change_template(
-            &temp.0,
+        assert!(change(
+            &temp,
             &json!({"change":{"kind":"delete","id":original.id,"expected_updated_at":original.updated_at}}),
         )
         .is_err());
         assert_eq!(fs::read(&database).unwrap(), before_stale);
 
-        let created = change_template(
-            &temp.0,
+        let created = change(
+            &temp,
             &json!({"change":{"kind":"save","name":"New","prompt":"First\nSecond"}}),
         )
         .unwrap();
         let created: Template = serde_json::from_value(created["template"].clone()).unwrap();
-        let edited = change_template(
-            &temp.0,
+        let edited = change(
+            &temp,
             &json!({"change":{"kind":"save","id":created.id,"name":"Edited","prompt":"Updated","expected_updated_at":created.updated_at}}),
         )
         .unwrap();
@@ -330,8 +329,8 @@ mod tests {
         assert_eq!(edited.created_at, created.created_at);
         assert_eq!(edited.name, "Edited");
 
-        let deleted = change_template(
-            &temp.0,
+        let deleted = change(
+            &temp,
             &json!({"change":{"kind":"delete","id":edited.id,"expected_updated_at":edited.updated_at}}),
         )
         .unwrap();
@@ -343,6 +342,53 @@ mod tests {
         assert_eq!(templates.len(), 1);
         assert_eq!(templates[0].id, original.id);
         assert_eq!(templates[0].prompt, "New prompt");
+    }
+
+    #[test]
+    fn oversized_template_create_fails_without_commit_or_retry_duplicate() {
+        let temp = Temp::with_go_catalog();
+        Store::open(&temp.0, Path::new("/etc/localtime")).unwrap();
+        let database = temp.0.join("schedules/state.db");
+        let unchanged = fs::read(&database).unwrap();
+        let prompt = "x".repeat(crate::ipc::wire::MAX_FRAME - 170);
+        let request = json!({
+            "op":"schedule_template_change",
+            "endpoint_id":"fixture-endpoint",
+            "change": {
+                "kind":"save",
+                "name":"Too large",
+                "prompt":prompt,
+            }
+        });
+        assert!(serde_json::to_vec(&request).unwrap().len() < crate::ipc::wire::MAX_FRAME);
+        let candidate = Template {
+            id: "0".repeat(26),
+            name: "Too large".into(),
+            prompt: "x".repeat(crate::ipc::wire::MAX_FRAME - 170),
+            created_at: "2026-11-01T05:00:00Z".parse().unwrap(),
+            updated_at: "2026-11-01T05:00:00Z".parse().unwrap(),
+        };
+        let success = json!({
+            "op":"schedule_template_change",
+            "template":candidate.clone(),
+            "endpoint_id":"fixture-endpoint",
+        });
+        assert!(serde_json::to_vec(&success).unwrap().len() >= crate::ipc::wire::MAX_FRAME);
+        let list = json!({"op":"schedule_templates","templates":[candidate]});
+        assert!(serde_json::to_vec(&list).unwrap().len() > crate::ipc::wire::MAX_FRAME - 1024);
+
+        for _ in 0..2 {
+            assert!(change(&temp, &request).is_err());
+            assert_eq!(fs::read(&database).unwrap(), unchanged);
+            assert_eq!(
+                Store::open(&temp.0, Path::new("/etc/localtime"))
+                    .unwrap()
+                    .templates()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
     }
 }
 

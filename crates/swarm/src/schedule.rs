@@ -99,7 +99,7 @@ impl Job {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Template {
     pub(crate) id: String,
     pub(crate) name: String,

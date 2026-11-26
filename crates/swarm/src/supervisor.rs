@@ -1283,6 +1283,7 @@ fn connection(mut stream: UnixStream, state: &State) -> io::Result<()> {
                     crate::schedule::catalog::change_template(
                         state.root.parent().ok_or_else(|| io::Error::other("missing owner state root"))?,
                         &request,
+                        &state.endpoint,
                     )
                     .unwrap_or_else(|error| json!({"op":"error","error_code":"invalid_field","error":error.to_string()}))
                 } else {
