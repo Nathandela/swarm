@@ -26,6 +26,7 @@ const RUNS: &str = "occurrences";
 const HISTORY: &str = "job_occurrences";
 const ACTIVE: &str = "active_occurrences";
 const TEMPLATES: &str = "templates";
+const TEMPLATE_CREATES: &str = "template_create_receipts";
 const NOT_FOUND: &str = "schedule record not found";
 const ARCHIVED: &str = "schedule job is archived";
 const CONFLICT: &str = "schedule job revision changed";
@@ -577,6 +578,30 @@ impl Store {
     ) -> Result<Template> {
         validate_text(&name, &prompt)?;
         self.write(|tx| {
+            let receipt = match target {
+                TemplateTarget::Create(Some(id)) => {
+                    let fingerprint = digest(serde_json::to_vec(&(&name, &prompt))?);
+                    tx.ensure_bucket(TEMPLATE_CREATES)?;
+                    if let Some(saved) = tx.get_raw(TEMPLATE_CREATES, id)? {
+                        if saved != fingerprint.as_bytes() {
+                            return Err(
+                                "personal template ID already belongs to another request".into()
+                            );
+                        }
+                        let current = get::<Template>(tx, TEMPLATES, id)?
+                            .ok_or("the previously saved personal template was deleted")?;
+                        if current.name != name || current.prompt != prompt {
+                            return Err("the previously saved personal template was edited".into());
+                        }
+                        if let Some(endpoint_id) = endpoint_id {
+                            check_template_reply(&current, endpoint_id)?;
+                        }
+                        return Ok(current);
+                    }
+                    Some((id, fingerprint))
+                }
+                _ => None,
+            };
             let mut template: Template = match target {
                 TemplateTarget::Edit(id, expected_updated_at) => {
                     let template: Template = require(tx, TEMPLATES, id)?;
@@ -590,10 +615,7 @@ impl Store {
                         Some(id) => id.to_owned(),
                         None => id(now)?,
                     };
-                    if let Some(template) = get::<Template>(tx, TEMPLATES, &id)? {
-                        if chosen.is_some() && template.name == name && template.prompt == prompt {
-                            return Ok(template);
-                        }
+                    if tx.has_raw(TEMPLATES, &id)? {
                         return Err(
                             "personal template ID already belongs to another request".into()
                         );
@@ -626,18 +648,12 @@ impl Store {
                         "personal template list would exceed the owner socket frame limit".into(),
                     );
                 }
-                let change = serde_json::json!({
-                    "op":"schedule_template_change",
-                    "template":template,
-                    "endpoint_id":endpoint_id,
-                });
-                if serde_json::to_vec(&change)?.len() >= crate::ipc::wire::MAX_FRAME {
-                    return Err(
-                        "personal template reply exceeds the owner socket frame limit".into(),
-                    );
-                }
+                check_template_reply(&template, endpoint_id)?;
             }
             put(tx, TEMPLATES, &template.id, &template)?;
+            if let Some((id, fingerprint)) = receipt {
+                tx.put_raw(TEMPLATE_CREATES, id, fingerprint.as_bytes())?;
+            }
             Ok(template)
         })
     }
@@ -1013,6 +1029,16 @@ fn initialize(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn check_template_reply(template: &Template, endpoint_id: &str) -> Result<()> {
+    let reply = serde_json::json!({
+        "op":"schedule_template_change", "template":template, "endpoint_id":endpoint_id,
+    });
+    if serde_json::to_vec(&reply)?.len() >= crate::ipc::wire::MAX_FRAME {
+        return Err("personal template reply exceeds the owner socket frame limit".into());
+    }
+    Ok(())
+}
+
 fn private_file(path: &Path, create: bool) -> Result<Option<File>> {
     let file = match OpenOptions::new()
         .read(true)
@@ -1085,11 +1111,17 @@ impl<'tx, T: TxApi<'tx>> ReadBucket for T {
 }
 
 trait WriteBucket: ReadBucket {
+    fn ensure_bucket(&mut self, name: &str) -> Result<()>;
     fn put_raw(&mut self, bucket: &str, key: &str, value: &[u8]) -> Result<()>;
     fn delete_raw(&mut self, bucket: &str, key: &str) -> Result<()>;
 }
 
 impl<'tx, T: TxRwRefApi<'tx>> WriteBucket for T {
+    fn ensure_bucket(&mut self, name: &str) -> Result<()> {
+        self.create_bucket_if_not_exists(name)?;
+        Ok(())
+    }
+
     fn put_raw(&mut self, name: &str, key: &str, value: &[u8]) -> Result<()> {
         Ok(self
             .bucket_mut(name)

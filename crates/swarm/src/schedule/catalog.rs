@@ -377,6 +377,14 @@ mod tests {
         assert_eq!(change(&temp, &change_body("same prompt")).unwrap(), first);
         let database = temp.0.join("schedules/state.db");
         let unchanged = fs::read(&database).unwrap();
+        let large_endpoint = "e".repeat(crate::ipc::wire::MAX_FRAME);
+        assert!(
+            change_template(&temp.0, &change_body("same prompt"), &large_endpoint)
+                .unwrap_err()
+                .to_string()
+                .contains("reply exceeds")
+        );
+        assert_eq!(fs::read(&database).unwrap(), unchanged);
         assert!(change(&temp, &change_body("different prompt")).is_err());
         assert_eq!(fs::read(&database).unwrap(), unchanged);
         assert_eq!(
@@ -386,6 +394,17 @@ mod tests {
                 .len(),
             2
         );
+        let store = Store::open(&temp.0, Path::new("/etc/localtime")).unwrap();
+        store.delete_template(id).unwrap();
+        let deleted = fs::read(&database).unwrap();
+        assert!(
+            change(&temp, &change_body("same prompt"))
+                .unwrap_err()
+                .to_string()
+                .contains("was deleted")
+        );
+        assert_eq!(fs::read(&database).unwrap(), deleted);
+        assert!(store.template(id).is_err());
     }
 
     #[test]
