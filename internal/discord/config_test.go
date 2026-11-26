@@ -76,7 +76,10 @@ func TestConfigRejectsMalformedAndSecretDiagnostics(t *testing.T) {
 }
 func TestLoadToken(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(p, []byte("secret\n"), 0644); err != nil {
+	if err := os.WriteFile(p, []byte("secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, 0644); err != nil {
 		t.Fatal(err)
 	}
 	s, err := LoadToken(p)
@@ -93,7 +96,10 @@ func TestLoadTokenRejectsSymlinkAndHidesPath(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target")
 	link := filepath.Join(dir, "sensitive-value")
-	if err := os.WriteFile(target, []byte("secret"), 0644); err != nil {
+	if err := os.WriteFile(target, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, link); err != nil {
@@ -118,7 +124,10 @@ func TestLinkedCustodyPathsAreRejectedWithoutChmod(t *testing.T) {
 			foreign := filepath.Join(base, "foreign")
 			dir := filepath.Join(base, "state")
 			if kind == "directory" {
-				if err := os.Mkdir(foreign, 0755); err != nil {
+				if err := os.Mkdir(foreign, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(foreign, 0755); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.Symlink(foreign, dir); err != nil {
@@ -137,7 +146,10 @@ func TestLinkedCustodyPathsAreRejectedWithoutChmod(t *testing.T) {
 			if err := os.Mkdir(dir, 0700); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(foreign, []byte("secret"), 0644); err != nil {
+			if err := os.WriteFile(foreign, []byte("secret"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(foreign, 0644); err != nil {
 				t.Fatal(err)
 			}
 			path := ConfigPath(dir)
@@ -220,7 +232,10 @@ func TestActiveStateIsPrivateAndFailsClosed(t *testing.T) {
 		t.Fatal("invalid pointer silently fell back")
 	}
 	foreign := filepath.Join(t.TempDir(), "foreign")
-	if err := os.WriteFile(foreign, []byte(`"/tmp"`), 0644); err != nil {
+	if err := os.WriteFile(foreign, []byte(`"/tmp"`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(foreign, 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(path); err != nil {

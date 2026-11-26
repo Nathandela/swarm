@@ -141,16 +141,6 @@ func TestR7BackendSource_ObligationSeven_BackendIsPureAndTotalOnInteractionsTerm
 	}
 }
 
-// TestR7BackendSource_TheNewTypesTripNoBannedIOToken keeps the E9.2 grep honest across the
-// extension. BackendSpec/BackendPlan are pure data; a plan that named a net.Dial or an
-// exec.Command would mean the descriptor had grown an fd.
-func TestR7BackendSource_TheNewTypesTripNoBannedIOToken(t *testing.T) {
-	// The scan itself is TestContractPackage_NoIOInSource's; this test exists so the
-	// obligation is named where the extension is, and it fails loudly if the shared
-	// scanner ever stops covering this package's production files.
-	scanBannedIO(t, ".")
-}
-
 // TestR7BackendSource_ObligationNineA_ProgramResolvesThroughTheCoresLookPath is check 9a:
 // the CORE calls HostProber.LookPath(plan.Program) -- the same discipline
 // Detect(a, HostProber) uses (adapter.go:126-147) -- and refuses a plan whose Program

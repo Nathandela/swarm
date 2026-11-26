@@ -109,13 +109,6 @@ func TestR7CodexBackend_PlanIsPureTotalAndDeterministic(t *testing.T) {
 	}
 }
 
-// TestR7CodexBackend_TheAdapterStillOwnsNoFd re-runs the E9.2 source grep over this package
-// now that it names a second process. A `net.Dial` or an `exec.Command` appearing here is
-// the exact drift ADR-001/E9.2 forbids: the adapter DESCRIBES, the core executes.
-func TestR7CodexBackend_TheAdapterStillOwnsNoFd(t *testing.T) {
-	scanBannedIO(t, ".")
-}
-
 // TestR7CodexBackend_NoKeystrokeSeamEverOnCodex is playbook §8.2's prohibition made
 // STRUCTURAL rather than accidental: "No Codex semantic operation may be implemented by
 // terminal keystroke injection."

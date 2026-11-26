@@ -230,6 +230,9 @@ func TestRollback(t *testing.T) {
 						if err := os.WriteFile(p, []byte("old unit"), 0640); err != nil {
 							t.Fatal(err)
 						}
+						if err := os.Chmod(p, 0640); err != nil {
+							t.Fatal(err)
+						}
 					}
 					if tc.platform == "darwin" && tc.active {
 						f.loaded = "old unit"

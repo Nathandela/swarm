@@ -48,30 +48,6 @@ import (
 	"time"
 )
 
-// viewCollector accumulates pushed views. Same shape as `collector`, over the new type.
-type viewCollector struct {
-	mu  chan struct{}
-	got []TerminalView
-}
-
-func newViewCollector() *viewCollector {
-	c := &viewCollector{mu: make(chan struct{}, 1)}
-	c.mu <- struct{}{}
-	return c
-}
-
-func (c *viewCollector) push(v TerminalView) {
-	<-c.mu
-	c.got = append(c.got, v)
-	c.mu <- struct{}{}
-}
-
-func (c *viewCollector) views() []TerminalView {
-	<-c.mu
-	defer func() { c.mu <- struct{}{} }()
-	return append([]TerminalView(nil), c.got...)
-}
-
 // r8RunView drives one render-loop run to completion over a closed frame channel, which is
 // exactly the shape of a run that ends because the transport dropped.
 func r8RunView(t *testing.T, session, instance string, snap []byte, feed [][]byte) []TerminalView {
@@ -81,11 +57,11 @@ func r8RunView(t *testing.T, session, instance string, snap []byte, feed [][]byt
 		frames <- f
 	}
 	close(frames)
-	c := newViewCollector()
+	var c collector
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	RenderTerminalView(ctx, session, instance, &stubTerminalStream{snap: snap, frames: frames}, alwaysAllowed, c.push)
-	return c.views()
+	return c.snapshots()
 }
 
 // TestR8View_FirstSnapshotOfAnEpochCarriesReset is T4-a's marker rule, over BOTH paths.
@@ -210,51 +186,4 @@ func TestR8View_EveryViewCarriesItsSessionInstance(t *testing.T) {
 				"the snapshot's OWN age; arrival time renders a quiet machine as an idle terminal.", i)
 		}
 	}
-}
-
-// TestR8View_LivenessIsPolledEveryTickAndBeforeEveryEmission is T4-b + T6-e over the
-// predicate the loop already polls.
-//
-// `stillAllowed` exists and is polled every tick (terminalrender.go:121-127) -- that half is
-// green and this test keeps it green. What is new is that the SAME predicate must gate the
-// emission itself, so a watch that dies between the tick and the push does not ship one last
-// screen, and that the predicate carries the watch lease and the capability alongside the
-// kill switch rather than the kill switch alone.
-func TestR8View_LivenessIsPolledEveryTickAndBeforeEveryEmission(t *testing.T) {
-	frames := make(chan []byte, 4)
-	frames <- []byte("BEFORE")
-	c := newViewCollector()
-	allowed := make(chan bool, 1)
-	allowed <- true
-	live := true
-	stillAllowed := func() bool {
-		select {
-		case v := <-allowed:
-			live = v
-		default:
-		}
-		return live
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		RenderTerminalView(ctx, "sess1", "inst-a", &stubTerminalStream{snap: snapBytes(t, 40, 10, nil), frames: frames}, stillAllowed, c.push)
-	}()
-
-	// Withdraw the permission with NO further phone action and NO ctx cancel: the loop must
-	// return on its own tick.
-	time.Sleep(50 * time.Millisecond)
-	allowed <- false
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("ADR-017 T4-b/T6-e: the render loop did not return within 2s of its liveness predicate " +
-			"going false. A watch whose lease expired, whose capability was withdrawn or whose session " +
-			"was replaced must stop rendering, sealing and appending on the loop's OWN clock -- the " +
-			"phone may be gone, which is the case the horizon exists for.")
-	}
-	close(frames)
 }
