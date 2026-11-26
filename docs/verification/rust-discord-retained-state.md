@@ -23,6 +23,17 @@ For a stopped original restricted personal connector with its manager still runn
 
 After the Rust connector stops, `swarm discord migrate-state --activate-personal --rollback` removes its activation handoff. The original configuration and Go-readable ledgers still belong to the same place and manager. An active connector or mismatched enrollment prevents rollback.
 
+The retained personal and teammate paths validate the original Go Voice v3/v4 transaction before using it for native input, publication, or receipt updates. The check covers the record keys and types, the keyed checksum and record count, and the exact logical size of Go's decoded State. The stored hashes alone do not prove that Go can reopen the ledger. Opaque Go JSON payloads retain their numeric and string escape spellings when counted. An unsupported record remains with Go.
+
+On Linux x86_64, the signed Go v0.29.26 supervisor and native Codex exercised genuine retained guild and VM ledgers. Pinned Go wrote an opaque journal record containing `1e+09`, `1e+900` and `\u003C`. Rust accepted that original spelling in the clean guild stage. Increasing only the declared logical size by one and updating its header digest made both implementations refuse the same copied bytes. The guild stage, queued VM native-input path and personal first-POST check left the damaged inputs and connector ledger unchanged and made zero native submissions or POSTs on the refusal paths. Clean VM restart and mixed text/file delivery still completed. The signed Go v0.29.25 comparison also passed native v3 guild preparation and interrupted controller recovery. The macOS arm64 retained suite passed the logical-size, opaque JSON and timestamp checks, stopped-Go JSON preservation, reply notice and personal publication comparisons.
+
+| Verification evidence | SHA-256 |
+| --- | --- |
+| Linux signed v0.29.26 guild/VM A/B | `39cad873d3ec4264ef2524162a2c3500da3a6eb46e4fc40c0d2bd6ff617f8c7c` |
+| Linux signed v0.29.26 preparation and mature VM | `ce27bcb2ecc6b7be0d8395d0032964fb287339b3b4d7ae8cbfbae473bc69f9a4` |
+| Linux signed v0.29.25 v3 preparation | `ae24749e77e4223f01405c4cfd8a5525c021078524673688d6647a1120f2c2b1` |
+| macOS arm64 retained utility comparisons | `db63db2851bcaa8ddf9cfbfd464ad4992ca46a130f0b908d276014f44fc1b663` |
+
 Original Go attachment publications use the saved media-controller export and Bbolt payload. Rust verifies the current project/attempt scope and every file ID, name, size and digest before uploading. It records Discord’s exact attachment IDs and releases the staged buffer only after an acknowledged match. An unresolved upload keeps its bytes and original nonce.
 
 The Go general-files change at `7f67c067f153f4c1cdd13f3cb20d9610dc6ca9cf` adds GIF, WebP, ZIP, Office and OpenDocument containers, UTF-8 text formats, and opaque BIN and DAT files. Rust uses the same output names, media types, and immutable file IDs for new captures. It checks the original path and normalized name for hidden or credential names and rejects collisions after normalization. The physical checkout and file identity checks still apply. Archives are checked by their container signature. Old signed v0.29.25 publications retain their original format, name, and receipt. Go v0.29.25 can resume those original formats. Delivering newly staged general file types requires a build with the expanded outbox catalog.
