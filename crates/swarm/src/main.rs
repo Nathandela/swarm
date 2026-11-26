@@ -1,5 +1,6 @@
 mod board;
 mod bootstrap;
+mod clean;
 mod discord;
 mod doctor;
 mod environment;
@@ -19,7 +20,7 @@ mod workspace;
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: swarm [schedule|daemon|shim|ls|peek|watch|spawn|handoff|message|requests|decide|send|kill|doctor|discord|pilot|--pilot|setup-trust|dispatcher-guide|version]\n";
+const USAGE: &str = "usage: swarm [schedule|daemon|shim|ls|peek|watch|spawn|handoff|message|requests|decide|send|kill|clean|doctor|discord|pilot|--pilot|setup-trust|dispatcher-guide|version]\n";
 const GUIDE: &str = include_str!("../../../cmd/swarm/skills/swarm-dispatcher/guide.txt");
 const SKILL: &str = include_str!("../../../cmd/swarm/skills/swarm-dispatcher/SKILL.md");
 
@@ -63,6 +64,7 @@ fn main() -> ExitCode {
         Some("hook") => hook::run(&args[1..]),
         Some("native-input") => providers::agy_input::cli(&args[1..]),
         Some("shim") => shim::run(&args[1..]),
+        Some("clean") => clean::run(&args[1..]),
         Some("doctor") => doctor::run(&args[1..]),
         Some("release-info") if args.len() == 1 => {
             println!("{}", release::info());
