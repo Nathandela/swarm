@@ -368,9 +368,16 @@ def witness(base, go, fixture, codex, rust_test=None, interrupt=False, prepare_o
             except KeyError:
                 return False
             turn = current["turn"]
-            return (current["binding"] == start["binding"] and current["ready_for_input"] is False
+            if not (current["binding"] == start["binding"] and current["ready_for_input"] is False
                     and turn["state"] == "running" and turn["native_turn_id"] == original_turn["native_turn_id"]
-                    and turn["native_input_id"] == original_turn["native_input_id"])
+                    and turn["native_input_id"] == original_turn["native_input_id"]):
+                return False
+            rows = owner(env, {"op":"list"}, caps=("manager-provenance", "message-origin"))["sessions"]
+            return len([row for row in rows if row["id"] == start["binding"]["session"]
+                        and row["role"] == "manager" and row["agent"] == "codex"
+                        and row["manager_conversation_id"] == start["binding"]["conversation_id"]
+                        and row["cwd"] == str(base / "work") and row["status"]["Process"] == "running"
+                        and row["capabilities"]["session_instance"] == start["binding"]["session_instance"]]) == 1
         await_value(running_runtime)
         exact_voice, exact_connector = voice.read_bytes(), connector.read_bytes()
         sock = Path(start["bridge_socket"])

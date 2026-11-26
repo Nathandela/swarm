@@ -53,7 +53,9 @@ pub(super) fn verify_record<'tx>(
     let raw = tx.bucket(b"teammate_ingress").ok_or_else(unavailable)?;
     if raw.get(&pending.ingress_key) != Some(voice::go_bytes(&Value::Object(canonical))?.as_slice())
     {
-        return Err(unavailable());
+        return Err(invalid(
+            "the original accepted guild record is noncanonical",
+        ));
     }
     Ok(())
 }
@@ -133,7 +135,9 @@ fn owner(place: &Place, cfg: &Config, request: &Value) -> io::Result<Client> {
         .count()
         != 1
     {
-        return Err(unavailable());
+        return Err(invalid(
+            "the original restricted Codex manager row is unavailable",
+        ));
     }
     Ok(owner)
 }
@@ -152,7 +156,9 @@ fn verify_live_runtime(native: &Value, request: &Value, custody: &Custody) -> io
         || turn["external_input"] != 0
         || !matches!(turn["externally_steered"], Value::Null | Value::Bool(false))
     {
-        return Err(unavailable());
+        return Err(invalid(
+            "the saved request no longer matches the running restricted Codex turn",
+        ));
     }
     Ok(())
 }
@@ -175,7 +181,9 @@ pub(super) fn serve(
         if !legacy_state::unchanged(&pin, &path)?
             || crate::manager_prompt::load(place.supervisor_root())? != settings
         {
-            return Err(unavailable());
+            return Err(invalid(
+                "the original Voice file or manager settings changed",
+            ));
         }
         let tx = db.begin().map_err(io::Error::other)?;
         let voice = voice::read_executing_guild(&tx, &id, cfg, &endpoint, &input.origin)?;
@@ -199,7 +207,9 @@ pub(super) fn serve(
     )?;
     verify_live_runtime(&runtime["manager_runtime"], request, &custody)?;
     if recheck()? != input || read()? != row {
-        return Err(unavailable());
+        return Err(invalid(
+            "the original guild history source changed before custody",
+        ));
     }
     let bridge = {
         let _stop = status.commit_guard()?;
