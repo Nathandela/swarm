@@ -222,7 +222,8 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             board.wait_bytes(b"More")
             board.send(b"a")
             board.wait_bytes(b"Fixture automation")
-            board.send(b"\r")
+            board.send(b"\x1b[<0;4;2M\x1b[<32;5;2M\x1b[<0;4;2m")
+            board.send(b"\x1b[<0;4;2M\x1b[<0;4;2m")
             board.wait_bytes(b"Status")
             board.send(b"h")
             board.wait_bytes(b"No runs for this automation")
@@ -233,8 +234,8 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
                 board.wait_bytes(landmark, start)
 
             step(b"\x1b[D", b"Status")
-            step(b"\x1b[D", b"n new")
-            step(b"n", b"New automation")
+            step(b"\x1b[D", b"[New (n)]")
+            step(b"\x1b[<0;2;24M\x1b[<0;2;24m", b"New automation")
             step(b"Created from board\x1b[B\x1b[B\x1b[200~first line\nsecond line\x1b[201~"
                  b"\x1b[B\x15claude\r", b"Status")
             jobs = json.loads(cli("schedule", "list", "--json").stdout)
@@ -287,9 +288,9 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
             assert owner_request(owner_socket, "schedule-board-manual-v1", stale)["op"] == "error"
             assert {run["id"] for run in history_for(created_id)} == ids
             assert not (root / "effects/worker").exists()
-            step(b"h", b"enter run")
+            step(b"h", "Open (⏎)".encode())
             step(b"\r", b"Automation run")
-            step(b"\x1b[D", b"enter run")
+            step(b"\x1b[D", "Open (⏎)".encode())
             step(b"\x1b[D", b"Revised from board")
             step(b"p", "Status · paused".encode())
             assert json.loads(cli("schedule", "show", created_id).stdout)["state"] == "paused"
@@ -1425,9 +1426,22 @@ def roster_grid_witness(root, cli, roster, start, tmux, menu_grid=False, edit_gr
         p.wait_for(observe, "native spinner changes and elapsed clock advances while idle")
         assert all(next_frame["elapsed_seconds"] >= frame["elapsed_seconds"]
                    for frame, next_frame in zip(frames, frames[1:]))
+        run("resize-window", "-t", "roster:0", "-x", "40", "-y", "8")
+        capture(40, 8, "teal")
+        assert cli("send", ids["teal"], "--text", "fixture permission").returncode == 0
+        caption = "teal needs input (approval)"
+        banner = capture(40, 8, caption)
+        assert caption in "".join(c[0] for c in banner["cells"][1])
+        def dismissed():
+            frame = snapshot(40, 8)
+            text = "\n".join("".join(c[0] for c in row) for row in frame["cells"])
+            return frame if caption not in text and "approval" in text else None
+        settled = p.wait_for(dismissed, "attention banner expires while approval remains in the roster")
+        assert any(row["id"] == ids["teal"] and row["group"] == "needs_input" for row in roster()[0])
         run("kill-session", "-t", "roster")
         close_fixture()
         p.write_json(root / "grid.json", {"motion":frames, "cols":cols, "rows":height,
+                                         "banner_shown":banner, "banner_expired":settled,
                                          "first_divergence":None})
         return
 

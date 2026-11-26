@@ -92,7 +92,7 @@ pub(super) struct Place {
 }
 
 const CONFIG: &str = "config.json";
-const SELECTION: &str = "discord-active.json";
+pub(super) const SELECTION: &str = "discord-active.json";
 const OWNER: &str = ".rust-offline-owner.json";
 const ENROLLMENTS: &str = "discord-enrollments-v1.json";
 
@@ -257,10 +257,14 @@ impl Place {
     }
 
     fn selected(supervisor: &Path) -> io::Result<PathBuf> {
-        let selector = supervisor.join(SELECTION);
-        if !existing(&selector)? {
-            return Ok(supervisor.join("discord"));
+        match Self::read_selection(supervisor) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(supervisor.join("discord")),
+            result => result,
         }
+    }
+
+    pub(super) fn read_selection(supervisor: &Path) -> io::Result<PathBuf> {
+        let selector = supervisor.join(SELECTION);
         let mut bytes = Vec::new();
         open_owner_file(&selector)?
             .take(8193)

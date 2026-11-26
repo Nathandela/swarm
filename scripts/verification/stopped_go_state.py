@@ -22,9 +22,9 @@ SENTINEL = "fictional-stopped-state-key"
 RAW_MARKER = "$serde_json::private::RawValue"
 
 
-def owner(env, request=None, read_reply=True, *, caps=("subscribe", "owner-launch", "attach")):
+def owner(env, request=None, read_reply=True, *, caps=("subscribe", "owner-launch", "attach"), timeout=4):
     with socket.socket(socket.AF_UNIX) as client:
-        client.settimeout(4)
+        client.settimeout(timeout)
         client.connect(env["SWARM_DAEMON_SOCK"])
 
         def write(body):

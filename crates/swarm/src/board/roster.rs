@@ -2,7 +2,7 @@ use super::{
     Board, Modal, field,
     launch::{ACCENT, DIM, PLAIN, TITLE, block_cursor, spans},
     name,
-    navigation::{GROUPS, ORDERS, Row, board_capacity, board_first, truncation},
+    navigation::{GROUPS, ORDERS, Row, truncation},
     session_form::{CONFIRM_HINT, RENAME_HINT, TAG_HINT},
 };
 use serde_json::Value;
@@ -185,7 +185,7 @@ fn session(
         }
     };
     let mut label = name(row).to_owned();
-    if field(row, "role") == "manager" {
+    if compact(cols) && field(row, "role") == "manager" {
         label = format!("[manager] {label}");
     }
     let mut spans = vec![
@@ -195,9 +195,7 @@ fn session(
         (PLAIN, " ".into()),
     ];
     if compact(cols) {
-        let budget = cols.saturating_sub(prefix_width + 2);
-        let state = truncation(status(row, true), budget.saturating_sub(5));
-        let name_width = budget.saturating_sub(state.width() as u16 + 1);
+        let (state, name_width) = compact_layout(row, cols, prefix_width);
         let original = truncation(&label, name_width);
         let label = edit.map_or_else(
             || original.clone(),
@@ -239,17 +237,147 @@ fn session(
         };
         let padding = " ".repeat(usize::from(widths.name).saturating_sub(label.width()));
         spans.extend([(BOLD, label), (PLAIN, padding)]);
+        let summary = summary(board, row, widths.summary);
         spans.extend([
             (DIM, clipped(field(row, "agent"), 9)),
             (DIM, clipped(cwd, widths.cwd)),
             (style, pad(status(row, false), 17)),
-            (
-                DIM,
-                pad(&elapsed(row), 6) + &super::clip(field(row, "summary"), widths.summary),
-            ),
+            (DIM, pad(&elapsed(row), 6) + &summary.0),
         ]);
+        if !summary.1.is_empty() {
+            spans.push((ACCENT, summary.1));
+        }
     }
     spans
+}
+
+fn compact_layout(row: &Value, cols: u16, prefix_width: u16) -> (String, u16) {
+    let budget = cols.saturating_sub(prefix_width + 2);
+    let mut state = status(row, true).to_owned();
+    let mut diagnostics = Vec::new();
+    if !field(row, "backend_plan_error").is_empty() {
+        diagnostics.push("!backend");
+    }
+    if !field(row, "resume_error").is_empty() {
+        diagnostics.push("!resume");
+    }
+    if row["supervision_pending"] == true {
+        diagnostics.push("!supervision");
+    }
+    if !diagnostics.is_empty() {
+        let width = cols
+            .saturating_sub(prefix_width + 6 + state.width() as u16)
+            .max(1);
+        state.push(' ');
+        state.push_str(&truncation(&diagnostics.join(" "), width));
+    }
+    state = truncation(&state, budget.saturating_sub(5));
+    let width = budget.saturating_sub(state.width() as u16 + 1);
+    (state, width)
+}
+
+fn local_attempt(row: &Value, endpoint: &str, attempt: &str) -> bool {
+    if endpoint != field(row, "endpoint_id") {
+        return false;
+    }
+    let namespaced = |id: &str| id.split_once('/') == Some((endpoint, attempt));
+    namespaced(field(row, "id"))
+        || row["supersedes"]
+            .as_array()
+            .is_some_and(|ids| ids.iter().filter_map(Value::as_str).any(namespaced))
+}
+
+pub(super) fn supervision(board: &Board, row: &Value) -> &'static str {
+    let endpoint = field(row, "endpoint_id");
+    let parent = field(row, "spawned_from");
+    if !parent.is_empty()
+        && board.rows.iter().any(|candidate| {
+            field(candidate, "id").split_once('/') == Some((endpoint, parent))
+                && super::running(candidate)
+        })
+    {
+        "supervisor pending"
+    } else {
+        "supervisor gone"
+    }
+}
+
+fn summary(board: &Board, row: &Value, width: u16) -> (String, String) {
+    let endpoint = field(row, "endpoint_id");
+    let mut text = field(row, "summary").to_owned();
+    let parent = field(row, "spawned_from");
+    if !parent.is_empty() {
+        let label = board
+            .rows
+            .iter()
+            .find(|candidate| {
+                local_attempt(candidate, endpoint, parent) && !field(candidate, "name").is_empty()
+            })
+            .map_or(parent, |candidate| field(candidate, "name"));
+        text.push_str(&format!(" from {label}"));
+    }
+    let children = board
+        .rows
+        .iter()
+        .filter(|child| {
+            let parent = field(child, "spawned_from");
+            field(child, "endpoint_id") == endpoint
+                && !parent.is_empty()
+                && local_attempt(row, endpoint, parent)
+        })
+        .count();
+    if children > 0 {
+        text.push_str(&format!(" spawned {children}"));
+    }
+    let mut markers = Vec::new();
+    if row["role"] == "manager" {
+        markers.push("[manager]".to_owned());
+    }
+    if row["supervision_pending"] == true {
+        markers.push(supervision(board, row).to_owned());
+    }
+    if !field(row, "backend_plan_error").is_empty() {
+        markers.push("no backend".to_owned());
+    }
+    if !field(row, "resume_error").is_empty() {
+        markers.push(format!("resume: {}", field(row, "resume_error")));
+    }
+    let marker = if markers.is_empty() {
+        String::new()
+    } else {
+        super::clip(&format!(" {}", markers.join(" ")), width)
+    };
+    (
+        super::clip(&text, width.saturating_sub(marker.width() as u16)),
+        marker,
+    )
+}
+
+pub(super) fn attention_change(previous: &[Value], rows: &[Value]) -> Option<String> {
+    if previous.is_empty() {
+        return None;
+    }
+    rows.iter()
+        .filter(|row| {
+            matches!(field(row, "group"), "needs_input" | "ready_for_review")
+                && previous
+                    .iter()
+                    .find(|old| field(old, "id") == field(row, "id"))
+                    .is_none_or(|old| {
+                        field(old, "group") != field(row, "group")
+                            || status(old, false) != status(row, false)
+                    })
+        })
+        .max_by_key(|row| (field(row, "group_entered_at"), field(row, "id")))
+        .map(|row| {
+            let group = field(row, "group").replace('_', " ");
+            let attention = status(row, false);
+            if attention == group {
+                format!("{} {group}", name(row))
+            } else {
+                format!("{} {group} ({attention})", name(row))
+            }
+        })
 }
 
 fn terminal_bold_padding(start: usize, end: usize, row: u16) -> usize {
@@ -283,9 +411,7 @@ fn editor_label(draft: &super::Editor, tag: bool, width: u16) -> String {
 
 pub(super) fn edit_label(row: &Value, draft: &super::Editor, tag: bool, cols: u16) -> String {
     if compact(cols) {
-        let budget = cols.saturating_sub(4);
-        let state = truncation(status(row, true), budget.saturating_sub(5));
-        let width = budget.saturating_sub(state.width() as u16 + 1);
+        let (_, width) = compact_layout(row, cols, 2);
         editor_label(draft, tag, width)
     } else {
         block_cursor(draft, columns(cols).name.saturating_sub(1))
@@ -307,16 +433,20 @@ pub(super) fn view(board: &Board, screen: &mut String, cols: u16, height: u16) {
         );
     }
     spans(screen, 1, cols, &[(TITLE, title.into()), (DIM, detail)]);
+    if let Some((message, _)) = &board.banner {
+        let text = truncation(&format!("● {message}"), cols.saturating_sub(2));
+        spans(screen, 2, cols, &[(PLAIN, "  ".into()), (TITLE, text)]);
+    }
     let focus = board.current_focus();
     for (index, row) in board
         .display_rows()
         .iter()
         .skip(board.top)
-        .take(board_capacity(height))
+        .take(board.body_capacity(height))
         .enumerate()
     {
         let selected = focus.is_some() && row.focus() == focus;
-        let y = board_first(height) + index as u16;
+        let y = board.body_first(height) + index as u16;
         match row {
             Row::Session(row) => spans(screen, y, cols, &session(board, row, selected, cols, y)),
             Row::Section { id, count, folded } => {
@@ -341,7 +471,7 @@ pub(super) fn view(board: &Board, screen: &mut String, cols: u16, height: u16) {
                     totals = format!(" ({count}) {input}i {review}r");
                     title = truncation(&title, cols.saturating_sub(2 + totals.width() as u16));
                 }
-                let style = if board.layout.group == 0 {
+                let style = if board.layout.group == 0 && *id != super::discussions::SECTION {
                     group_style(id, true)
                 } else {
                     TITLE
@@ -381,4 +511,47 @@ pub(super) fn view(board: &Board, screen: &mut String, cols: u16, height: u16) {
         footer += version;
     }
     spans(screen, height, cols, &[(PLAIN, footer)]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn wide_lineage_matches_earlier_attempts_on_the_same_owner() {
+        let parent = json!({"endpoint_id":"a","id":"a/new","name":"Dispatch","role":"manager",
+                            "supersedes":["a/old"]});
+        let child = json!({"endpoint_id":"a","id":"a/child","spawned_from":"old","supervision_pending":true});
+        let board = Board {
+            rows: vec![
+                parent.clone(),
+                child.clone(),
+                json!({"endpoint_id":"b","id":"b/old","name":"Other owner","status":{"Process":"running"}}),
+            ],
+            ..Board::default()
+        };
+        assert_eq!(
+            summary(&board, &parent, 48),
+            (" spawned 1".into(), " [manager]".into())
+        );
+        assert_eq!(
+            summary(&board, &child, 48),
+            (" from Dispatch".into(), " supervisor gone".into())
+        );
+    }
+
+    #[test]
+    fn banner_is_announced_when_the_visible_attention_changes() {
+        let old = json!({"id":"a/one","name":"Fixture","group":"needs_input","status":{"Interaction":"prompt"}});
+        let next = json!({"id":"a/one","name":"Fixture","group":"needs_input","status":{"Interaction":"permission"}});
+        assert_eq!(
+            attention_change(&[old], std::slice::from_ref(&next)).as_deref(),
+            Some("Fixture needs input (approval)")
+        );
+        assert_eq!(
+            attention_change(std::slice::from_ref(&next), std::slice::from_ref(&next)),
+            None
+        );
+    }
 }

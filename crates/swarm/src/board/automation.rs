@@ -1,8 +1,9 @@
-use super::{Action, Editor, Key, capacity, form_header, line, usable};
+use super::{Action, Editor, Key, Mouse, MouseAction, form_header, line, usable};
 use crate::schedule::catalog::{Change, Manual, Read, Records, RunState, State};
 use crate::schedule::{
     Calendar, Job, Occurrence, Spec, automation_duration, automation_invocation,
 };
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Default)]
 pub(super) struct Automation {
@@ -14,6 +15,20 @@ pub(super) struct Automation {
     archive: Option<Change>,
     run: Option<Occurrence>,
     manual: Option<RunState>,
+    press: Option<(Mouse, (u16, u16), PointerTarget)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PointerTarget {
+    Button(char),
+    Row(usize),
+}
+
+struct Button {
+    text: String,
+    key: char,
+    x: u16,
+    y: u16,
 }
 
 impl Automation {
@@ -27,6 +42,7 @@ impl Automation {
     }
 
     pub(super) fn receive(&mut self, response: std::io::Result<Records>) {
+        self.press = None;
         self.error.clear();
         match response {
             Ok(records) => {
@@ -43,6 +59,7 @@ impl Automation {
     }
 
     pub(super) fn changed(&mut self, response: std::io::Result<Records>) {
+        self.press = None;
         self.error.clear();
         match response {
             Ok(records) => {
@@ -55,6 +72,7 @@ impl Automation {
     }
 
     pub(super) fn triggered(&mut self, response: std::io::Result<Option<RunState>>) {
+        self.press = None;
         match response {
             Ok(run) => {
                 self.error.clear();
@@ -68,6 +86,7 @@ impl Automation {
     }
 
     pub(super) fn cancel(&mut self) -> bool {
+        self.press = None;
         let cancelled = self.draft.take().is_some()
             || self.archive.take().is_some()
             || self.run.take().is_some();
@@ -77,7 +96,221 @@ impl Automation {
         cancelled
     }
 
+    fn buttons(&self, (cols, rows): (u16, u16)) -> Vec<Button> {
+        let controls: &[(&str, char)] = if let Some(run) = &self.run {
+            if run.live_session().is_some() {
+                &[("Open worker", 'o'), ("History", '←'), ("Back", '⎋')]
+            } else {
+                &[("History", '←'), ("Back", '⎋')]
+            }
+        } else if self.draft.is_some() {
+            &[("Save", '⏎'), ("Cancel", '⎋')]
+        } else if self.archive.is_some() {
+            &[("Archive job", 'y'), ("Cancel", '⎋')]
+        } else {
+            match &self.records {
+                Some(Records::List(_)) => {
+                    &[("New", 'n'), ("Refresh", 'u'), ("Open", '⏎'), ("Back", '⎋')]
+                }
+                Some(Records::Get(job)) if job.state == "archived" => {
+                    &[("History", 'h'), ("List", '←'), ("Back", '⎋')]
+                }
+                Some(Records::Get(_)) if self.manual.as_ref().is_some_and(|run| !run.pending) => &[
+                    ("New run", 'R'),
+                    ("Receipt", 'r'),
+                    ("Edit", 'e'),
+                    ("Pause/enable", 'p'),
+                    ("History", 'h'),
+                    ("Archive", 'x'),
+                    ("List", '←'),
+                    ("Back", '⎋'),
+                ],
+                Some(Records::Get(_)) if self.manual.as_ref().is_some_and(|run| run.pending) => &[
+                    ("Reconcile", 'r'),
+                    ("Edit", 'e'),
+                    ("Pause/enable", 'p'),
+                    ("History", 'h'),
+                    ("Archive", 'x'),
+                    ("List", '←'),
+                    ("Back", '⎋'),
+                ],
+                Some(Records::Get(job)) if job.state == "paused" => &[
+                    ("Edit", 'e'),
+                    ("Enable", 'p'),
+                    ("Run now", 'r'),
+                    ("History", 'h'),
+                    ("Archive", 'x'),
+                    ("List", '←'),
+                    ("Back", '⎋'),
+                ],
+                Some(Records::Get(_)) => &[
+                    ("Edit", 'e'),
+                    ("Pause", 'p'),
+                    ("Run now", 'r'),
+                    ("History", 'h'),
+                    ("Archive", 'x'),
+                    ("List", '←'),
+                    ("Back", '⎋'),
+                ],
+                Some(Records::History(_)) => &[("Open", '⏎'), ("Detail", '←'), ("Back", '⎋')],
+                None => &[("Refresh", 'u'), ("Back", '⎋')],
+            }
+        };
+        let compact = cols < 42 || rows < 8;
+        let priority = |(_, key): &&(&str, char)| compact && *key == '⎋';
+        let controls = controls
+            .iter()
+            .filter(priority)
+            .chain(controls.iter().filter(|entry| !priority(entry)));
+        let mut buttons = Vec::new();
+        let (mut x, mut y) = (1_u16, 0);
+        for &(name, key) in controls {
+            let shortcut = if key == '⎋' {
+                "esc".into()
+            } else {
+                key.to_string()
+            };
+            let text = if compact {
+                format!("[{shortcut}]")
+            } else {
+                format!("[{name} ({shortcut})]")
+            };
+            let width = text.width() as u16;
+            if x + width - 1 > cols {
+                x = 1;
+                y += 1;
+            }
+            if y >= rows.saturating_sub(3).clamp(1, 3) {
+                break;
+            }
+            buttons.push(Button { text, key, x, y });
+            x += width + 1;
+        }
+        let first = rows.saturating_sub(buttons.last().map_or(0, |button| button.y));
+        for button in &mut buttons {
+            button.y += first;
+        }
+        buttons
+    }
+
+    fn body_capacity(&self, geometry: (u16, u16)) -> usize {
+        let footer = self
+            .buttons(geometry)
+            .first()
+            .map_or(geometry.1, |button| button.y);
+        usize::from(footer.saturating_sub(2).max(1))
+    }
+
+    fn footer(&self, output: &mut String, cols: u16, rows: u16) {
+        let buttons = self.buttons((cols, rows));
+        for row in buttons.first().map_or(rows, |button| button.y)..=rows {
+            let text = buttons
+                .iter()
+                .filter(|button| button.y == row)
+                .map(|button| button.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            line(output, row, cols, "", &text);
+        }
+    }
+
+    fn rows_at(&self, geometry: (u16, u16)) -> (usize, usize, usize) {
+        let budget = self.body_capacity(geometry);
+        if let Some(draft) = &self.draft {
+            let budget = budget.saturating_sub(1).max(1);
+            return (
+                (draft.focus + 1).saturating_sub(budget),
+                budget,
+                FIELDS.len(),
+            );
+        }
+        let count = match &self.records {
+            Some(Records::List(items)) => items.len(),
+            Some(Records::History(items)) => items.len(),
+            _ => 0,
+        };
+        ((self.selected + 1).saturating_sub(budget), budget, count)
+    }
+
+    fn target(&self, event: Mouse, geometry: (u16, u16)) -> Option<PointerTarget> {
+        if !usable(geometry)
+            || event.x == 0
+            || event.x > geometry.0
+            || event.y < 2
+            || event.y > geometry.1
+        {
+            return None;
+        }
+        if let Some(button) = self.buttons(geometry).into_iter().find(|button| {
+            event.y == button.y
+                && (button.x..button.x + button.text.width() as u16).contains(&event.x)
+        }) {
+            return Some(PointerTarget::Button(button.key));
+        }
+        if self.run.is_some() || self.archive.is_some() || event.y == 2 && !self.error.is_empty() {
+            return None;
+        }
+        let (start, budget, count) = self.rows_at(geometry);
+        let offset = usize::from(event.y - 2);
+        (offset < budget && start + offset < count).then_some(PointerTarget::Row(start + offset))
+    }
+
+    pub(super) fn mouse(&mut self, event: Mouse, geometry: (u16, u16)) -> Option<Key> {
+        let target = self.target(event, geometry);
+        match event.action {
+            MouseAction::Drag => self.press = None,
+            MouseAction::WheelUp | MouseAction::WheelDown => {
+                self.press = None;
+                if event.x > 0 && event.x <= geometry.0 && event.y > 0 && event.y <= geometry.1 {
+                    return Some(if event.action == MouseAction::WheelUp {
+                        Key::Up
+                    } else {
+                        Key::Down
+                    });
+                }
+            }
+            MouseAction::Press => {
+                self.press = None;
+                if let Some(target) = target {
+                    let activate = match target {
+                        PointerTarget::Button(_) => true,
+                        PointerTarget::Row(index) => {
+                            if let Some(draft) = &mut self.draft {
+                                draft.focus = index;
+                                index + 1 == FIELDS.len()
+                            } else {
+                                let selected = self.selected == index;
+                                self.selected = index;
+                                selected
+                            }
+                        }
+                    };
+                    if activate {
+                        self.press = Some((event, geometry, target));
+                    }
+                }
+            }
+            MouseAction::Release => {
+                if let Some((press, size, prior)) = self.press.take()
+                    && size == geometry
+                    && press.x == event.x
+                    && press.y == event.y
+                    && Some(prior) == target
+                {
+                    return Some(match prior {
+                        PointerTarget::Row(_) | PointerTarget::Button('⏎') => Key::Enter,
+                        PointerTarget::Button('⎋') => Key::Escape,
+                        PointerTarget::Button('←') => Key::Left,
+                        PointerTarget::Button(key) => Key::Text(key),
+                    });
+                }
+            }
+        }
+        None
+    }
+
     pub(super) fn update(&mut self, key: Key, geometry: (u16, u16)) -> Action {
+        self.press = None;
         if !usable(geometry) {
             return Action::None;
         }
@@ -197,7 +430,7 @@ impl Automation {
                     Some(Records::History(items)) => items.len(),
                     _ => 0,
                 };
-                let step = capacity(geometry.1);
+                let step = self.body_capacity(geometry);
                 self.selected = match key {
                     Key::Up | Key::Text('k') => self.selected.saturating_sub(1),
                     Key::Down | Key::Text('j') => self.selected.saturating_add(1),
@@ -223,30 +456,21 @@ impl Automation {
                 run.detail.clone(),
             ]
             .into_iter()
-            .take(usize::from(rows.saturating_sub(2)))
+            .take(self.body_capacity((cols, rows)))
             .enumerate()
             {
                 line(output, index as u16 + 2, cols, "", &text);
             }
-            let hint = if run.live_session().is_some() {
-                "o open session · ← history · esc back"
-            } else {
-                "← history · esc back"
-            };
-            line(output, rows, cols, "\x1b[2m", hint);
+            self.footer(output, cols, rows);
             return;
         }
         if let Some(draft) = &self.draft {
-            draft.view(output, cols, rows);
+            let budget = self.body_capacity((cols, rows));
+            draft.view(output, cols, budget);
             if !self.error.is_empty() {
-                line(
-                    output,
-                    rows.saturating_sub(1),
-                    cols,
-                    "\x1b[33m",
-                    &self.error,
-                );
+                line(output, budget as u16 + 1, cols, "\x1b[33m", &self.error);
             }
+            self.footer(output, cols, rows);
             return;
         }
         if self.archive.is_some() {
@@ -254,66 +478,33 @@ impl Automation {
             if let Some(Records::Get(job)) = &self.records {
                 line(output, 2, cols, "", job.name());
             }
-            line(
-                output,
-                rows,
-                cols,
-                "\x1b[2m",
-                "y / enter archive · n / esc cancel",
-            );
+            self.footer(output, cols, rows);
             return;
         }
         form_header(output, cols, "Automations");
-        let (items, hint) = match &self.records {
-            Some(Records::List(jobs)) if jobs.is_empty() => (
-                vec!["No automations".into()],
-                "n new · u refresh · esc back",
-            ),
-            Some(Records::List(jobs)) => (
-                jobs.iter()
-                    .map(|job| format!("{} · {}", job.name(), job.state))
-                    .collect(),
-                "↑↓ select · enter detail · n new · u refresh · esc back",
-            ),
-            Some(Records::Get(job)) => (
-                vec![
-                    job.name().to_owned(),
-                    format!("Status · {}", job.state),
-                    format!("Directory · {}", job.directory()),
-                    format!("Agents · {}", job.agents().join(" → ")),
-                ],
-                if job.state == "archived" {
-                    "h history · ← list · esc back"
-                } else {
-                    match &self.manual {
-                        Some(run) if run.pending => {
-                            "r reconcile · e edit · p pause/resume · h history · x archive"
-                        }
-                        Some(_) => {
-                            "R new run · r receipt · e edit · p pause/resume · h history · x archive"
-                        }
-                        None => {
-                            "e edit · p pause/resume · r run · h history · x archive · esc back"
-                        }
-                    }
-                },
-            ),
-            Some(Records::History(runs)) if runs.is_empty() => (
-                vec!["No runs for this automation".into()],
-                "← detail · esc back",
-            ),
-            Some(Records::History(runs)) => (
-                runs.iter()
-                    .map(|run| format!("{} · {} · {}", run.due_at, run.state, run.detail))
-                    .collect(),
-                "↑↓ select · enter run · ← detail · esc back",
-            ),
-            None if self.error.is_empty() => {
-                (vec!["Reading the automation catalog".into()], "esc back")
+        let items = match &self.records {
+            Some(Records::List(jobs)) if jobs.is_empty() => vec!["No automations".into()],
+            Some(Records::List(jobs)) => jobs
+                .iter()
+                .map(|job| format!("{} · {}", job.name(), job.state))
+                .collect(),
+            Some(Records::Get(job)) => vec![
+                job.name().to_owned(),
+                format!("Status · {}", job.state),
+                format!("Directory · {}", job.directory()),
+                format!("Agents · {}", job.agents().join(" → ")),
+            ],
+            Some(Records::History(runs)) if runs.is_empty() => {
+                vec!["No runs for this automation".into()]
             }
-            None => (Vec::new(), "u retry · esc back"),
+            Some(Records::History(runs)) => runs
+                .iter()
+                .map(|run| format!("{} · {} · {}", run.due_at, run.state, run.detail))
+                .collect(),
+            None if self.error.is_empty() => vec!["Reading the automation catalog".into()],
+            None => Vec::new(),
         };
-        let capacity = capacity(rows);
+        let capacity = self.body_capacity((cols, rows));
         let start = (self.selected + 1).saturating_sub(capacity);
         for (index, text) in items.iter().enumerate().skip(start).take(capacity) {
             let marker = if index == self.selected { "▌" } else { " " };
@@ -338,13 +529,13 @@ impl Automation {
             };
             line(
                 output,
-                rows - 1,
+                capacity as u16 + 1,
                 cols,
                 "\x1b[2m",
                 &format!("{label} · {} · {}", run.id, run.state),
             );
         }
-        line(output, rows, cols, "\x1b[2m", hint);
+        self.footer(output, cols, rows);
     }
 }
 
@@ -474,7 +665,7 @@ impl Draft {
         })
     }
 
-    fn view(&self, output: &mut String, cols: u16, rows: u16) {
+    fn view(&self, output: &mut String, cols: u16, budget: usize) {
         form_header(
             output,
             cols,
@@ -484,7 +675,7 @@ impl Draft {
                 "New automation"
             },
         );
-        let window = capacity(rows).saturating_sub(1).max(1);
+        let window = budget.saturating_sub(1).max(1);
         let start = (self.focus + 1).saturating_sub(window);
         for (index, label) in FIELDS.iter().enumerate().skip(start).take(window) {
             let marker = if index == self.focus { "▌" } else { " " };
@@ -507,13 +698,6 @@ impl Draft {
                 &format!("{marker} {label}  {value}"),
             );
         }
-        line(
-            output,
-            rows,
-            cols,
-            "\x1b[2m",
-            "↑↓ field · enter save · esc cancel",
-        );
     }
 }
 
@@ -533,5 +717,46 @@ fn default_spec() -> Spec {
             ..Calendar::default()
         },
         ..Spec::default()
+    }
+}
+
+#[cfg(test)]
+mod pointer_tests {
+    use super::*;
+
+    #[test]
+    fn footer_activation_requires_the_same_position_and_viewport() {
+        let mut view = Automation {
+            records: Some(Records::List(vec![])),
+            ..Automation::default()
+        };
+        let mouse = |action| Mouse {
+            x: 2,
+            y: 24,
+            action,
+        };
+        assert_eq!(view.mouse(mouse(MouseAction::Press), (80, 24)), None);
+        assert_eq!(view.mouse(mouse(MouseAction::Drag), (80, 24)), None);
+        assert_eq!(view.mouse(mouse(MouseAction::Release), (80, 24)), None);
+        assert_eq!(view.mouse(mouse(MouseAction::Press), (80, 24)), None);
+        assert_eq!(view.mouse(mouse(MouseAction::Release), (70, 24)), None);
+        assert_eq!(view.mouse(mouse(MouseAction::Press), (80, 24)), None);
+        let key = view.mouse(mouse(MouseAction::Release), (80, 24)).unwrap();
+        assert_eq!(key, Key::Text('n'));
+        view.update(key, (80, 24));
+        assert!(view.draft.is_some());
+    }
+
+    #[test]
+    fn wheel_moves_focused_draft_field() {
+        let mut view = Automation::in_directory("/tmp");
+        let wheel = Mouse {
+            x: 4,
+            y: 2,
+            action: MouseAction::WheelDown,
+        };
+        let key = view.mouse(wheel, (40, 8)).unwrap();
+        view.update(key, (40, 8));
+        assert_eq!(view.draft.unwrap().focus, 1);
     }
 }

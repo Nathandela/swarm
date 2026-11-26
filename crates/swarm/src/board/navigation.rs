@@ -47,9 +47,16 @@ impl Board {
             indexes.sort_by(|&left, &right| self.compare_rows(&self.rows[left], &self.rows[right]));
         }
         self.sections = sections.into_iter().collect();
-        if self.layout.group == 0 {
-            self.sections.sort_by_key(|(id, _)| super::group_rank(id));
-        }
+        self.sections.sort_by_key(|(id, _)| {
+            (
+                id != super::discussions::SECTION,
+                if self.layout.group == 0 {
+                    super::group_rank(id)
+                } else {
+                    0
+                },
+            )
+        });
         if let Some(row) = self.row()
             && self
                 .folded
@@ -78,6 +85,9 @@ impl Board {
     }
 
     fn section(&self, row: &Value) -> String {
+        if super::discussions::manager(row) {
+            return super::discussions::SECTION.into();
+        }
         match self.layout.group {
             1 => Path::new(field(row, "cwd"))
                 .file_name()
@@ -86,7 +96,14 @@ impl Board {
                 .to_owned(),
             2 => {
                 let tag = field(row, "tag");
-                if tag.is_empty() { "(untagged)" } else { tag }.to_owned()
+                if !tag.is_empty() {
+                    tag
+                } else if row["role"] == "manager" {
+                    "manager"
+                } else {
+                    "(untagged)"
+                }
+                .to_owned()
             }
             _ => field(row, "group").to_owned(),
         }
@@ -115,7 +132,9 @@ impl Board {
     }
 
     pub(super) fn section_title(&self, section: &str) -> String {
-        if self.layout.group == 0 {
+        if section == super::discussions::SECTION {
+            "DISPATCHER".into()
+        } else if self.layout.group == 0 {
             super::group_name(super::group_rank(section)).into()
         } else {
             section.into()
@@ -161,9 +180,21 @@ impl Board {
         }
     }
 
+    pub(super) fn body_first(&self, rows: u16) -> u16 {
+        if rows >= 12 || self.banner.is_some() {
+            3
+        } else {
+            2
+        }
+    }
+
+    pub(super) fn body_capacity(&self, rows: u16) -> usize {
+        usize::from(rows.saturating_sub(self.body_first(rows)).max(1))
+    }
+
     pub(super) fn visible(&self, rows: u16) -> bool {
         self.focus_line()
-            .is_some_and(|line| line >= self.top && line < self.top + board_capacity(rows))
+            .is_some_and(|line| line >= self.top && line < self.top + self.body_capacity(rows))
     }
 
     fn focus_line(&self) -> Option<usize> {
@@ -179,13 +210,13 @@ impl Board {
             self.top = self
                 .top
                 .min(line)
-                .max((line + 1).saturating_sub(board_capacity(rows)));
+                .max((line + 1).saturating_sub(self.body_capacity(rows)));
         }
     }
 
     pub(super) fn clamp_top(&mut self, rows: u16) {
         let count = self.display_rows().len();
-        self.top = self.top.min(count.saturating_sub(board_capacity(rows)));
+        self.top = self.top.min(count.saturating_sub(self.body_capacity(rows)));
     }
 
     pub(super) fn move_selection(&mut self, offset: isize, wrap: bool, rows: u16) {
@@ -259,18 +290,6 @@ impl Board {
             self.reveal_focus(rows);
         }
     }
-}
-
-pub(super) fn board_first(rows: u16) -> u16 {
-    if rows >= 12 { 3 } else { 2 }
-}
-
-pub(super) fn board_capacity(rows: u16) -> usize {
-    usize::from(rows.saturating_sub(board_first(rows)).max(1))
-}
-
-pub(super) fn capacity(rows: u16) -> usize {
-    usize::from(rows.saturating_sub(2).max(1))
 }
 
 pub(super) fn usable((cols, rows): (u16, u16)) -> bool {

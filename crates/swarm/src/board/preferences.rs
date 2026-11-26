@@ -14,15 +14,7 @@ pub(super) struct Layout {
 
 impl Layout {
     fn path() -> io::Result<PathBuf> {
-        let home = || ipc::env_path("HOME").ok_or_else(|| io::Error::other("HOME is undefined"));
-        let base = if cfg!(target_os = "macos") {
-            home()?.join("Library/Application Support")
-        } else if let Some(xdg) = ipc::env_path("XDG_CONFIG_HOME").filter(|p| p.is_absolute()) {
-            xdg
-        } else {
-            home()?.join(".config")
-        };
-        Ok(base.join("swarm/board-layout.json"))
+        Ok(ipc::user_config_dir()?.join("swarm/board-layout.json"))
     }
 
     pub(super) fn load() -> io::Result<Self> {
