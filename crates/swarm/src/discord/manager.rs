@@ -558,10 +558,18 @@ mod tests {
         posts: std::cell::RefCell<Vec<(String, String)>>,
         file_ack: std::cell::RefCell<Value>,
         forwarded_revocation: Option<std::path::PathBuf>,
+        source_deletion: Option<std::path::PathBuf>,
     }
 
     impl super::super::dispatcher::Audience for FixtureAudience {
         fn current(&self, _cfg: &Config, id: &str) -> io::Result<Option<Value>> {
+            if self
+                .source_deletion
+                .as_ref()
+                .is_some_and(|marker| marker.is_file())
+            {
+                return Ok(None);
+            }
             Ok((self.source["id"] == id).then(|| {
                 let mut source = self.source.clone();
                 if self
@@ -647,6 +655,8 @@ mod tests {
             file_ack: Default::default(),
             forwarded_revocation: (forwarded == "revoked")
                 .then(|| root.join(".fixture-hide-forward")),
+            source_deletion: std::env::var_os("SWARM_CLAUDE_MANAGER_FIXTURE_DELETED")
+                .map(|_| root.join(".fixture-enrolled-deleted")),
         };
         let launch = dispatcher.scope(&cfg)["launch"].clone();
         let operation = format!("launch:{}:{:032x}", crate::ipc::spawn::now_ms(), 1);
@@ -706,6 +716,21 @@ mod tests {
         let limit = std::time::Instant::now() + std::time::Duration::from_secs(35);
         loop {
             dispatcher.tick(&cfg, &mut inbox, &api).unwrap();
+            if root.join(".fixture-enrolled-deleted-checked").is_file() {
+                assert!(api.posts.borrow().is_empty());
+                assert_eq!(
+                    manager
+                        .dial()
+                        .unwrap()
+                        .sessions()
+                        .unwrap()
+                        .iter()
+                        .filter(|row| row["role"] == "worker")
+                        .count(),
+                    1
+                );
+                return;
+            }
             if forwarded == "revoked" && root.join(".fixture-forwarded-checked").is_file() {
                 assert!(api.posts.borrow().is_empty());
                 return;
@@ -1217,6 +1242,7 @@ mod tests {
                     posts: std::cell::RefCell::new(Vec::new()),
                     file_ack: Default::default(),
                     forwarded_revocation: None,
+                    source_deletion: None,
                 };
                 let local = id.split_once('/').unwrap().1;
                 let mut retained_worker = None;
@@ -1628,6 +1654,7 @@ mod tests {
                             posts: Default::default(),
                             file_ack: Default::default(),
                             forwarded_revocation: None,
+                            source_deletion: None,
                         };
                         dispatcher.tick(&cfg, &mut inbox, &withdrawn).unwrap();
                         assert_eq!(inbox.manager()["input"]["composer"], refused);
@@ -1650,6 +1677,7 @@ mod tests {
                                 posts: Default::default(),
                                 file_ack: Default::default(),
                                 forwarded_revocation: None,
+                                source_deletion: None,
                             };
                             inbox.admit(&replacement).unwrap().unwrap();
                             dispatcher.tick(&cfg, &mut inbox, &other).unwrap();

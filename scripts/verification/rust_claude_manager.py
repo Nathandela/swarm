@@ -71,6 +71,8 @@ class Model(http.server.BaseHTTPRequestHandler):
             status = tool_result(request,"toolu_fixture_enrolled_status")
             listed = tool_result(request,"toolu_fixture_enrolled_list")
             after = tool_result(request,"toolu_fixture_enrolled_next")
+            post_delete_status = tool_result(request,"toolu_fixture_deleted_status")
+            post_delete_create = tool_result(request,"toolu_fixture_deleted_create")
             arguments = dict(action_id="native-enrolled-job",agent="claude",
                              cwd=str(self.server.approved),prompt="Wait for the synthetic structured worker fixture.")
             if not denied:
@@ -88,7 +90,20 @@ class Model(http.server.BaseHTTPRequestHandler):
                               dict(action_id=mcp_object(created)["action_id"]))
             elif not listed:
                 assert mcp_object(created) == mcp_object(status)
+                if self.server.deleted:
+                    (self.server.release.parent/".fixture-enrolled-deleted").touch()
                 structured = ("swarm_list","toolu_fixture_enrolled_list",dict(limit=1))
+            elif self.server.deleted:
+                if not post_delete_status:
+                    structured = ("swarm_status","toolu_fixture_deleted_status",
+                                 dict(action_id=mcp_object(created)["action_id"]))
+                elif not post_delete_create:
+                    structured = ("swarm_create","toolu_fixture_deleted_create", arguments | dict(action_id="late-action"))
+                else:
+                    for denied_result in (listed,post_delete_status,post_delete_create):
+                        assert "Manager request was not confirmed." in json.dumps(denied_result)
+                        assert "session_instance" not in json.dumps(denied_result)
+                    (self.server.release.parent/".fixture-enrolled-deleted-checked").touch()
             elif not after:
                 workers = mcp_object(listed)["workers"]
                 assert len(workers) == 1 and workers[0]["session"] == mcp_object(created)["session"]
@@ -106,7 +121,7 @@ class Model(http.server.BaseHTTPRequestHandler):
                 assert not received and "Manager request was not confirmed." in content, \
                     "the changed forwarded receipt was not refused"
             self.server.forwarded_checked.write_text("classified")
-        publish = main and not structured and not discover and not spawn and not read_note and not read_attachment and may_publish and call_id not in content
+        publish = main and not (self.server.deleted and post_delete_create) and not structured and not discover and not spawn and not read_note and not read_attachment and may_publish and call_id not in content
         tool = publish or spawn or discover or read_note or read_attachment or structured
         usage = dict(input_tokens=1, output_tokens=1)
         model = request.get("model")
@@ -241,6 +256,8 @@ def verify(swarm, provider, test, root, server):
         server.unapproved.mkdir(mode=0o700)
         access.update(project_access="enrolled", projects=dict(approved=str(server.approved)))
         env["SWARM_CLAUDE_MANAGER_FIXTURE_ENROLLED"] = "1"
+        if server.deleted:
+            env["SWARM_CLAUDE_MANAGER_FIXTURE_DELETED"] = "1"
     marker = root / "token"
     marker.write_text("unused synthetic Discord token")
     marker.chmod(0o600)
@@ -264,7 +281,7 @@ def verify(swarm, provider, test, root, server):
                 assert ordinary.returncode == 0, ordinary.stderr
             subprocess.run(run([test, "discord::manager::tests::installed_claude_manager_producer",
                                 "--ignored", "--nocapture"]), cwd=project, env=env, check=True, timeout=75 if server.park else 48)
-            expected_posts = 0 if server.forwarded == "revoked" else (2 if server.park else 1)
+            expected_posts = 0 if server.forwarded == "revoked" or server.deleted else (2 if server.park else 1)
             assert sum(1 for publish, _, _ in server.main_requests if publish) == expected_posts
             assert not server.forwarded or server.forwarded_checked.is_file()
             assert all(("Bash" in tools) == server.vm for _, _, tools in server.main_requests)
@@ -321,6 +338,7 @@ if __name__ == "__main__":
     modes.add_argument("--vm", action="store_true")
     modes.add_argument("--vm-worktree", action="store_true")
     modes.add_argument("--enrolled", action="store_true")
+    modes.add_argument("--enrolled-deleted", action="store_true")
     modes.add_argument("--forwarded", choices=("allowed", "revoked"))
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="clmgr-", dir="/tmp") as name, \
@@ -330,7 +348,8 @@ if __name__ == "__main__":
         server.park = args.park
         server.vm = args.vm or args.vm_worktree
         server.worktree = args.vm_worktree
-        server.enrolled = args.enrolled
+        server.enrolled = args.enrolled or args.enrolled_deleted
+        server.deleted = args.enrolled_deleted
         server.forwarded = args.forwarded
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:

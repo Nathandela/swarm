@@ -120,6 +120,49 @@ impl Route {
         message["guild_id"] == self.guild && message["channel_id"] == self.thread
     }
 
+    fn current(
+        &self,
+        cfg: &Config,
+        id: &str,
+        mut lookup: impl FnMut(&str) -> io::Result<Option<Value>>,
+    ) -> io::Result<Option<Value>> {
+        if !snowflake(id) {
+            return Ok(None);
+        }
+        if !self.verify(cfg, &mut lookup, &[])? {
+            return Ok(None);
+        }
+        let starter = self.starter.as_ref().filter(|_| id == self.thread);
+        let source = starter.map_or(self.thread.as_str(), |(parent, _)| parent);
+        let Some(mut value) = lookup(&format!("/channels/{source}/messages/{id}"))? else {
+            return Ok(None);
+        };
+        if value["id"] != id
+            || value["channel_id"] != source
+            || !value["guild_id"].is_null() && value["guild_id"] != self.guild
+            || starter.is_some_and(|(_, expected)| {
+                super::thread_creation::revision(&value).ok().as_ref() != Some(expected)
+            })
+        {
+            return Ok(None);
+        }
+        if starter.is_some() {
+            value["source_channel_id"] = json!(source);
+            value["channel_id"] = json!(self.thread);
+        }
+        let Some(actor) = value["author"]["id"]
+            .as_str()
+            .filter(|id| *id != cfg.text("application_id"))
+        else {
+            return Ok(None);
+        };
+        if !self.verify(cfg, lookup, &[actor])? {
+            return Ok(None);
+        }
+        value["guild_id"] = json!(self.guild);
+        Ok(Some(value))
+    }
+
     pub(super) fn verify(
         &self,
         cfg: &Config,
@@ -236,46 +279,8 @@ impl ThreadAudience<'_> {
 
 impl Audience for ThreadAudience<'_> {
     fn current(&self, cfg: &Config, id: &str) -> io::Result<Option<Value>> {
-        if !snowflake(id) {
-            return Ok(None);
-        }
-        let lookup = |path: &str| super::guild::lookup(self.api, path);
-        if !self.route.verify(cfg, lookup, &[])? {
-            return Ok(None);
-        }
-        let starter = self
-            .route
-            .starter
-            .as_ref()
-            .filter(|_| id == self.route.thread);
-        let source = starter.map_or(self.route.thread.as_str(), |(parent, _)| parent);
-        let Some(mut value) = lookup(&format!("/channels/{source}/messages/{id}"))? else {
-            return Ok(None);
-        };
-        if value["id"] != id
-            || value["channel_id"] != source
-            || !value["guild_id"].is_null() && value["guild_id"] != self.route.guild
-            || starter.is_some_and(|(_, expected)| {
-                super::thread_creation::revision(&value).ok().as_ref() != Some(expected)
-            })
-        {
-            return Ok(None);
-        }
-        if starter.is_some() {
-            value["source_channel_id"] = json!(source);
-            value["channel_id"] = json!(self.route.thread);
-        }
-        let Some(actor) = value["author"]["id"]
-            .as_str()
-            .filter(|id| *id != cfg.text("application_id"))
-        else {
-            return Ok(None);
-        };
-        if !self.route.verify(cfg, lookup, &[actor])? {
-            return Ok(None);
-        }
-        value["guild_id"] = json!(self.route.guild);
-        Ok(Some(value))
+        self.route
+            .current(cfg, id, |path| super::guild::lookup(self.api, path))
     }
 
     fn verify(&self, cfg: &Config) -> io::Result<()> {
@@ -506,6 +511,102 @@ mod tests {
         assert!(!verify(12, "3"));
         assert!(!verify(12, "9"));
         assert!(verify(11, "9"));
+    }
+
+    #[test]
+    fn enrolled_controls_refuse_deleted_cards_and_revoked_private_members() {
+        use crate::ipc::field;
+        struct Live<'a> {
+            route: &'a Route,
+            card: Value,
+            missing: bool,
+            author_is_member: bool,
+        }
+        impl Audience for Live<'_> {
+            fn current(&self, cfg: &Config, id: &str) -> io::Result<Option<Value>> {
+                self.route.current(cfg, id, |path| {
+                    let row = match path {
+                        "/channels/2" => json!({"id":"2","guild_id":"1","parent_id":"4","type":12,
+                            "thread_metadata":{"archived":false,"locked":false}}),
+                        "/channels/4" => json!({"id":"4","guild_id":"1","type":0}),
+                        "/channels/2/messages/101" if self.missing => return Ok(None),
+                        "/channels/2/messages/101" => self.card.clone(),
+                        _ if path.starts_with("/guilds/1/members/") => {
+                            let user = path.rsplit('/').next().unwrap();
+                            json!({"user":{"id":user,"bot":user=="3"}})
+                        }
+                        _ if path.contains("/permissions/member/") => json!({"permissions":"8"}),
+                        "/channels/2/thread-members/9" if !self.author_is_member => {
+                            return Ok(None);
+                        }
+                        _ if path.starts_with("/channels/2/thread-members/") => {
+                            json!({"id":"2","user_id":path.rsplit('/').next().unwrap()})
+                        }
+                        _ => panic!("{path}"),
+                    };
+                    Ok(Some(row))
+                })
+            }
+            fn verify(&self, _: &Config) -> io::Result<()> {
+                Ok(())
+            }
+            fn admit(&self, inbox: &mut Inbox, source: &Value) -> io::Result<Option<Value>> {
+                inbox.admit_team(self.route, source)
+            }
+            fn post(&self, _: &Config, _: &str, _: &str, _: &[Captured]) -> Post {
+                panic!("no effect after failed grant")
+            }
+        }
+        let cfg = Config(
+            json!({"mode":"teammate","application_id":"3","owner_id":"7","guild_ids":["1"],
+            "team_discussion":{"guild_id":"1","thread_id":"2"},"installation_id":"fixture","daemon_socket":"/tmp/team-worker"}),
+        );
+        let route = Route::configured(&cfg).unwrap().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "swarm-enrolled-source-{}",
+            runtime::random_id().unwrap()
+        ));
+        runtime::private_dir(&root).unwrap();
+        let mut inbox = Inbox::open(&root, &cfg).unwrap();
+        inbox.checkpoint("100").unwrap();
+        let card = json!({"id":"101","guild_id":"1","channel_id":"2","type":0,
+            "author":{"id":"9","bot":false},"content":"Use our scoped worker","attachments":[]});
+        let retained = inbox.admit_team(&route, &card).unwrap().unwrap();
+        let nonce = "a".repeat(64);
+        let binding = json!({"session":"ep-fixture/manager","native_session_id":"native"});
+        let mut state = json!({"binding":binding,"input":{"source_id":"101","composer":{
+            "origin":{"message_id":"101","actor_id":"9","channel_id":"2","revision":retained["revision"]},
+            "manager_admission":{"nonce":nonce,"binding":binding}
+        }}});
+        inbox
+            .cutover("101", field(&retained, "revision"), state.clone())
+            .unwrap();
+        state["input"]["turn_id"] = json!("fixture-native-turn");
+        inbox.settled_input("101", state.clone()).unwrap();
+        let verify = |inbox: &mut Inbox, input: &Value, missing, author_is_member| {
+            let api = Live {
+                route: &route,
+                card: card.clone(),
+                missing,
+                author_is_member,
+            };
+            // A bot-only check stays green in all cases.
+            assert!(api.verify(&cfg).is_ok());
+            super::super::dispatcher::enrolled_source(&cfg, inbox, &api, input)
+        };
+        let input = &state["input"];
+        assert!(verify(&mut inbox, input, false, true).is_ok());
+        assert!(verify(&mut inbox, input, true, true).is_err());
+        assert!(verify(&mut inbox, input, false, false).is_err());
+        let mut wake = input.clone();
+        wake["worker_wake"] = json!({"owner_revision":retained["revision"]});
+        wake["composer"]["origin"]["revision"] = json!("distinct-mail-wake-revision");
+        assert!(verify(&mut inbox, &wake, false, true).is_ok());
+        assert!(verify(&mut inbox, &wake, true, true).is_err());
+        assert!(verify(&mut inbox, &wake, false, false).is_err());
+        wake["source_id"] = json!("voice-worker-wake");
+        assert!(verify(&mut inbox, &wake, false, true).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

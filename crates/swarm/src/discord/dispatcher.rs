@@ -40,6 +40,40 @@ impl Audience for Discord {
     }
 }
 
+pub(super) fn enrolled_source(
+    cfg: &Config,
+    inbox: &mut Inbox,
+    api: &impl Audience,
+    input: &Value,
+) -> io::Result<()> {
+    let id = field(input, "source_id");
+    let origin = &input["composer"]["origin"];
+    let wake = &input["worker_wake"];
+    let revision = if wake.is_null() {
+        &origin["revision"]
+    } else {
+        &wake["owner_revision"]
+    };
+    if !super::config::snowflake(id) || origin["message_id"] != id || !revision.is_string() {
+        return Err(invalid(
+            "enrolled worker tools require a current Discord source card",
+        ));
+    }
+    let fresh = api
+        .current(cfg, id)?
+        .ok_or_else(|| invalid("original enrolled worker source is no longer visible"))?;
+    if fresh["id"] != id
+        || fresh["author"]["id"] != origin["actor_id"]
+        || fresh["channel_id"] != origin["channel_id"]
+        || api.admit(inbox, &fresh)?.is_none_or(|receipt| {
+            receipt["state"] != "accepted" || receipt["revision"] != *revision
+        })
+    {
+        return Err(invalid("enrolled worker source or audience changed"));
+    }
+    Ok(())
+}
+
 pub(super) struct Dispatcher {
     owner: Manager,
     listener: UnixListener,
@@ -766,9 +800,9 @@ impl Dispatcher {
                 "worker action must belong to the current native manager turn",
             ));
         }
+        enrolled_source(cfg, inbox, api, input)?;
         let session = field(&state, "session").to_owned();
         if tool == "swarm_list" {
-            api.verify(cfg)?;
             return self.owner.enrolled_roster(&state["worker_actions"], &args);
         }
         if tool == "swarm_status" {
@@ -782,21 +816,10 @@ impl Dispatcher {
             }
             return self.owner.enrolled_worker(&session, action, false);
         }
-        let id = field(input, "source_id");
-        let revision = input["composer"]["origin"]["revision"].clone();
-        if !input["worker_wake"].is_null() || !super::config::snowflake(id) {
+        if !input["worker_wake"].is_null() {
             return Err(invalid(
-                "worker creation requires a current owner or team Discord message",
+                "worker creation requires a current human Discord admission",
             ));
-        }
-        let fresh = api
-            .current(cfg, id)?
-            .ok_or_else(|| invalid("worker creation lost its original Discord source"))?;
-        if api
-            .admit(inbox, &fresh)?
-            .is_none_or(|row| row["state"] != "accepted" || row["revision"] != revision)
-        {
-            return Err(invalid("worker creation cannot use changed Discord source"));
         }
         let key = super::enrolled_worker::key(input, &args)?;
         let prior = &state["worker_actions"][&key];
