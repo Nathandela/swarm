@@ -50,6 +50,13 @@ The standalone Darwin arm64 v0.29.24 source checkout passed the full normal and 
 
 Later on 26 November, remote main and the `v0.29.25` tag advanced to `44d796734fc60f6f9b9d6705dca44736f0c5741b`. The source delta covers Discord thread naming and connector and voice notice handling. New thread names use the first eight non-mention words of the verified opener and at most 95 UTF-16 code units. A definitive HTTP 400 can fall back to the original default title. Reconnect repair asks a thread to restate only when an admissible message was missed or history is unreadable. An existing manager reply normally ends routine reply notices. A missing linked-worker result can still require a notice, with the unverified-final notice limited to one per discussion in 30 minutes. Beads `agents-tracker-8fp1.9.1` tracks the implementation and fixture changes. The full Go Discord and Voice packages passed on macOS arm64. All eight targeted regression cases passed without cache on both native hosts. Log SHA-256 is `70219e23d30aab269ae2314b051851a129b5683d8789a6437692628cba7e3146` on macOS and `5d3d00f1b8a6015ea1525127fcc8c6a3853cd22662108fd1c87a26b38a50cf7c` on Linux. GitHub's latest published release at this checkpoint was still v0.29.24, and unchanged dashboard fixtures used that signed release. [Go v0.29.25 change](https://github.com/Nathandela/swarm/pull/113)
 
+Once v0.29.25 became available, the original checksum manifest verified with the same trusted Ed25519 key. The verifier rejected a one-byte change to that manifest. Both archive hashes matched, and both extracted binaries executed natively and reported `swarm 0.29.25 (go1.26.11)`. [Published Go v0.29.25 reference](https://github.com/Nathandela/swarm/releases/tag/v0.29.25)
+
+| Executed v0.29.25 reference | Signed archive SHA-256 | Extracted Swarm SHA-256 |
+| --- | --- | --- |
+| Darwin arm64 (universal archive) | `e62ef2565cd523cfd5d458190d524d2a84a2fc1f234c8e2fe4b4b225f818ec50` | `a20420c19218e506dc35003a188da27f9cdbb9b15601dcc40792d48422b27d72` |
+| `tf_nathan` Linux x86_64 | `bd7be12638ef073e68f1c5755c683b4d9aec6842bb2e9279c6c6af2ecbc75006` | `6697c17b60176b7ad21923d6b65597a2c5e8f353f08665e42e0e5b33d52f292f` |
+
 ## M0 source build repeatability on Apple Silicon
 
 Two builds in independent scratch directories on this host with Go 1.26.5 and `GOARCH=arm64` produced identical SHA-256 digests within each reference. Both binaries executed their version and Discord help probes. Running the builder with an existing output directory returned exit 2 and preserved its contents.
