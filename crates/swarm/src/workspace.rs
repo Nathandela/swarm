@@ -219,6 +219,45 @@ pub(crate) fn create(repo: &Path, id: &str, record: &Value) -> io::Result<()> {
     Ok(())
 }
 
+fn unquote_registration(raw: &[u8]) -> Option<Vec<u8>> {
+    let mut input = raw
+        .strip_prefix(b"\"")?
+        .strip_suffix(b"\"")?
+        .iter()
+        .copied();
+    let mut path = Vec::with_capacity(raw.len());
+    while let Some(byte) = input.next() {
+        path.push(match byte {
+            b'"' | 0 => return None,
+            b'\\' => match input.next()? {
+                b'a' => 7,
+                b'b' => 8,
+                b't' => b'\t',
+                b'n' => b'\n',
+                b'v' => 11,
+                b'f' => 12,
+                b'r' => b'\r',
+                byte @ (b'"' | b'\\') => byte,
+                first @ b'0'..=b'3' => {
+                    let second = input.next()?;
+                    let third = input.next()?;
+                    if !(b'0'..=b'7').contains(&second) || !(b'0'..=b'7').contains(&third) {
+                        return None;
+                    }
+                    let decoded = (first - b'0') * 64 + (second - b'0') * 8 + (third - b'0');
+                    if decoded == 0 {
+                        return None;
+                    }
+                    decoded
+                }
+                _ => return None,
+            },
+            _ => byte,
+        });
+    }
+    Some(path)
+}
+
 fn registered_paths(repo: &Path) -> io::Result<Vec<PathBuf>> {
     let (listing, separator) = match git(repo, ["worktree", "list", "--porcelain", "-z"]) {
         Ok(listing) => (listing, 0),
@@ -231,6 +270,14 @@ fn registered_paths(repo: &Path) -> io::Result<Vec<PathBuf>> {
         .split(|byte| *byte == separator)
         .filter_map(|field| field.strip_prefix(b"worktree "))
         .map(|raw| {
+            let decoded;
+            let raw = if separator == b'\n' && raw.starts_with(b"\"") {
+                decoded = unquote_registration(raw)
+                    .ok_or_else(|| io::Error::other("worktree: malformed Git registration path"))?;
+                decoded.as_slice()
+            } else {
+                raw
+            };
             let path = PathBuf::from(OsStr::from_bytes(raw));
             if !path.is_absolute() {
                 return Err(io::Error::other(
@@ -356,6 +403,23 @@ mod tests {
     }
 
     #[test]
+    fn git_registration_c_quotes_preserve_raw_path_bytes() {
+        assert_eq!(
+            unquote_registration(br#""/path\twith\\\"\377""#).unwrap(),
+            b"/path\twith\\\"\xff"
+        );
+        for invalid in [
+            br#""/path\x""#.as_slice(),
+            br#""/path\000""#,
+            br#""/path\37""#,
+            br#""/path"#,
+            br#""/path"tail""#,
+        ] {
+            assert!(unquote_registration(invalid).is_none());
+        }
+    }
+
+    #[test]
     fn removal_retains_nested_git_and_uncertain_registrations() {
         let root = crate::test_temp::root()
             .canonicalize()
@@ -388,7 +452,7 @@ mod tests {
         );
         fs::rename(questionable, root.join("questionable")).unwrap();
 
-        let linked = path.join("linked");
+        let linked = path.join("linked\tnested");
         git(
             &root,
             [
@@ -413,7 +477,7 @@ mod tests {
                 "worktree",
                 "move",
                 linked.to_str().unwrap(),
-                root.join("linked").to_str().unwrap(),
+                root.join("linked\tsibling").to_str().unwrap(),
             ],
         )
         .unwrap();
@@ -426,7 +490,7 @@ mod tests {
             fs::read_to_string(moved.join("kept")).unwrap(),
             "Nested local work"
         );
-        assert!(root.join("linked/kept").is_file());
+        assert!(root.join("linked\tsibling/kept").is_file());
         fs::remove_dir_all(root).unwrap();
     }
 }
