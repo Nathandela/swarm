@@ -241,7 +241,13 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 
 func (t *teammateConnector) admissibleHuman(m *discordgo.Message) bool {
 	cfg := t.service.Config
-	return teammateHuman(m, t.service.botUserID()) && (cfg.Mode != "personal" || m.Author.ID == cfg.OwnerID)
+	return (teammateHuman(m, t.service.botUserID()) || trustedWebhook(m, cfg.TrustedWebhookIDs)) && (cfg.Mode != "personal" || m.Author.ID == cfg.OwnerID)
+}
+
+// trustedWebhook admits an ordinary message posted by an opted-in webhook.
+func trustedWebhook(m *discordgo.Message, ids []string) bool {
+	return m != nil && m.Author != nil && m.WebhookID != "" && m.Author.ID == m.WebhookID && containsID(ids, m.WebhookID) &&
+		(m.Type == discordgo.MessageTypeDefault || m.Type == discordgo.MessageTypeReply)
 }
 
 func (t *teammateConnector) addressed(m *discordgo.Message) bool {
