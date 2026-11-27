@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
+use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -17,6 +18,7 @@ where
         .arg(repo)
         .args(args)
         .env_remove("GIT_DIR")
+        .env_remove("GIT_COMMON_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -150,7 +152,6 @@ fn coordinates<'a>(repo: &Path, id: &str, record: &'a Value) -> io::Result<(&'a 
 }
 
 fn registered(repo: &Path, path: &Path, reference: &str) -> io::Result<bool> {
-    use std::os::unix::ffi::OsStrExt;
     let listing = git(
         repo,
         [
@@ -218,9 +219,91 @@ pub(crate) fn create(repo: &Path, id: &str, record: &Value) -> io::Result<()> {
     Ok(())
 }
 
+fn registered_paths(repo: &Path) -> io::Result<Vec<PathBuf>> {
+    let (listing, separator) = match git(repo, ["worktree", "list", "--porcelain", "-z"]) {
+        Ok(listing) => (listing, 0),
+        Err(error) if error.to_string().contains("unknown switch `z'") => {
+            (git(repo, ["worktree", "list", "--porcelain"])?, b'\n')
+        }
+        Err(error) => return Err(error),
+    };
+    let paths = listing
+        .split(|byte| *byte == separator)
+        .filter_map(|field| field.strip_prefix(b"worktree "))
+        .map(|raw| {
+            let path = PathBuf::from(OsStr::from_bytes(raw));
+            if !path.is_absolute() {
+                return Err(io::Error::other(
+                    "worktree: ambiguous Git registration path",
+                ));
+            }
+            Ok(path)
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    if paths.is_empty() {
+        return Err(io::Error::other("worktree: missing Git registrations"));
+    }
+    Ok(paths)
+}
+
+fn check_remove(repo: &Path, path: &Path) -> io::Result<()> {
+    let root = path.metadata()?;
+    let retained = |child: &Path| {
+        io::Error::other(format!(
+            "worktree: nested Git checkout at {}; outer checkout retained",
+            child.display()
+        ))
+    };
+    let mut owners = 0;
+    for registered in registered_paths(repo)? {
+        if registered == path {
+            owners += 1;
+            continue;
+        }
+        if registered.starts_with(path) {
+            return Err(retained(&registered));
+        }
+        // This also detects registered paths through aliases or alternate
+        // case spellings, including a registration whose checkout is missing.
+        for ancestor in registered.ancestors() {
+            match ancestor.metadata() {
+                Ok(info) if (info.dev(), info.ino()) == (root.dev(), root.ino()) => {
+                    return Err(retained(&registered));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    if owners != 1 {
+        return Err(io::Error::other(
+            "worktree: ambiguous outer Git registration; checkout retained",
+        ));
+    }
+    let mut directories = vec![path.to_owned()];
+    while let Some(directory) = directories.pop() {
+        if directory != path {
+            match directory.join(".git").symlink_metadata() {
+                Ok(_) => return Err(retained(&directory)),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                directories.push(entry.path());
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn remove(repo: &Path, id: &str, record: &Value) -> io::Result<()> {
     let (path, reference) = coordinates(repo, id, record)?;
     if registered(repo, path, reference)? {
+        check_remove(repo, path)?;
         git(
             repo,
             [
@@ -244,4 +327,106 @@ pub(crate) fn verify(repo: &Path, id: &str, record: &Value) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    fn repository(path: &Path) {
+        fs::create_dir(path).unwrap();
+        git(path, ["init"]).unwrap();
+        git(
+            path,
+            [
+                "-c",
+                "user.name=Swarm Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "fixture",
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn removal_retains_nested_git_and_uncertain_registrations() {
+        let root = crate::test_temp::root()
+            .canonicalize()
+            .unwrap()
+            .join(format!("worktree-{}", runtime::random_id().unwrap()));
+        repository(&root);
+        let id = "0123456789abcdef01234567";
+        let record = plan(&root, id, "outer").unwrap();
+        create(&root, id, &record).unwrap();
+        let path = Path::new(record["path"].as_str().unwrap());
+
+        let independent = path.join("independent");
+        repository(&independent);
+        fs::write(independent.join("kept"), "Nested local work").unwrap();
+        assert!(remove(&root, id, &record).is_err());
+        assert!(independent.join("kept").is_file());
+        let moved = root.join("independent");
+        fs::rename(independent, &moved).unwrap();
+
+        let questionable = path.join("questionable");
+        fs::create_dir(&questionable).unwrap();
+        symlink("missing-git-directory", questionable.join(".git")).unwrap();
+        assert!(remove(&root, id, &record).is_err());
+        assert!(
+            questionable
+                .join(".git")
+                .symlink_metadata()
+                .unwrap()
+                .is_symlink()
+        );
+        fs::rename(questionable, root.join("questionable")).unwrap();
+
+        let linked = path.join("linked");
+        git(
+            &root,
+            [
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                OsStr::new("--detach"),
+                linked.as_os_str(),
+            ],
+        )
+        .unwrap();
+        fs::write(linked.join("kept"), "Nested linked work").unwrap();
+        assert!(remove(&root, id, &record).is_err());
+        let gitfile = linked.join(".git");
+        let marker = root.join("saved-gitfile");
+        fs::rename(&gitfile, &marker).unwrap();
+        assert!(remove(&root, id, &record).is_err());
+        assert!(linked.join("kept").is_file());
+        fs::rename(marker, gitfile).unwrap();
+        git(
+            &root,
+            [
+                "worktree",
+                "move",
+                linked.to_str().unwrap(),
+                root.join("linked").to_str().unwrap(),
+            ],
+        )
+        .unwrap();
+
+        symlink(&moved, path.join("external-alias")).unwrap();
+        fs::write(path.join("ordinary-untracked"), "Plain local data").unwrap();
+        remove(&root, id, &record).unwrap();
+        assert!(!path.exists());
+        assert_eq!(
+            fs::read_to_string(moved.join("kept")).unwrap(),
+            "Nested local work"
+        );
+        assert!(root.join("linked/kept").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
 }
