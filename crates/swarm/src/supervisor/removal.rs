@@ -145,7 +145,12 @@ pub(super) fn delete(state: &State, request: &Value) -> io::Result<()> {
                 "another retained session refers to this checkout",
             ));
         }
-        crate::workspace::remove(&repo, id, &record)?;
+        crate::workspace::remove(
+            &repo,
+            id,
+            &record,
+            &session.dir.join("checkout-removal.json"),
+        )?;
     }
     let mut sessions = state.sessions.write().unwrap();
     if !sessions.get(id).is_some_and(|s| Arc::ptr_eq(s, &session)) {

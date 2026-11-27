@@ -108,6 +108,14 @@ fn git_common(repo: &Path) -> io::Result<PathBuf> {
     Path::new(OsStr::from_bytes(&path)).canonicalize()
 }
 
+fn directory_identity(path: &Path) -> io::Result<Value> {
+    let info = path.symlink_metadata()?;
+    if !info.is_dir() {
+        return Err(io::Error::other("worktree: expected a physical directory"));
+    }
+    Ok(json!([info.dev(), info.ino()]))
+}
+
 fn contains_directory(parent: &Path, candidate: &Path) -> bool {
     candidate.starts_with(parent)
         || parent.metadata().is_ok_and(|expected| {
@@ -204,12 +212,16 @@ pub(crate) fn claim(
         )
     };
     let common = git_common(repo)?;
+    let common_identity = directory_identity(&common)?;
     let base = String::from_utf8(git(repo, ["rev-parse", "--verify", "HEAD^{commit}"])?)
         .map_err(io::Error::other)?;
     let mut path = parent.join(name);
     let authorize = |path: &Path| {
         allow(path)?;
-        if git_common(repo)? != common || destination_root(repo)? != parent {
+        if git_common(repo)? != common
+            || directory_identity(&common)? != common_identity
+            || destination_root(repo)? != parent
+        {
             return Err(io::Error::other(
                 "worktree: destination changed during reservation",
             ));
@@ -239,7 +251,8 @@ pub(crate) fn claim(
     }
     let info = path.symlink_metadata()?;
     let record = json!({"path":path,"root":parent,"claim":[info.dev(),info.ino()],
-        "ref":format!("refs/heads/swarm/{branch}"),"common":common,"base":base});
+        "ref":format!("refs/heads/swarm/{branch}"),"common":common,
+        "common_identity":common_identity,"base":base});
     if !claim_matches(&path, &record).unwrap_or(false) {
         release_claim(&record);
         return Err(io::Error::other(
@@ -299,7 +312,13 @@ fn coordinates<'a>(repo: &Path, id: &str, record: &'a Value) -> io::Result<(&'a 
         {
             return Err(io::Error::other("worktree: recorded destination changed"));
         }
-        git_common(repo)?.as_os_str().as_bytes().to_vec()
+        let common = git_common(repo)?;
+        if directory_identity(&common)? != record["common_identity"] {
+            return Err(io::Error::other(
+                "worktree: source Git directory identity changed",
+            ));
+        }
+        common.as_os_str().as_bytes().to_vec()
     };
     if record["common"].as_str().map(str::as_bytes) != Some(common.as_slice()) {
         return Err(io::Error::other("worktree: source Git directory changed"));
@@ -412,6 +431,9 @@ pub(crate) fn create(repo: &Path, id: &str, record: &Value) -> io::Result<()> {
         .as_str()
         .filter(|s| matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit()))
         .ok_or_else(|| io::Error::other("worktree: invalid base commit"))?;
+    if claimed {
+        coordinates(repo, id, record)?;
+    }
     let result = git(
         repo,
         [
@@ -433,6 +455,7 @@ pub(crate) fn create(repo: &Path, id: &str, record: &Value) -> io::Result<()> {
         ));
     }
     if claimed {
+        coordinates(repo, id, record)?;
         if !claim_matches(path, record)? {
             return Err(io::Error::other(
                 "worktree: checkout directory changed after creation",
@@ -571,15 +594,69 @@ fn check_remove(repo: &Path, path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn remove(repo: &Path, id: &str, record: &Value) -> io::Result<()> {
+fn removed_from_intent(journal: &Path, path: &Path, id: &str, record: &Value) -> io::Result<bool> {
+    let intent = match runtime::read_json(journal) {
+        Ok(intent) => intent,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let common = record["common"]
+        .as_str()
+        .map(Path::new)
+        .ok_or_else(|| io::Error::other("worktree: remover is missing repository coordinates"))?;
+    let admin = intent["admin"]
+        .as_str()
+        .map(Path::new)
+        .ok_or_else(|| io::Error::other("worktree: remover is missing Git admin coordinates"))?;
+    if intent != json!({"schema":1,"id":id,"checkout":record,"admin":admin})
+        || admin.parent() != Some(&common.join("worktrees"))
+        || git_common(common)? != common
+        || directory_identity(common)? != record["common_identity"]
+    {
+        return Err(io::Error::other(
+            "worktree: removal intent identity changed",
+        ));
+    }
+    let absent = |path: &Path| match path.symlink_metadata() {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error),
+        Ok(_) => Ok(false),
+    };
+    let reference = record["ref"]
+        .as_str()
+        .ok_or_else(|| io::Error::other("worktree: remover is missing branch coordinates"))?;
+    if !absent(path)?
+        || !absent(admin)?
+        || registered(common, path, reference)?
+        || registered_paths(common)?
+            .iter()
+            .any(|entry| entry.starts_with(path))
+    {
+        return Err(io::Error::other(
+            "worktree: deletion completion is unproven",
+        ));
+    }
+    Ok(true)
+}
+
+pub(crate) fn remove(repo: &Path, id: &str, record: &Value, journal: &Path) -> io::Result<()> {
+    let path = record["path"]
+        .as_str()
+        .map(Path::new)
+        .ok_or_else(|| io::Error::other("worktree: missing checkout"))?;
+    if !record["claim"].is_null()
+        && path
+            .symlink_metadata()
+            .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+        && removed_from_intent(journal, path, id, record)?
+    {
+        return Ok(());
+    }
     let repo = if !record["claim"].is_null()
         && repo
             .metadata()
             .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
     {
-        let path = record["path"].as_str().map(Path::new).ok_or_else(|| {
-            io::Error::other("worktree: missing checkout after source disappeared")
-        })?;
         verify_claim_owner(path, id, record)?;
         path
     } else {
@@ -615,6 +692,16 @@ pub(crate) fn remove(repo: &Path, id: &str, record: &Value) -> io::Result<()> {
     };
     if owned {
         check_remove(repo, path)?;
+        if !record["claim"].is_null() {
+            let marker = owner_marker(path)?;
+            runtime::write_json(
+                journal,
+                &json!({
+                    "schema":1,"id":id,"checkout":record,"admin":marker.parent()
+                }),
+            )?;
+            coordinates(repo, id, record)?;
+        }
         git(
             repo,
             [
@@ -624,6 +711,9 @@ pub(crate) fn remove(repo: &Path, id: &str, record: &Value) -> io::Result<()> {
                 path.as_os_str(),
             ],
         )?;
+        if !record["claim"].is_null() && !removed_from_intent(journal, path, id, record)? {
+            return Err(io::Error::other("worktree: deletion intent is unavailable"));
+        }
     } else {
         release_claim(record);
         match path.symlink_metadata() {
@@ -687,6 +777,19 @@ pub(crate) fn verify(repo: &Path, id: &str, record: &Value) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+
+    fn removal(repo: &Path, id: &str, record: &Value) -> io::Result<()> {
+        let common = Path::new(record["common"].as_str().unwrap());
+        remove(
+            repo,
+            id,
+            record,
+            &common
+                .parent()
+                .unwrap()
+                .join(format!(".swarm-removal-{id}.json")),
+        )
+    }
 
     fn repository(path: &Path) {
         fs::create_dir(path).unwrap();
@@ -769,12 +872,21 @@ mod tests {
         assert_eq!(fs::read(&marker).unwrap(), second_id.as_bytes());
         fs::write(&marker, first_id).unwrap();
         assert!(create(&subdir, second_id, &second).is_err());
-        assert!(remove(&subdir, second_id, &second).is_err());
+        assert!(removal(&subdir, second_id, &second).is_err());
         fs::write(&marker, second_id).unwrap();
         git(target, ["checkout", "--detach"]).unwrap();
-        remove(&root, first_id, &first).unwrap();
-        remove(&subdir, second_id, &second).unwrap();
+        removal(&root, first_id, &first).unwrap();
+        removal(&subdir, second_id, &second).unwrap();
         assert!(!target.exists());
+        // Git succeeded while both source and child are gone. The session
+        // tombstone has not moved yet, so repeat with the retained intent.
+        removal(&subdir, second_id, &second).unwrap();
+        fs::create_dir(target).unwrap();
+        fs::write(target.join("kept"), "replacement").unwrap();
+        assert!(removal(&subdir, second_id, &second).is_err());
+        assert!(target.join("kept").is_file());
+        fs::remove_file(target.join("kept")).unwrap();
+        fs::remove_dir(target).unwrap();
 
         let rendezvous = std::sync::Barrier::new(2);
         let (left, right) = std::thread::scope(|threads| {
@@ -799,6 +911,36 @@ mod tests {
         );
         release_claim(&left);
         release_claim(&right);
+
+        let replacement = fixture.join("different-repository");
+        git(
+            &fixture,
+            [
+                OsStr::new("clone"),
+                OsStr::new("--no-local"),
+                root.as_os_str(),
+                replacement.as_os_str(),
+            ],
+        )
+        .unwrap();
+        let original_head = git(&root, ["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(
+            git(&replacement, ["rev-parse", "HEAD"]).unwrap(),
+            original_head
+        );
+        let pending = claim(&root, first_id, "Pending", |_| Ok(())).unwrap();
+        let pending_path = Path::new(pending["path"].as_str().unwrap());
+        let original_common = root.join(".git");
+        let parked_common = fixture.join("original-admin");
+        fs::rename(&original_common, &parked_common).unwrap();
+        fs::rename(replacement.join(".git"), &original_common).unwrap();
+        assert!(create(&root, first_id, &pending).is_err());
+        assert!(claim_matches(pending_path, &pending).unwrap());
+        assert!(fs::read_dir(pending_path).unwrap().next().is_none());
+        assert!(removal(&subdir, second_id, &second).is_err());
+        fs::rename(&original_common, replacement.join(".git")).unwrap();
+        fs::rename(&parked_common, &original_common).unwrap();
+        release_claim(&pending);
 
         let aliases = fixture.join("aliases");
         fs::create_dir(&aliases).unwrap();
@@ -833,7 +975,7 @@ mod tests {
         let independent = path.join("independent");
         repository(&independent);
         fs::write(independent.join("kept"), "Nested local work").unwrap();
-        assert!(remove(&root, id, &record).is_err());
+        assert!(removal(&root, id, &record).is_err());
         assert!(independent.join("kept").is_file());
         let moved = root.join("independent");
         fs::rename(independent, &moved).unwrap();
@@ -841,7 +983,7 @@ mod tests {
         let questionable = path.join("questionable");
         fs::create_dir(&questionable).unwrap();
         symlink("missing-git-directory", questionable.join(".git")).unwrap();
-        assert!(remove(&root, id, &record).is_err());
+        assert!(removal(&root, id, &record).is_err());
         assert!(
             questionable
                 .join(".git")
@@ -863,11 +1005,11 @@ mod tests {
         )
         .unwrap();
         fs::write(linked.join("kept"), "Nested linked work").unwrap();
-        assert!(remove(&root, id, &record).is_err());
+        assert!(removal(&root, id, &record).is_err());
         let gitfile = linked.join(".git");
         let marker = root.join("saved-gitfile");
         fs::rename(&gitfile, &marker).unwrap();
-        assert!(remove(&root, id, &record).is_err());
+        assert!(removal(&root, id, &record).is_err());
         assert!(linked.join("kept").is_file());
         fs::rename(marker, gitfile).unwrap();
         git(
@@ -883,7 +1025,7 @@ mod tests {
 
         symlink(&moved, path.join("external-alias")).unwrap();
         fs::write(path.join("ordinary-untracked"), "Plain local data").unwrap();
-        remove(&root, id, &record).unwrap();
+        removal(&root, id, &record).unwrap();
         assert!(!path.exists());
         assert_eq!(
             fs::read_to_string(moved.join("kept")).unwrap(),
