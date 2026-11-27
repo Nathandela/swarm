@@ -369,9 +369,32 @@ def drive(root, guard):
             fixtures.wait_for(ready, "replacement Rust daemon after worktree marker gap")
             assert owner.read_text() == sibling.split("/")[1]
             git(sibling_checkout, "checkout", "--detach")
-            assert delete(sibling)["op"] == "ok" and not sibling_checkout.exists()
-            assert delete(outer)["op"] == "ok" and not outer_checkout.exists()
-            print("linked-source sibling used its own HEAD; daemon repaired ownership and removed detached checkout")
+            invoke("kill", outer)
+            assert json.loads(invoke("watch", outer, "--until", "completed", "--timeout", "4s"))["group"] == "completed"
+            git(repo, "worktree", "remove", "--force", str(outer_checkout))
+            assert not outer_checkout.exists()
+            marker = root / "effects/pause-git-removal"
+            marker.write_text(str(sibling_checkout))
+            with socket.socket(socket.AF_UNIX) as pending:
+                pending.settimeout(8)
+                pending.connect(str(address))
+                control(pending, "hello", endpoint_id="", protocol_version=1)
+                endpoint = read_control(pending)["endpoint_id"]
+                control(pending, "delete", endpoint_id=endpoint, session_id=sibling)
+                fixtures.wait_for(lambda: (root / "effects/git-removal-paused").is_file(),
+                                  "Git removal before daemon commits the deletion tombstone")
+                assert not sibling_checkout.exists()
+                sibling_state = root / "state/rust-v1" / sibling.split("/")[1]
+                assert (sibling_state / "checkout-removal.json").is_file()
+                assert sibling_state.is_dir()
+                daemon.kill()
+                daemon.wait(timeout=5)
+            marker.unlink()
+            daemon = launch_daemon(log)
+            fixtures.wait_for(ready, "replacement Rust daemon after Git removal")
+            assert delete(sibling)["op"] == "ok" and not sibling_state.exists()
+            assert delete(outer)["op"] == "ok"
+            print("linked-source sibling used its own HEAD; repaired ownership and retried deletion after Git removed it")
             parent = invoke("spawn","--cli","claude","--name","source","--dir",str(root/"work"),"--prompt","parent").decode().strip()
             fixtures.wait_for(lambda: b"fixture ready" in invoke("peek",parent), "new source PTY")
             fire("Stop")
@@ -470,6 +493,22 @@ if "--version" not in sys.argv:
 os.execv(fixture, [str(fixture), *sys.argv[1:]])
 """)
         claude.chmod(0o700)
+        # Stop the disposable daemon exactly after Git succeeds and before the
+        # supervisor can rename its session directory into the deletion namespace.
+        checkpoint_git = root / "bin/git"
+        checkpoint_git.write_text("""#!/bin/sh
+effects="$(dirname "$0")/../effects"
+if [ "${3-}:${4-}:${5-}" = worktree:remove:--force ] &&
+   [ -f "$effects/pause-git-removal" ] &&
+   [ "${6-}" = "$(cat "$effects/pause-git-removal")" ]; then
+    /usr/bin/git "$@" || exit "$?"
+    kill -STOP "$PPID" || exit "$?"
+    touch "$effects/git-removal-paused"
+    exit 0
+fi
+exec /usr/bin/git "$@"
+""")
+        checkpoint_git.chmod(0o700)
         fixtures.table()
         guard = fixtures.guard(root)
         if sys.platform.startswith("linux"):
