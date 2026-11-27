@@ -42,6 +42,47 @@ Use the pinned Go supervisor and then the Rust candidate supervisor. The witness
 
 Pass `--cycle` to drive two running sessions through Ctrl+N, Kitty Ctrl+P, legacy Ctrl+P, detach and reattach. The driver checks each unique echo through the public `peek` command, the complete worker input log and the restored terminal settings. Both Go/Go and Rust/Rust passed this exercise on macOS arm64 and Linux x86_64.
 
+Use `--terminal-restore` to verify quiet board restoration within 2 seconds
+of Ctrl+Q. Run one arm at a time with a fresh receipt path.
+
+```sh
+python3 -B scripts/verification/parity/test_board.py \
+  --supervisor "$SWARM" --board "$SWARM" --tmux "$(command -v tmux)" --terminal-restore \
+  --restore-evidence "$NEW_RECEIPT"
+```
+
+The board starts with two running workers in review. After each of eight
+attach and detach cycles, the harness checks the final visible roster rows
+and footer against their original values and positions. It keeps the board
+at 80×24, observes the attached worker at 80×23, sends no further input or
+resize during the 2-second window, and rejects subscribed owner events.
+It replays the captured terminal output into a separate tmux pane, then
+resolves its cells with the shared grid parser. Terminal replies from the
+observer cannot reach the board. A control writes the roster and footer in
+valid cells, then overwrites one of those rows and requires rejection.
+The roster comparison excludes optional capability metadata and records its
+changes. The harness also checks worker input, termios, and fixture cleanup.
+
+Signed Go v0.29.27 at `51e81f2604cb2a2eff4678c9a0b00bdf1b2a8a25`
+uses Bubble Tea v2.1.3. The public attach path in Go issues its own internal
+completion message. Its renderer regression separately freezes the model and
+tests terminal release and restore directly. The signed Go v0.29.26 public
+control also passed. [Go renderer evidence](https://github.com/Nathandela/swarm/blob/51e81f2604cb2a2eff4678c9a0b00bdf1b2a8a25/docs/verification/terminal-restore-ticker.md)
+
+On 27 November 2026 all three arms passed eight cycles on both native hosts
+using tmux 3.6a on macOS and 3.2a on Linux. Each Go read after detach differed
+from its initial read in optional capability metadata. Every arm preserved
+both visible roster rows and cleaned up all fixture processes.
+
+| Build | Host | Executable SHA-256 | Receipt SHA-256 |
+|---|---|---|---|
+| Signed Go v0.29.27 | macOS arm64 | `5a10479a69b0faaf182166493f4577a388e79d4ea640a2600aa8f79af64ed6a3` | `8b54086a7872e14b2f3b1765fee00c1319652e3b2fc41d54ba2f6767a06e4324` |
+| Signed Go v0.29.27 | Linux x86_64 | `0c1dcb49c75995d6cdc5e88bf35e0ac596718104dc740a7835c4bcd6c93a0749` | `71179754ef91a0354c1893f8276d21da0290780511d08f9c20f7a886d98b37d5` |
+| Rust `afd0d8ac` | macOS arm64 | `6063ef4a080e989a643ef747156fbce3357103ca4610d1ce7c6de3d9a89e6a70` | `0ff83ab15c3cb080c7e8acfdc69decfd7f047907b64fa5171a5033e491bfcfa3` |
+| Rust `afd0d8ac` | Linux x86_64 | `81add02a00d24faa4ca993035c455b73bcf5340f10c2d3caa4f62f73e2f7b547` | `2d80d21db892336a670d94af1f18916b95c9b1470d70deba0da6c9cb70309fd6` |
+| Signed Go v0.29.26 | macOS arm64 | `b6b621cb6cf91b71e17cba54fff91a3cdda3c862e145b029c42e51f6728bf663` | `958ca1f93728d68c65e94393223f49d068098d73fc7f6d195e8690917018688e` |
+| Signed Go v0.29.26 | Linux x86_64 | `629ffb0eca67906dfefcbe3f0e5c63e648f8973c05bcd486fd83a15dd3d8859b` | `3783f67ee21173f0a5671f323c5694c98551a02d08ef9d4554ff9b3a764f7941` |
+
 For an independent cell-grid observer, pass `--tmux /absolute/path/to/tmux --grid-evidence /path/to/new.json`. This lane starts a fixture through the public CLI so the same scenario works with either board. Tmux drives the actual PTY and captures every fixture row before and after daemon death. The receipt preserves tmux's raw ANSI serialization and an expanded 80×23 grid with cell text, widths, continuation cells, attributes and resolved colors. It observes the cursor and modes through tmux, and verifies bracketed paste independently from the fixture's literal input log. The reserved Swarm chrome row is outside this fixture grid.
 
 The pinned Go oracle preserves the live acute accent in `é` but loses it in the pre-restart shim projection and on reattach. Its cell difference remains in the receipt and the continuity check exits nonzero. The Rust snapshot preserves the combining cluster; compare its cells and modes with the Go live projection. Tmux capture does not expose every terminal state, including focus and alternate-scroll reporting.

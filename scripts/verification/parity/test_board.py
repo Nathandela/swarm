@@ -4,6 +4,8 @@
 import argparse
 import base64
 import copy
+from contextlib import contextmanager
+import errno
 import fcntl
 import importlib.util
 from importlib.machinery import SourceFileLoader
@@ -11,6 +13,8 @@ import json
 import os
 import re
 from pathlib import Path
+import select
+import shlex
 import shutil
 import socket
 import struct
@@ -28,8 +32,9 @@ p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
 
 
-def owner_request(path, capability, body, *, discard=False):
-    def read(conn, count):
+@contextmanager
+def owner_connection(path, capability):
+    def read(count):
         chunks = bytearray()
         while len(chunks) < count:
             data = conn.recv(count - len(chunks))
@@ -37,34 +42,39 @@ def owner_request(path, capability, body, *, discard=False):
             chunks.extend(data)
         return chunks
 
-    def receive(conn):
-        length, = struct.unpack(">I", read(conn, 4))
+    def receive():
+        length, = struct.unpack(">I", read(4))
         assert 1 <= length <= 1 << 20
-        payload = read(conn, length)
+        payload = read(length)
         assert payload[0] == 1
         return json.loads(payload[1:])
 
-    def send(conn, value):
+    def send(value):
         payload = json.dumps(value).encode()
         conn.sendall(struct.pack(">IB", len(payload) + 1, 1) + payload)
 
     with socket.socket(socket.AF_UNIX) as conn:
         conn.settimeout(5)
         conn.connect(path)
-        send(conn, {"op":"hello", "protocol_version":1, "capabilities":[capability]})
-        hello = receive(conn)
+        send({"op":"hello", "protocol_version":1, "capabilities":[capability]})
+        hello = receive()
         assert hello["op"] == "hello"
+        yield conn, hello, send, receive
+
+
+def owner_request(path, capability, body, *, discard=False):
+    with owner_connection(path, capability) as (conn, hello, send, receive):
         if body is None:
             return hello
         assert capability in hello["capabilities"]
-        send(conn, {**body, "endpoint_id":hello["endpoint_id"]})
+        send({**body, "endpoint_id":hello["endpoint_id"]})
         if discard:
             conn.shutdown(socket.SHUT_WR)
             return None
-        return receive(conn)
+        return receive()
 
 
-def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False, static_grid=False, roster_motion=False, layout_options=False, managed=None, handoff_grid=False):
+def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, board_grid=False, handoff=False, touch=False, menu_grid=False, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False, static_grid=False, roster_motion=False, layout_options=False, managed=None, handoff_grid=False, terminal_restore=False):
     env = p.environment(root)
     cwd = root / "work"
     binary = managed / "swarm" if managed else root / "bin/swarm"
@@ -94,6 +104,11 @@ def witness(root, tmux=None, cycle=False, automations=False, form_grid=False, bo
         p.wait_for(hello, "public owner hello")
         p.wait_for(roster, "public owner roster")
         return result
+
+    if terminal_restore:
+        env["GOMAXPROCS"] = "1"
+        terminal_restore_witness(root, cli, roster, start, env, tmux)
+        return
 
     if handoff:
         os.umask(0o077)
@@ -1267,6 +1282,187 @@ PALETTE = ("000000", "800000", "008000", "808000", "000080", "800080", "008080",
 SGR = re.compile(r"\x1b\[([0-9;]*)m")
 
 
+@contextmanager
+def restore_cell_observer(root, env, tmux, cols, rows):
+    command = [tmux, "-S", root / "tmux.sock", "-f", "/dev/null"]
+    fifo = root / "board-output"
+    os.mkfifo(fifo, 0o600)
+
+    def run(*args):
+        result = subprocess.run([*command, *args], env=env, cwd=root / "work",
+                                capture_output=True, timeout=3)
+        assert result.returncode == 0, (args, result.stderr)
+        return result.stdout
+
+    # Replay only recorded output. Terminal replies from tmux cannot reach the board.
+    run("new-session", "-d", "-s", "restore", "-x", str(cols), "-y", str(rows),
+        f"stty -opost; exec cat {shlex.quote(str(fifo))}")
+
+    def writer():
+        try:
+            return os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        except OSError as exc:
+            if exc.errno != errno.ENXIO:
+                raise
+            return None
+
+    with os.fdopen(p.wait_for(writer, "passive terminal output reader"), "wb", buffering=0) as stream:
+        revision = 0
+
+        def observe(output):
+            nonlocal revision
+            revision += 1
+            title = f"restore-output-{revision}".encode()
+            payload = bytes(output) + b"\x1b]2;" + title + b"\x07"
+            assert stream.write(payload) == len(payload)
+            # The title marks consumption in the observer and does not change its cells.
+            p.wait_for(lambda: run("display-message", "-p", "-t", "restore:0.0", "#{pane_title}").strip() == title,
+                       "physical terminal consumed the observed output")
+            raw = run("capture-pane", "-pe", "-S", "0", "-E", str(rows - 1), "-t", "restore:0.0")
+            return ["".join(cell[0] for cell in row).rstrip() for row in resolve_cells(raw, cols, rows)]
+
+        yield observe
+
+
+def terminal_restore_witness(root, cli, roster, start, env, tmux):
+    names = ("restore-amber", "restore-violet")
+    cols, rows = p.GEOMETRY
+    worker_geometry = f"{cols}x{rows - 1}\n".encode()
+    quiet_seconds = 2
+    effects = root / "effects"
+    daemon = start()
+
+    def checked(*args):
+        result = cli(*args)
+        assert result.returncode == 0, (args, result.stderr)
+        return result.stdout
+
+    def running(*, review=False):
+        current = roster()
+        return current and len(current[0]) == len(names) and all(
+            row["status"]["Process"] == "running" and (not review or row["group"] == "ready_for_review")
+            for row in current[0]
+        )
+
+    def visible(rows):
+        return {row["id"]: {key: value for key, value in row.items() if key != "capabilities"}
+                for row in rows}
+
+    def geometry(board):
+        height, width, _, _ = struct.unpack("HHHH", fcntl.ioctl(board.master, termios.TIOCGWINSZ, bytes(8)))
+        return width, height
+
+    def layout(screen):
+        if "More (m)" not in screen[-1]:
+            return None
+        positions = []
+        for name in names:
+            matches = [(row, line.index(name), line) for row, line in enumerate(screen[:-1]) if name in line]
+            if len(matches) != 1:
+                return None
+            positions.append(matches[0])
+        if positions[0][0] != positions[1][0]:
+            return {"roster_cells": positions, "footer": screen[-1]}
+        return None
+
+    (effects / "board-events").touch()
+    identities = [checked("spawn", "--cli", "claude", "--name", name,
+                          "--dir", root / "work", "--prompt", "offline fixture").decode().strip()
+                  for name in names]
+    p.wait_for(running, "both fixture workers running")
+    for identity in identities:
+        checked("send", identity, "--text", "fixture review")
+    p.wait_for(lambda: running(review=True), "both live workers in stable review state")
+    original_input = (effects / "input").read_bytes()
+    samples = []
+    capability_read_changes = 0
+    with restore_cell_observer(root, env, tmux, cols, rows) as observe:
+        control = (b"\x1b[?1049h\x1b[2J\x1b[1;1Hrestore-amber\x1b[2;1Hrestore-violet"
+                   + f"\x1b[{rows};1HMore (m)".encode())
+        assert layout(observe(control)) is not None
+        assert layout(observe(b"\x1b[1;1H" + b" " * len(names[0]))) is None, "overwritten row still matched"
+        observe(b"\x1bc")
+
+        board = p.Board([str(root / "bin/board")], root, env)
+        consumed = 0
+
+        def screen():
+            nonlocal consumed
+            result = observe(board.capture[consumed:])
+            consumed = len(board.capture)
+            return result
+
+        try:
+            for landmark in (*names, "More (m)"):
+                board.wait_bytes(landmark.encode())
+            time.sleep(0.1)
+            board.drain()
+            before, = roster()
+            assert set(visible(before)) == set(identities)
+            initial = layout(screen())
+            assert initial is not None
+            assert geometry(board) == p.GEOMETRY
+            with owner_connection(env["SWARM_DAEMON_SOCK"], "subscribe") as (conn, hello, send, receive):
+                assert "subscribe" in hello["capabilities"]
+                send({"op": "subscribe", "endpoint_id": hello["endpoint_id"]})
+                assert receive()["op"] == "ok"
+
+                def no_owner_event():
+                    if select.select([conn], [], [], 0)[0]:
+                        raise AssertionError(("owner sent an event during restore", receive()))
+
+                for _ in range(8):
+                    no_owner_event()
+                    offset = len(board.capture)
+                    board.send(b"\r")
+                    board.wait_bytes(b"fixture ready", offset)
+                    board.wait_bytes(b"ctrl+q returns to swarm", offset)
+                    p.wait_for(lambda: (effects / "size").read_bytes() == worker_geometry,
+                               "attached worker PTY geometry")
+                    time.sleep(0.1)
+                    board.drain()
+                    attached = screen()
+                    assert layout(attached) is None and any("fixture ready" in line for line in attached)
+                    assert "ctrl+q returns to swarm" in attached[-1]
+                    no_owner_event()
+                    board.send(b"\x11")
+                    deadline = time.monotonic() + quiet_seconds
+                    # Freeze the captured byte range before asking the observer for its final cells.
+                    while (remaining := deadline - time.monotonic()) > 0:
+                        readable, _, _ = select.select([board.master, conn], [], [], remaining)
+                        if conn in readable:
+                            no_owner_event()
+                        if board.master in readable:
+                            board.drain()
+                    no_owner_event()
+                    restored = screen()
+                    observed = layout(restored)
+                    assert observed == initial, ("changed or missing visible rows after two seconds", restored)
+                    assert not any("fixture ready" in line for line in restored)
+                    samples.append(observed)
+                    no_owner_event()
+                    assert geometry(board) == p.GEOMETRY
+                    after, = roster()
+                    assert visible(after) == visible(before)
+                    capability_read_changes += {row["id"]: row.get("capabilities") for row in after} != {
+                        row["id"]: row.get("capabilities") for row in before}
+                    assert (effects / "input").read_bytes() == original_input
+            board.send(b"\x1b")
+            p.wait_for(lambda: (board.drain(), board.child.poll() is not None)[1], "board quit after restore")
+            assert board.child.returncode == 0
+            assert termios.tcgetattr(board.master) == board.original_mode
+        finally:
+            board.close()
+    for identity in identities:
+        checked("kill", identity)
+    daemon.terminate()
+    daemon.wait(timeout=5)
+    p.write_json(root / "quiet-restore.json", {"geometry": p.GEOMETRY, "attached_geometry": (cols, rows - 1),
+                                              "quiet_seconds": quiet_seconds, "initial_cells": initial,
+                                              "restored_cells": samples, "overwrite_control": "passed",
+                                              "capabilities_differed_in_reads": capability_read_changes})
+
+
 def indexed_rgb(index):
     if index < 16:
         return PALETTE[index]
@@ -2322,7 +2518,7 @@ def compare_forms(reference, candidate):
 
 
 def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=False, form_grid=False,
-        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False, static_grid=False, roster_motion=False, layout_options=False, scratch_path=Path("/tmp"), handoff_grid=False):
+        form_root=None, board_grid=False, handoff=False, touch=False, terminal_reply=None, reference_board=None, edit_rows=False, edit_grid=False, manager_options=False, manager_grid=False, context_options=False, context_grid=False, relocate_board=False, scheduled_enter=False, relocation_grid=False, static_grid=False, roster_motion=False, layout_options=False, scratch_path=Path("/tmp"), handoff_grid=False, terminal_restore=False, restore_evidence=None):
     scratch = scratch_path.resolve(strict=True)
     if form_root is None:
         root = Path(tempfile.mkdtemp(prefix="pb-", dir=scratch))
@@ -2332,6 +2528,7 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             raise ValueError("form root must be a new direct child of the selected scratch directory")
         root.mkdir(mode=0o700)
     child = driver = None
+    restore_receipt = None
     previous = {}
     try:
         for name in ("bin", "tmp", "home", "work", "runtime", "effects", "state"):
@@ -2362,6 +2559,8 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
             command.append("--cycle")
         elif touch:
             command.append("--touch-back")
+        elif terminal_restore:
+            command += [tmux, "--terminal-restore"]
         elif edit_rows:
             command.append("--edit-rows")
         elif manager_options:
@@ -2417,6 +2616,11 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
                     raise RuntimeError(f"terminal grid or mode changed; captured in {evidence}")
         if child.returncode != 0:
             raise RuntimeError(f"board qualification exited {child.returncode}")
+        if terminal_restore:
+            restore_receipt = json.loads((root / "quiet-restore.json").read_bytes())
+            restore_receipt.update(board_sha256=p.hash_file(root / "bin/board"),
+                                   supervisor_sha256=p.hash_file(root / "bin/swarm"),
+                                   tmux=subprocess.check_output([tmux, "-V"], text=True).strip())
     finally:
         if tmux is not None:
             try:
@@ -2431,6 +2635,8 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
         if child is not None:
             child.wait(timeout=2)
         shutil.rmtree(root)
+    if restore_evidence is not None:
+        p.write_json(restore_evidence, {**restore_receipt, "cleanup": cleanup}, replace=False)
     exercise = ("retained Options grouping, ordering and persistence" if layout_options else
                 "native scheduled review reopening through Enter" if scheduled_enter else
                 "captured Antigravity resume and relocation" if relocate_board else
@@ -2438,6 +2644,7 @@ def run(supervisor, client, tmux=None, evidence=None, cycle=False, automations=F
                 "owner manager prompt persistence and validation through Options" if manager_options else
                 "rename, tag, cancel, kill and delete through public board" if edit_rows else
                 "attached CLI button, native mouse and terminal restoration" if touch else
+                "quiet board restoration within two seconds with unchanged roster and geometry" if terminal_restore else
                 "supervised and hands-off handoff" if handoff else
                 "working spinner and elapsed-clock motion" if roster_motion else
                 "paired deterministic roster cells" if static_grid else
@@ -2466,7 +2673,8 @@ if __name__ == "__main__":
         witness(Path(sys.argv[2]), Path(mode) if mode and not mode.startswith("--") else None,
                 mode == "--cycle", mode == "--automations", sys.argv[-1] == "--form-grid",
                 sys.argv[-1] == "--board-grid", mode == "--handoff-board", mode == "--touch-back",
-                sys.argv[-1] == "--menu-grid", mode == "--edit-rows", sys.argv[-1] == "--edit-grid", mode == "--manager-options", sys.argv[-1] == "--manager-grid", mode == "--context-options", sys.argv[-1] == "--context-grid", mode == "--relocation-board", mode == "--scheduled-enter", sys.argv[-1] == "--relocation-grid", sys.argv[-1] == "--static-grid", sys.argv[-1] == "--roster-motion", mode == "--layout-options", handoff_grid=sys.argv[-1] == "--handoff-grid")
+                sys.argv[-1] == "--menu-grid", mode == "--edit-rows", sys.argv[-1] == "--edit-grid", mode == "--manager-options", sys.argv[-1] == "--manager-grid", mode == "--context-options", sys.argv[-1] == "--context-grid", mode == "--relocation-board", mode == "--scheduled-enter", sys.argv[-1] == "--relocation-grid", sys.argv[-1] == "--static-grid", sys.argv[-1] == "--roster-motion", mode == "--layout-options", handoff_grid=sys.argv[-1] == "--handoff-grid",
+                terminal_restore=sys.argv[-1] == "--terminal-restore")
     else:
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("--supervisor", required=True, type=p.binary_path)
@@ -2493,6 +2701,7 @@ if __name__ == "__main__":
         parser.add_argument("--terminal-mouse-reply", type=Path,
                             help="inject a physical terminal's binary mouse mode report into the attached PTY")
         parser.add_argument("--grid-evidence", type=Path)
+        parser.add_argument("--restore-evidence", type=Path, help="write a new JSON receipt for --terminal-restore")
         parser.add_argument("--form-root", type=Path, help="reuse the same new scratch path in sequential form arms")
         parser.add_argument("--scratch", type=Path, default=Path("/tmp"), help="fixture parent directory")
         grids = parser.add_mutually_exclusive_group()
@@ -2502,6 +2711,8 @@ if __name__ == "__main__":
         grids.add_argument("--roster-motion", action="store_true",
                            help="verify live working animation and age in the full width roster")
         grids.add_argument("--board-grid", action="store_true", help="capture populated roster across reference terminal sizes")
+        grids.add_argument("--terminal-restore", action="store_true",
+                           help="verify the visible board after two seconds without any further input")
         paired = parser.add_mutually_exclusive_group()
         paired.add_argument("--static-grid", action="store_true",
                             help="compare deterministic ordinary roster cells with --reference-board")
@@ -2516,7 +2727,10 @@ if __name__ == "__main__":
         paired.add_argument("--edit-grid", action="store_true",
                            help="compare edit and confirmation panels with --reference-board")
         args = parser.parse_args()
-        if bool(args.tmux) != bool(args.grid_evidence):
+        if args.terminal_restore:
+            if not args.tmux or args.grid_evidence:
+                parser.error("--terminal-restore requires --tmux and uses --restore-evidence")
+        elif bool(args.tmux) != bool(args.grid_evidence):
             parser.error("--tmux and --grid-evidence are required together")
         if (args.form_grid or args.board_grid or args.reference_board or args.roster_motion) and not args.tmux:
             parser.error("grid checks require --tmux")
@@ -2524,6 +2738,9 @@ if __name__ == "__main__":
             parser.error("paired grid checks require --reference-board")
         if args.terminal_mouse_reply and not args.touch_back:
             parser.error("--terminal-mouse-reply requires --touch-back")
+        if args.restore_evidence and not args.terminal_restore:
+            parser.error("--restore-evidence requires --terminal-restore")
         run(args.supervisor, args.board, args.tmux, args.grid_evidence, args.cycle, args.automations,
             args.form_grid, args.form_root, args.board_grid, args.handoff_board, args.touch_back,
-            args.terminal_mouse_reply, args.reference_board, args.edit_rows, args.edit_grid, args.manager_options, args.manager_grid, args.context_options, args.context_grid, args.relocation_board, args.scheduled_enter, args.relocation_grid, args.static_grid, args.roster_motion, args.layout_options, args.scratch, args.handoff_grid)
+            args.terminal_mouse_reply, args.reference_board, args.edit_rows, args.edit_grid, args.manager_options, args.manager_grid, args.context_options, args.context_grid, args.relocation_board, args.scheduled_enter, args.relocation_grid, args.static_grid, args.roster_motion, args.layout_options, args.scratch, args.handoff_grid,
+            terminal_restore=args.terminal_restore, restore_evidence=args.restore_evidence)
