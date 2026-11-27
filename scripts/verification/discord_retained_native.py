@@ -440,8 +440,9 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                         assert list(map(base64.b64decode,witness["Files"])) == [original_bytes]
                         queued_env = env | {"SWARM_TEST_DISCORD_QUEUED_FILE_ROOT":str(base / "state")}
                         mature = os.environ.get("SWARM_DISCORD_MATURE_VOICE")
-                        if mature in ("1", "read-max"):
-                            capacity = mature == "read-max"
+                        if mature in ("1", "read-max", "read-max-9", "read-max-99"):
+                            capacity = mature != "1"
+                            growth = mature in ("read-max-9", "read-max-99")
                             fresh_roster = threading.Event()
                             # Go's one-second roster hint expires during a large
                             # ledger scan unless its normal observer refreshes it.
@@ -462,13 +463,22 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                             copied = copy / "voice.db"
                             shutil.copy2(ledger, copied)
                             shutil.copy2(ledger.with_name("voice.initialized"), copy / "voice.initialized")
-                            history = json.loads(run(fixture, env, "retained-voice-size", copy,
-                                                     "mature-capacity" if capacity else "mature"))
+                            action = "mature-capacity" if capacity else "mature"
+                            if growth:
+                                action += "-" + mature.rsplit("-", 1)[1]
+                            history = json.loads(run(fixture, env, "retained-voice-size", copy, action))
                             assert history["rows"] == (10_000 if capacity else 4200)
                             assert history["large_row_bytes"] > 1 << 20
                             if capacity:
                                 assert history["logical_bytes"] == 64 << 20 and history["physical_bytes"] > 64 << 20
-                            run(fixture, env, "retained-voice-size", copy, "reopen")
+                            if growth:
+                                before_go = copied.read_bytes()
+                                go_open = subprocess.run([fixture, "retained-voice-size", copy, "reopen"],
+                                                         env=env, capture_output=True, timeout=25)
+                                assert go_open.returncode != 0 and b"durable capacity reached" in go_open.stderr
+                                assert copied.read_bytes() == before_go
+                            else:
+                                run(fixture, env, "retained-voice-size", copy, "reopen")
                             run(fixture, env, "retained-voice-size", copy, "read")
                             history["physical_after_go_reopen"] = copied.stat().st_size
                             ledger.write_bytes(copied.read_bytes())
@@ -488,6 +498,13 @@ def admit_vm_worker_wake(go, fixture, codex, rust_test, base, mode):
                                 assert ledger.read_bytes() == original_ledgers[1]
                                 assert not posts and not worker_wake_requests and not file_calls
                                 print("PASS older Rust refused the same copied Voice bytes without an effect", flush=True)
+                        if mature in ("read-max-9", "read-max-99"):
+                            run(rust_test, queued_env | {"SWARM_TEST_DISCORD_BAD_VOICE_SIZE":"1"},
+                                "native_go_queued_file_owner_inspection_is_read_only", "--nocapture")
+                            assert ((place / "discord.db").read_bytes(), ledger.read_bytes()) == original_ledgers
+                            assert not posts and not worker_wake_requests and not file_calls
+                            print(f"PASS Go and Rust refused the same exact-capacity generation {history['generation']} copy without an effect", flush=True)
+                            return
                         run(rust_test,queued_env,"native_go_queued_file_owner_inspection_is_read_only","--nocapture")
                         assert ((place / "discord.db").read_bytes(),ledger.read_bytes()) == original_ledgers
                         assert posts == []

@@ -788,13 +788,14 @@ pub(in crate::discord) fn stage<'tx>(
     let quoted = go_bytes(&json!(
         std::str::from_utf8(record).map_err(io::Error::other)?
     ))?;
+    let writable_limit = voice_ledger::writable_size_limit(voice.generation()?)?;
     let bytes = voice.header["logical_bytes"]
         .as_u64()
         .ok_or_else(invalid)?
         .checked_sub(voice.raw_conversation.len() as u64)
         .and_then(|v| v.checked_add((conversation.len() + quoted.len() + 1 + raw.len()) as u64))
         .and_then(|v| v.checked_add(u64::from(voice.admissions > 0)))
-        .filter(|v| *v <= voice_ledger::MAX_BYTES)
+        .filter(|v| *v <= writable_limit)
         .ok_or_else(invalid)?;
     voice.header["logical_bytes"] = json!(bytes);
     voice.header["records"] = json!(

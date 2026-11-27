@@ -35,6 +35,8 @@ pub(super) fn stage_voice<'tx>(
 ) -> io::Result<()> {
     let mut checksum: [u8; 32] = serde_json::from_value(header["record_hash"].clone())?;
     let mut logical = header["logical_bytes"].as_u64().ok_or_else(invalid)?;
+    let writable_limit =
+        voice_ledger::writable_size_limit(header["generation"].as_u64().ok_or_else(invalid)?)?;
     let mut rows = header["records"].as_u64().ok_or_else(invalid)?;
     {
         let mut root = tx.bucket_mut(b"controller").ok_or_else(invalid)?;
@@ -66,7 +68,7 @@ pub(super) fn stage_voice<'tx>(
             }
             logical = logical
                 .checked_add(record.len() as u64)
-                .filter(|n| *n <= voice_ledger::MAX_BYTES)
+                .filter(|n| *n <= writable_limit)
                 .ok_or_else(invalid)?;
             records.put(record_key, record).map_err(io::Error::other)?;
         }

@@ -27,6 +27,15 @@ fn invalid() -> io::Error {
     io::Error::other("the original Voice records cannot reopen in Go")
 }
 
+pub(super) fn writable_size_limit(generation: u64) -> io::Result<u64> {
+    let next = generation
+        .checked_add(1)
+        .filter(|_| generation > 0)
+        .ok_or_else(invalid)?;
+    // OpenStore increments Generation before marshaling the full State.
+    Ok(MAX_BYTES - u64::from(next.ilog10() - generation.ilog10()))
+}
+
 pub(super) fn reopen<'tx>(tx: &impl TxApi<'tx>) -> io::Result<Value> {
     let root = tx.bucket(b"controller").ok_or_else(invalid)?;
     let raw = root
@@ -37,16 +46,14 @@ pub(super) fn reopen<'tx>(tx: &impl TxApi<'tx>) -> io::Result<Value> {
         return Err(invalid());
     }
     let header: Value = serde_json::from_slice(raw)?;
-    let generation = header["generation"]
-        .as_u64()
-        .filter(|value| *value > 0 && *value < u64::MAX)
-        .ok_or_else(invalid)?;
+    let generation = header["generation"].as_u64().ok_or_else(invalid)?;
+    let writable_limit = writable_size_limit(generation)?;
     let conversation = header["current_conversation"]
         .as_str()
         .ok_or_else(invalid)?;
     let expected_size = header["logical_bytes"]
         .as_u64()
-        .filter(|value| *value <= MAX_BYTES)
+        .filter(|value| *value <= writable_limit)
         .ok_or_else(invalid)?;
     let expected_count = header["records"]
         .as_u64()
@@ -605,6 +612,18 @@ const TABLES: &[(&str, Kind)] = &[
 mod tests {
     use super::*;
     use bbolt_rs::{Bolt, BucketRwApi, DbRwAPI, TxRwApi, TxRwRefApi};
+
+    #[test]
+    fn a_go_reopen_reserves_growth_only_at_generation_width_changes() {
+        for generation in [1, 8, 10, 98, 100, u64::MAX - 1] {
+            assert_eq!(writable_size_limit(generation).unwrap(), MAX_BYTES);
+        }
+        for generation in [9, 99, 999, 9_999] {
+            assert_eq!(writable_size_limit(generation).unwrap(), MAX_BYTES - 1);
+        }
+        assert!(writable_size_limit(0).is_err());
+        assert!(writable_size_limit(u64::MAX).is_err());
+    }
 
     #[test]
     fn row_depth_includes_go_full_state_wrappers_and_ignores_escaped_strings() {

@@ -925,8 +925,15 @@ func FixtureRetainedVoiceSize(dir, action string) error {
 			!(action == "reopen" && strings.HasPrefix(filepath.Base(root), "gp-"))) {
 		return ErrInvalid
 	}
-	if action == "mature-capacity" || action == "mature" {
-		return fixtureRetainedVoiceHistory(dir, action == "mature-capacity")
+	switch action {
+	case "mature":
+		return fixtureRetainedVoiceHistory(dir, 0)
+	case "mature-capacity":
+		return fixtureRetainedVoiceHistory(dir, 7)
+	case "mature-capacity-9":
+		return fixtureRetainedVoiceHistory(dir, 9)
+	case "mature-capacity-99":
+		return fixtureRetainedVoiceHistory(dir, 99)
 	}
 	if action == "reopen" {
 		store, err := OpenStore(dir)
@@ -1007,7 +1014,8 @@ func fixtureProjectHistory(encodedBytes int) string {
 	return string(raw)
 }
 
-func fixtureRetainedVoiceHistory(dir string, capacity bool) error {
+func fixtureRetainedVoiceHistory(dir string, generation uint64) error {
+	capacity := generation != 0
 	store, err := OpenStore(dir)
 	if err != nil {
 		return err
@@ -1026,6 +1034,7 @@ func fixtureRetainedVoiceHistory(dir string, capacity bool) error {
 		target := 4_200
 		if capacity {
 			target = MaxRecords
+			st.Generation = generation
 		}
 		var keys []string
 		for countRecords(st) < target {
@@ -1120,6 +1129,7 @@ func fixtureRetainedVoiceHistory(dir string, capacity bool) error {
 			}
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{"rows": header.Records,
-			"logical_bytes": header.LogicalBytes, "physical_bytes": f.Size(), "large_row_bytes": maxRow})
+			"logical_bytes": header.LogicalBytes, "physical_bytes": f.Size(), "large_row_bytes": maxRow,
+			"generation": header.Generation})
 	})
 }
