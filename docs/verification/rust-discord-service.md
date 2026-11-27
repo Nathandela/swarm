@@ -32,6 +32,8 @@ The two-minute recheck can stage one unverified-answer notice after a confirmed 
 
 The discussion suppresses another unverified-answer notice for 30 minutes from the preceding notice’s source completion. A restart preserves the deterministic nonce, and an ambiguous POST waits for the matching receipt. A stale older source yields delivery selection to later eligible notices. VM and multi-worker reply checks remain outside this scope. The installed-provider fixture is `rust_claude_manager.py --enrolled-codex-missing-reply CODEX`, using its existing private loopback setup.
 
+The joined `afd0d8ac` revision passed that fixture natively with Claude 2.1.329 on Mac, Claude 2.1.332 on Linux, and Codex 0.172.0 on both. Log SHA-256 values are `df3aae23402955e0be4b9b02e0b51f1cb0099f71a1b1a20ee576f06b310708e9` and `4351f1843c2014ac4d1166ddbf5b8b9a0dffcf23b7eda5e8d5dd19b070e6824b`.
+
 ```sh
 cargo test --locked -p swarm --bin swarm discord::unit
 SWARM_NATIVE_UNIT_PARSER=1 cargo test --locked -p swarm --test discord service_activation_restores

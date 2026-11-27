@@ -106,6 +106,10 @@ The pinned Ed25519 key verified the checksum manifest and rejected a changed cop
 | Darwin arm64 from universal archive | `e35974dd2b2fe20596593e0212bd5f4c74558928e91b687f4613d046995bc973` | `5a10479a69b0faaf182166493f4577a388e79d4ea640a2600aa8f79af64ed6a3` |
 | `tf_nathan` Linux x86_64 | `bac5052b0cd0fe52608d0f6371c04dd8708b5ebe3747e5d644046e1a700f83d2` | `0c1dcb49c75995d6cdc5e88bf35e0ac596718104dc740a7835c4bcd6c93a0749` |
 
+Native Darwin Go 1.26.10 passed the focused `internal/worktree` race run and all 20 repetitions of `TestTerminalRestoreRedrawsUnchangedBoard` from exact v0.29.27 source. Log SHA-256 values are `3ddc8943b5796b118100abba5d37b62260439f2af64aa2076bdc86008589c31e` and `047b48f358d1aba764546f4ed12bbc561263b1bc981b1121dc15aa7ad4cd2f0f`. This was the focused v0.29.27 source check. The broader v0.29.26 race gate above remains open.
+
+Rust's deletion safeguard preserves registered nested worktrees, including a temporarily missing gitfile, and independent nested repositories. Git 2.34 compatibility decodes quoted native pathname bytes while malformed registration input refuses removal. Ordinary deletion still succeeds next to a quoted sibling and a symlink to an external repository. The two focused tests passed on both hosts. Log SHA-256 values are `10ea314ba419150bfa157f8f9851766d22eb41a80e4cf95eea21ee0bc302b404` on Mac and `186c665bb43066f24d9b2f1b652eabe6a10939aaf3894802dec6aff6e6dabbac` on Linux.
+
 ## M0 source build repeatability on Apple Silicon
 
 Two builds in independent scratch directories on this host with Go 1.26.5 and `GOARCH=arm64` produced identical SHA-256 digests within each reference. Both binaries executed their version and Discord help probes. Running the builder with an existing output directory returned exit 2 and preserved its contents.
