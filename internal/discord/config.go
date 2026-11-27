@@ -198,6 +198,9 @@ func (c Config) Validate() error {
 	if !id(c.ApplicationID) {
 		return errors.New("discord: invalid application or owner ID")
 	}
+	if containsID(c.TrustedWebhookIDs, c.ApplicationID) {
+		return errors.New("discord: a teammate cannot trust its own application")
+	}
 	for _, ids := range [][]string{c.GuildIDs, c.ChannelIDs, c.UserIDs, c.TrustedWebhookIDs} {
 		for _, s := range ids {
 			if !id(s) {

@@ -241,12 +241,14 @@ func (t *teammateConnector) resolve(ctx context.Context, c teammateCandidate) (t
 
 func (t *teammateConnector) admissibleHuman(m *discordgo.Message) bool {
 	cfg := t.service.Config
-	return (teammateHuman(m, t.service.botUserID()) || trustedWebhook(m, cfg.TrustedWebhookIDs)) && (cfg.Mode != "personal" || m.Author.ID == cfg.OwnerID)
+	bot := t.service.botUserID()
+	return (teammateHuman(m, bot) || trustedWebhook(m, bot, cfg.TrustedWebhookIDs)) && (cfg.Mode != "personal" || m.Author.ID == cfg.OwnerID)
 }
 
-// trustedWebhook admits an ordinary message posted by an opted-in webhook.
-func trustedWebhook(m *discordgo.Message, ids []string) bool {
-	return m != nil && m.Author != nil && m.WebhookID != "" && m.Author.ID == m.WebhookID && containsID(ids, m.WebhookID) &&
+// trustedWebhook admits an ordinary message posted directly by an opted-in incoming webhook.
+func trustedWebhook(m *discordgo.Message, botID string, ids []string) bool {
+	return m != nil && m.Author != nil && m.WebhookID != "" && m.Author.ID == m.WebhookID && m.Author.ID != botID &&
+		containsID(ids, m.WebhookID) && m.Flags&discordgo.MessageFlagsIsCrossPosted == 0 &&
 		(m.Type == discordgo.MessageTypeDefault || m.Type == discordgo.MessageTypeReply)
 }
 

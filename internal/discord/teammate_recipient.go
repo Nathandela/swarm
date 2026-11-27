@@ -18,7 +18,7 @@ func (t *teammateConnector) verifyTeammateRecipient(ctx context.Context, d Teamm
 	if err != nil {
 		return err
 	}
-	if !teammateHuman(m, t.service.botUserID()) || m.ID != q.MessageID || m.ChannelID != route.ChannelID || m.Author.ID != q.AuthorID {
+	if !t.admissibleHuman(m) || m.ID != q.MessageID || m.ChannelID != route.ChannelID || m.Author.ID != q.AuthorID {
 		return ErrNotAuthorized
 	}
 	return nil
