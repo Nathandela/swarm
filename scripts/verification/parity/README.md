@@ -69,8 +69,9 @@ completion message. Its renderer regression separately freezes the model and
 tests terminal release and restore directly. The signed Go v0.29.26 public
 control also passed. [Go renderer evidence](https://github.com/Nathandela/swarm/blob/51e81f2604cb2a2eff4678c9a0b00bdf1b2a8a25/docs/verification/terminal-restore-ticker.md)
 
-On 27 November 2026 all three arms passed eight cycles on both native hosts
-using tmux 3.6a on macOS and 3.2a on Linux. Each Go read after detach differed
+On 27 November 2026 all three arms passed eight cycles on both native hosts.
+The passive observer used x86_64 tmux 3.6a under Rosetta on Mac and native
+tmux 3.2a on Linux. Each Go read after detach differed
 from its initial read in optional capability metadata. Every arm preserved
 both visible roster rows and cleaned up all fixture processes.
 

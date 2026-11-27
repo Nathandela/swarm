@@ -1314,7 +1314,14 @@ def restore_cell_observer(root, env, tmux, cols, rows):
             revision += 1
             title = f"restore-output-{revision}".encode()
             payload = bytes(output) + b"\x1b]2;" + title + b"\x07"
-            assert stream.write(payload) == len(payload)
+            remaining = memoryview(payload)
+            deadline = time.monotonic() + 5
+            while remaining:
+                timeout = deadline - time.monotonic()
+                assert timeout > 0 and select.select([], [stream], [], timeout)[1], "observer pipe stalled"
+                written = stream.write(remaining)
+                if written:
+                    remaining = remaining[written:]
             # The title marks consumption in the observer and does not change its cells.
             p.wait_for(lambda: run("display-message", "-p", "-t", "restore:0.0", "#{pane_title}").strip() == title,
                        "physical terminal consumed the observed output")
