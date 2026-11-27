@@ -95,6 +95,17 @@ The integrated Rust and signed Go v0.29.26 executables returned identical exit c
 
 The clean exact-source Darwin arm64 round passed 97 packages with eight containing no tests. It used native Go 1.26.10, umask `022` and `-p=1 -parallel=1 -count=1 -timeout=45m`. Log SHA-256 is `e4be4ed16870906786addad572d39ec007e7389c90f7124435ad5d76e34647cb`. The matching race round passed 82 packages, reported eight without tests and failed 15. Its log records restricted process enumeration, retained synthetic process state and timing failures. It contains zero race detector reports. The race gate remains open. Log SHA-256 is `0984aed7d2568e0d9755d72ef35df912e9f92ee1b3d8ec920f96551a5e5621b8`.
 
+## v0.29.27 worktrees and terminal restore
+
+GitHub published v0.29.27 at 21:54 UTC on November 26. The 11-commit source delta ends at `51e81f2604cb2a2eff4678c9a0b00bdf1b2a8a25`. The retained workflows affected are physical sibling worktree placement, ownership and deletion, and the first board frame after restoring an unchanged terminal. [Official release](https://github.com/Nathandela/swarm/releases/tag/v0.29.27) · [Exact source comparison](https://github.com/Nathandela/swarm/compare/v0.29.26...v0.29.27)
+
+The pinned Ed25519 key verified the checksum manifest and rejected a changed copy. Both signed executables reported `swarm 0.29.27 (go1.26.11)` natively. The local signature and artifact witness SHA-256 is `2c3f0d152dc4ebc97087ce154c7e8bada03763e42489be80873f3bb009459756`.
+
+| Host | Archive SHA-256 | Executable SHA-256 |
+| --- | --- | --- |
+| Darwin arm64 from universal archive | `e35974dd2b2fe20596593e0212bd5f4c74558928e91b687f4613d046995bc973` | `5a10479a69b0faaf182166493f4577a388e79d4ea640a2600aa8f79af64ed6a3` |
+| `tf_nathan` Linux x86_64 | `bac5052b0cd0fe52608d0f6371c04dd8708b5ebe3747e5d644046e1a700f83d2` | `0c1dcb49c75995d6cdc5e88bf35e0ac596718104dc740a7835c4bcd6c93a0749` |
+
 ## M0 source build repeatability on Apple Silicon
 
 Two builds in independent scratch directories on this host with Go 1.26.5 and `GOARCH=arm64` produced identical SHA-256 digests within each reference. Both binaries executed their version and Discord help probes. Running the builder with an existing output directory returned exit 2 and preserved its contents.
