@@ -46,6 +46,8 @@ func DiscussionStartupMessage(err error) string {
 		return "Your message is saved. Swarm needs help confirming the previous dispatcher stopped. Check its status on this machine."
 	case errors.Is(err, ErrControllerUnsupported), errors.Is(err, protocol.ErrManagerLaunchPrerequisite):
 		return "Swarm couldn’t start the configured CLI. Check the dispatcher setup on this machine. Your message is saved."
+	case errors.Is(err, ErrDiscussionDirectInputHeld):
+		return "The starting dispatcher is paused by direct terminal input. Open it in Swarm and finish your input. Don’t exit it normally or run resume-manual yet. Your message is saved."
 	case errors.Is(err, ErrControllerNativeUnavailable):
 		return "The dispatcher opened but isn’t ready. Check its window in Swarm for a setup or sign-in prompt. Your message is saved."
 	default:

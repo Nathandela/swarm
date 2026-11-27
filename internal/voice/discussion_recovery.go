@@ -283,7 +283,9 @@ func (d *DiscussionController) recoverBinding(previous, next ManagerBinding, tur
 			c.Retirement = nil
 			c.FailedResume = nil
 		}
-		manualActivity := !reconstructed && (turn.ExternallySteered || c.ExternalObserved && c.ExternalInput != turn.ExternalInput)
+		manualActivity := turn.ExternallySteered ||
+			(reconstructed && turn.ExternalInput != 0) ||
+			(!reconstructed && ((c.ExternalObserved && c.ExternalInput != turn.ExternalInput) || (!c.ExternalObserved && turn.ExternalInput != 0)))
 		c.ExternalObserved, c.ExternalInput = true, turn.ExternalInput
 		c.SchedulerPaused = manualActivity || !reconstructed && c.SchedulerPaused
 		if reconstructed {

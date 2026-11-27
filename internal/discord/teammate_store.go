@@ -51,6 +51,8 @@ type teammateIngressGuard struct {
 type teammateBinding struct {
 	ProvisionalCancelled    bool
 	InputNoticeID           string    `json:",omitempty"`
+	InputNoticeCause        string    `json:",omitempty"`
+	InputNoticeSeq          uint64    `json:",omitempty"`
 	InputNoticeAt           time.Time `json:",omitempty"`
 	StartupNoticePending    bool
 	StartupNoticeID         string `json:",omitempty"`

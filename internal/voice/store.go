@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Nathandela/swarm/internal/protocol"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -783,6 +784,14 @@ func allocateAdmission(st *State, b ManagerBinding, source string) (Admission, e
 }
 
 func (s *Store) BindManager(b ManagerBinding) (ManagerBinding, error) {
+	return s.bindManager(b, nil)
+}
+
+func (s *Store) BindManagerWithTurn(b ManagerBinding, turn protocol.ManagerNativeTurn) (ManagerBinding, error) {
+	return s.bindManager(b, &turn)
+}
+
+func (s *Store) bindManager(b ManagerBinding, turn *protocol.ManagerNativeTurn) (ManagerBinding, error) {
 	var result ManagerBinding
 	err := s.update(func(st *State) error {
 		if !validBinding(b) {
@@ -808,6 +817,14 @@ func (s *Store) BindManager(b ManagerBinding) (ManagerBinding, error) {
 		}
 		b.Generation = st.Generation
 		c.Binding = identity(b)
+		if turn != nil {
+			manualActivity := turn.ExternallySteered ||
+				(c.ExternalObserved && c.ExternalInput != turn.ExternalInput) ||
+				(!c.ExternalObserved && turn.ExternalInput != 0)
+			c.ExternalObserved = true
+			c.ExternalInput = turn.ExternalInput
+			c.SchedulerPaused = c.SchedulerPaused || manualActivity
+		}
 		putRecord(st, "conversations", &st.Conversations, b.ConversationID, c)
 		st.CurrentConversation = b.ConversationID
 		result = b

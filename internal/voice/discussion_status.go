@@ -1,14 +1,17 @@
 package voice
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/workermail"
 )
 
@@ -16,6 +19,7 @@ type DiscussionNativeStatus struct {
 	UnconfirmedOutputs                                                    [][]DiscussionOutput
 	PendingAdmissions, PendingActions, PendingReplies, UnconfirmedReplies int
 	State, ManagerSession, ManagerInstance, Project, Diagnostic           string
+	PendingManagerSession, PendingManagerInstance                         string
 	Generation, ExternalInput                                             uint64
 	Jobs                                                                  []DiscussionJobStatus
 	Notes                                                                 []workermail.NoteStatus
@@ -32,7 +36,12 @@ type DiscussionJobStatus struct {
 
 // Status reads the controller ledger without launching or contacting the model.
 func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
-	result, err := d.readStatus(true)
+	return d.StatusWithContext(context.Background())
+}
+
+// StatusWithContext bounds optional supervisor roster corroboration to ctx.
+func (d *DiscussionController) StatusWithContext(ctx context.Context) (DiscussionNativeStatus, error) {
+	result, err := d.readStatus(ctx, true)
 	if len(result.Notes) > 16 {
 		result.Notes = result.Notes[:16]
 	}
@@ -41,23 +50,24 @@ func (d *DiscussionController) Status() (DiscussionNativeStatus, error) {
 
 // CheckoutStatus preserves older notes that can still hold a checkout.
 func (d *DiscussionController) CheckoutStatus() (DiscussionNativeStatus, error) {
-	return d.readStatus(false)
+	return d.readStatus(context.Background(), false)
 }
 
-func (d *DiscussionController) readStatus(includeMailbox bool) (DiscussionNativeStatus, error) {
+func (d *DiscussionController) readStatus(ctx context.Context, includeMailbox bool) (DiscussionNativeStatus, error) {
 	st, err := d.store.readView()
 	if err != nil {
 		return DiscussionNativeStatus{}, err
 	}
-	return d.statusFromState(st, includeMailbox)
+	return d.statusFromState(ctx, st, includeMailbox)
 }
 
-func (d *DiscussionController) statusFromState(st State, includeMailbox bool) (DiscussionNativeStatus, error) {
+func (d *DiscussionController) statusFromState(ctx context.Context, st State, includeMailbox bool) (DiscussionNativeStatus, error) {
 	c, exists := st.Conversations[d.cfg.ConversationID]
 	result := DiscussionNativeStatus{State: "parked"}
 	if !exists {
 		if _, err := os.Lstat(filepath.Join(d.dir, managerIntentName(d.cfg.ConversationID))); err == nil {
 			result.State = "starting"
+			result.PendingManagerSession, result.PendingManagerInstance = d.pendingActivationCoordinates(ctx, c, false, includeMailbox)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return result, err
 		}
@@ -93,6 +103,7 @@ func (d *DiscussionController) statusFromState(st State, includeMailbox bool) (D
 	result.ManagerSession, result.ManagerInstance, result.Project = c.Binding.SessionID, c.Binding.SessionInstance, c.Project
 	switch {
 	case c.Parked:
+		result.PendingManagerSession, result.PendingManagerInstance = d.pendingActivationCoordinates(ctx, c, true, includeMailbox)
 		if c.Retirement != nil && c.Retirement.Replacement != "" && c.ReplacementAfter != 0 && c.ReplacementAfter > time.Now().Unix() {
 			result.State = "waiting"
 			result.Diagnostic = replacementRetryError(c.ReplacementAfter).Error()
@@ -277,4 +288,168 @@ func (d *DiscussionController) noteStatus(st State, result *DiscussionNativeStat
 		}
 	}
 	return nil
+}
+
+const pendingStatusRosterTimeout = 500 * time.Millisecond
+
+// pendingActivationCoordinates inspects the exact applied launch intent for an
+// unbound starting or parked-waking dispatcher and corroborates its live
+// instance from the supervisor roster. These fields are purely diagnostic until
+// native proof succeeds and voice.db commits the new binding.
+func (d *DiscussionController) pendingActivationCoordinates(ctx context.Context, c Conversation, exists, corroborateRoster bool) (string, string) {
+	if d.dir == "" || d.cfg.Validate() != nil || d.endpoint == "" {
+		return "", ""
+	}
+	refs := d.refs()
+	if refs.Socket == "" || refs.AuthFile == "" {
+		return "", ""
+	}
+	intent, ok := d.selectAppliedWakeIntent(c, exists, refs)
+	if !ok || intent.SessionID == "" || intent.SessionID == c.Binding.SessionID {
+		return "", ""
+	}
+	sessionID := intent.SessionID
+	prefix, local, hasSep := strings.Cut(sessionID, "/")
+	if !hasSep || prefix != d.endpoint || local == "" || strings.Contains(local, "/") {
+		return "", ""
+	}
+	if !corroborateRoster || d.runtime == nil {
+		return sessionID, ""
+	}
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), pendingStatusRosterTimeout)
+		defer cancel()
+	} else if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, pendingStatusRosterTimeout)
+		defer cancel()
+	}
+	if ctx.Err() != nil {
+		return sessionID, ""
+	}
+	var (
+		rows []protocol.SessionView
+		err  error
+	)
+	if roster, ok := d.runtime.(interface {
+		ListContext(context.Context) ([]protocol.SessionView, error)
+	}); ok {
+		rows, err = roster.ListContext(ctx)
+		if err != nil {
+			return sessionID, ""
+		}
+	} else {
+		type listResult struct {
+			rows []protocol.SessionView
+			err  error
+		}
+		ch := make(chan listResult, 1)
+		go func() {
+			r, e := d.runtime.List()
+			ch <- listResult{rows: r, err: e}
+		}()
+		select {
+		case res := <-ch:
+			if res.err != nil {
+				return sessionID, ""
+			}
+			rows = res.rows
+		case <-ctx.Done():
+			return sessionID, ""
+		}
+	}
+	for _, row := range rows {
+		if row.ID == sessionID && row.EndpointID == d.endpoint && row.Role == "manager" &&
+			row.ManagerConversationID == d.cfg.ConversationID && row.Agent == d.cfg.Provider &&
+			row.Cwd == d.cfg.WorkDir && row.Status.Process == status.ProcessRunning &&
+			row.Capabilities != nil && row.Capabilities.SessionInstance != "" &&
+			row.Capabilities.SessionInstance != c.Binding.SessionInstance {
+			return sessionID, row.Capabilities.SessionInstance
+		}
+	}
+	return sessionID, ""
+}
+
+func (d *DiscussionController) selectAppliedWakeIntent(c Conversation, exists bool, refs ManagerBridgeRefs) (managerLaunchIntent, bool) {
+	readValidated := func(file string, expected protocol.LaunchReq) (managerLaunchIntent, bool, bool) {
+		raw, err := readVoiceFile(d.dir, file, MaxControlFrameBytes)
+		if errors.Is(err, os.ErrNotExist) {
+			return managerLaunchIntent{}, false, false
+		}
+		if err != nil {
+			return managerLaunchIntent{}, true, false
+		}
+		var intent managerLaunchIntent
+		if validateObjectMembers(raw, "version", "conversation_id", "operation_id", "request", "phase", "session_id") != nil ||
+			json.Unmarshal(raw, &intent) != nil ||
+			intent.Version != 1 || intent.ConversationID != d.cfg.ConversationID || intent.OperationID == "" {
+			return managerLaunchIntent{}, true, false
+		}
+		if !sameManagerRequest(intent.Request, expected) && !matchesLegacyManagerRequest(intent.Request, expected) {
+			return managerLaunchIntent{}, true, false
+		}
+		if intent.Phase != "prepared" && intent.Phase != "executing" && intent.Phase != "applied" {
+			return managerLaunchIntent{}, true, false
+		}
+		if intent.Phase == "prepared" && intent.SessionID != "" {
+			return managerLaunchIntent{}, true, false
+		}
+		return intent, true, true
+	}
+
+	if !exists {
+		req := managerLaunchRequest(d.cfg, refs)
+		intent, _, valid := readValidated(managerIntentName(d.cfg.ConversationID), req)
+		return intent, valid && intent.Phase == "applied"
+	}
+	if !c.Parked || c.Retirement == nil {
+		return managerLaunchIntent{}, false
+	}
+	retirement := protocol.ManagerRetireOperationID(*c.Retirement)
+	suffix := hashBytes([]byte(retirement)) + ".json"
+	req := managerLaunchRequest(d.cfg, refs)
+	source, instance, stage := c.Binding.SessionID, c.Binding.SessionInstance, 0
+	if prev := c.FailedResume; prev != nil {
+		stage = prev.Attempt
+		if stage < 1 || stage > 3 || prev.Session == "" || prev.Instance == "" {
+			return managerLaunchIntent{}, false
+		}
+		source, instance = prev.Session, prev.Instance
+	}
+	file := "resume-" + suffix
+	if stage >= 2 || c.Retirement.Replacement != "" {
+		file = "reconstruct-" + suffix
+		if stage == 3 || c.Retirement.Replacement != "" && c.FailedResume != nil {
+			file = "reconstruct-" + hashValue([]string{retirement, c.FailedResume.Session}) + ".json"
+		}
+	} else {
+		req.Options[protocol.OptionResumeFrom] = source
+		req.ResumeSourceInstance = instance
+		req.Manager.RetireOperationID = retirement
+		if stage == 1 {
+			file = "retry-" + suffix
+		}
+	}
+	// Preserve wakeParked precedence: an executing/applied legacy resume takes
+	// precedence over native-cli migration.
+	if c.Retirement.Replacement == "" && d.cfg.VMProjectAccess && !c.Binding.NativeCLI && stage < 2 {
+		legacyIntent, present, valid := readValidated(file, req)
+		if present {
+			if !valid {
+				return managerLaunchIntent{}, false
+			}
+			if legacyIntent.Phase != "prepared" {
+				return legacyIntent, legacyIntent.Phase == "applied"
+			}
+			if !matchesLegacyManagerRequest(legacyIntent.Request, req) {
+				return managerLaunchIntent{}, false
+			}
+		}
+		migReq := managerLaunchRequest(d.cfg, refs)
+		migIntent, _, migValid := readValidated("native-cli-"+suffix, migReq)
+		return migIntent, migValid && migIntent.Phase == "applied"
+	}
+	intent, _, valid := readValidated(file, req)
+	return intent, valid && intent.Phase == "applied"
 }

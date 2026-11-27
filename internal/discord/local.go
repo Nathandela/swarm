@@ -162,7 +162,15 @@ func (s *Service) localStatus(ctx context.Context) (LocalStatus, error) {
 	}
 	if s.Config.TeammateMode() {
 		var native func(TeammateDiscussion) (TeammateNativeStatus, error)
+		rosterCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
 		if manager, ok := s.teammateManager.(interface {
+			StatusWithContext(context.Context, TeammateDiscussion) (TeammateNativeStatus, error)
+		}); ok {
+			native = func(d TeammateDiscussion) (TeammateNativeStatus, error) {
+				return manager.StatusWithContext(rosterCtx, d)
+			}
+		} else if manager, ok := s.teammateManager.(interface {
 			Status(TeammateDiscussion) (TeammateNativeStatus, error)
 		}); ok {
 			native = manager.Status

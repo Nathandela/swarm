@@ -42,10 +42,12 @@ type TeammateNativeStatus struct {
 	Notes               []workermail.NoteStatus `json:"worker_notes,omitempty"`
 	RetirementOperation string                  `json:"retirement_operation,omitempty"`
 	OldestPendingNote   time.Time               `json:"oldest_pending_note,omitzero"`
-	State               string                  `json:"state"`
-	ManagerSession      string                  `json:"manager_session,omitempty"`
-	ManagerInstance     string                  `json:"manager_instance,omitempty"`
-	Project             string                  `json:"project,omitempty"`
+	State                  string                  `json:"state"`
+	ManagerSession         string                  `json:"manager_session,omitempty"`
+	ManagerInstance        string                  `json:"manager_instance,omitempty"`
+	PendingManagerSession  string                  `json:"pending_manager_session,omitempty"`
+	PendingManagerInstance string                  `json:"pending_manager_instance,omitempty"`
+	Project                string                  `json:"project,omitempty"`
 	Diagnostic          string                  `json:"diagnostic,omitempty"`
 	ExternalInput       uint64                  `json:"external_input"`
 	Generation          uint64                  `json:"generation"`
@@ -107,6 +109,7 @@ var ErrTeammateSourceChanged = errors.New("discord: source message changed befor
 // TeammateInputHold describes a durable human admission awaiting native input.
 type TeammateInputHold struct {
 	AdmissionID     string
+	Activation      bool
 	DirectInput     bool
 	CustodyLost     bool
 	EffectUncertain bool

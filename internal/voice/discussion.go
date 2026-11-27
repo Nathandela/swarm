@@ -23,6 +23,7 @@ var ErrDiscussionEffectUncertain = errors.New("voice: native submission outcome 
 var ErrDiscussionNativeProofHeld = errors.New("voice: queued Discord message is waiting for the dispatcher native input proof; inspect the dispatcher in Swarm")
 
 type DiscussionInputHold struct {
+	Activation  bool
 	CustodyLost bool
 	AdmissionID string
 	Reason      error
@@ -368,14 +369,37 @@ func (d *DiscussionController) activate(ctx context.Context, st State) error {
 		var selected managerSelection
 		selected, err = bootstrapManagerRequest(ctx, d.dir, d.cfg, d.refs(), d.endpoint, nil, d.runtime, req, managerIntentName(d.cfg.ConversationID), "", nil)
 		if err == nil {
-			binding, err = d.store.BindManager(selected.Binding)
+			binding, err = d.store.BindManagerWithTurn(selected.Binding, selected.Runtime.Turn)
 		}
 	}
 	if err != nil {
+		if errors.Is(err, managerproof.ErrDirectInputUnresolved) {
+			return d.activationDirectInputHold(err)
+		}
 		return discussionActivationError(err)
 	}
 	d.idleSince = time.Time{}
 	return d.bind(binding)
+}
+
+func (d *DiscussionController) activationDirectInputHold(err error) error {
+	st, readErr := d.store.readView()
+	if readErr != nil {
+		return errors.Join(err, readErr)
+	}
+	holdErr := d.inputHoldFromState(st, ErrDiscussionDirectInputHeld, err, true)
+	var hold *DiscussionInputHold
+	if errors.As(holdErr, &hold) {
+		hold.Activation = true
+		if !errors.Is(hold.Reason, ErrDiscussionDirectInputHeld) {
+			hold.Reason = errors.Join(ErrDiscussionDirectInputHeld, hold.Reason)
+		}
+		return errors.Join(hold, err)
+	}
+	if _, exists := st.Conversations[d.cfg.ConversationID]; !exists {
+		return errors.Join(ErrDiscussionActivationUnavailable, ErrDiscussionDirectInputHeld, err)
+	}
+	return errors.Join(ErrDiscussionDirectInputHeld, err)
 }
 
 var errMissingDispatcherExit = errors.New("voice: the previous dispatcher is absent and its exit is unverified")
@@ -471,6 +495,9 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 			if errors.Is(err, errManagerStillStarting) {
 				return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, err)
 			}
+			if errors.Is(err, managerproof.ErrDirectInputUnresolved) {
+				return ManagerBinding{}, err
+			}
 			var failed *failedResume
 			if conv.Retirement.Replacement != "" || stage >= 2 || migrate {
 				delayErr := d.store.update(func(st *State) error {
@@ -527,7 +554,7 @@ func (d *DiscussionController) wakeParked(ctx context.Context, generation uint64
 		if next.NativeSessionID != conv.Binding.NativeSessionID {
 			return ManagerBinding{}, errors.Join(ErrDiscussionActivationUnavailable, ErrStale)
 		}
-		return d.resume(generation, conv, next, selected.Runtime.Turn.ExternalInput)
+		return d.resume(generation, conv, next, selected.Runtime.Turn)
 	}
 }
 
@@ -586,7 +613,7 @@ func sameParkedManager(st *State, generation uint64, c, previous Conversation) b
 	return *c.FailedResume == *previous.FailedResume
 }
 
-func (d *DiscussionController) resume(generation uint64, previous Conversation, next ManagerBinding, external uint64) (ManagerBinding, error) {
+func (d *DiscussionController) resume(generation uint64, previous Conversation, next ManagerBinding, turn protocol.ManagerNativeTurn) (ManagerBinding, error) {
 	err := d.store.update(func(st *State) error {
 		c := st.Conversations[next.ConversationID]
 		if !sameParkedManager(st, generation, c, previous) {
@@ -598,9 +625,9 @@ func (d *DiscussionController) resume(generation uint64, previous Conversation, 
 		c.Parked = false
 		c.Retirement = nil
 		c.FailedResume = nil
-		c.ExternalInput = external
+		c.ExternalInput = turn.ExternalInput
 		c.ExternalObserved = true
-		c.SchedulerPaused = false
+		c.SchedulerPaused = turn.ExternallySteered || turn.ExternalInput != 0
 		putRecord(st, "conversations", &st.Conversations, next.ConversationID, c)
 		return nil
 	})
@@ -766,6 +793,10 @@ func (d *DiscussionController) inputHold(reason, fallback error) error {
 	if err != nil {
 		return errors.Join(fallback, err)
 	}
+	return d.inputHoldFromState(st, reason, fallback, false)
+}
+
+func (d *DiscussionController) inputHoldFromState(st State, reason, fallback error, includeGuildHuman bool) error {
 	var head, owner Admission
 	for _, a := range st.Admissions {
 		if a.ConversationID != st.CurrentConversation || !a.SettledAt.IsZero() {
@@ -774,7 +805,7 @@ func (d *DiscussionController) inputHold(reason, fallback error) error {
 		if head.Sequence == 0 || a.Sequence < head.Sequence {
 			head = a
 		}
-		if reason == ErrDiscussionDirectInputHeld && d.scope.DMOwnerID != "" && a.Origin != nil &&
+		if reason == ErrDiscussionDirectInputHeld && (d.scope.DMOwnerID != "" || includeGuildHuman) && a.Origin != nil &&
 			d.scope.validateOrigin(*a.Origin) && (owner.Sequence == 0 || a.Sequence < owner.Sequence) {
 			owner = a
 		}

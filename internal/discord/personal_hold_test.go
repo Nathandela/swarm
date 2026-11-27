@@ -245,5 +245,120 @@ func TestPersonalInputNoticeScopeCooldownAndImmutableCause(t *testing.T) {
 	if len(bodies) != 4 || !strings.Contains(bodies[3], "reached the dispatcher") || !strings.Contains(bodies[3], "save any draft") || !strings.Contains(bodies[3], "Don’t resend") {
 		t.Fatalf("missing or repeated in-flight draft notice: %q", bodies)
 	}
+}
 
+func TestPersonalActivationDirectInputNoticeAvoidsNormalExitAndPredecessorResume(t *testing.T) {
+	var bodies []string
+	c, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /channels/20":
+			_, _ = fmt.Fprint(w, personalFixture)
+		case "GET /channels/21":
+			_, _ = fmt.Fprint(w, `{"id":"21","guild_id":"10","type":11,"parent_id":"100"}`)
+		case "POST /channels/20/messages", "POST /channels/21/messages":
+			var body struct{ Content string }
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			bodies = append(bodies, body.Content)
+			_, _ = fmt.Fprintf(w, `{"id":%q,"channel_id":"20","content":%q,"author":{"id":"99","bot":true}}`, fmt.Sprint(600+len(bodies)), body.Content)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	c.service.Config.Mode = "personal"
+	c.service.Config.OwnerID = "30"
+	c.service.Config.DMChannelID = "20"
+	d := TeammateDiscussion{ID: "dt_act", InstallationID: c.service.Config.InstallationID, Route: Route{ChannelID: "20"}}
+	if err := c.service.Store.teammateBind(teammateBinding{TeammateDiscussion: d, Opened: true}); err != nil {
+		t.Fatal(err)
+	}
+	hold := &TeammateInputHold{AdmissionID: "da_first", DirectInput: true, Activation: true}
+	if err := c.sendInputNotice(context.Background(), d, hold); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.sendInputNotice(context.Background(), d, hold); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 1 {
+		t.Fatalf("expected exactly one deduplicated activation hold notice, got %d: %q", len(bodies), bodies)
+	}
+	lower := strings.ToLower(bodies[0])
+	if !strings.Contains(lower, "starting dispatcher") || !strings.Contains(lower, "direct terminal input") {
+		t.Fatalf("expected activation direct-input wording, got %q", bodies[0])
+	}
+	if strings.Contains(lower, "save the draft and exit normally") || strings.Contains(lower, "for the `resume-manual` coordinates") {
+		t.Fatalf("activation hold notice must not direct normal exit or predecessor resume-manual: %q", bodies[0])
+	}
+
+	// Transition from activation -> ordinary -> activation -> retry(activation)
+	// must emit 3 distinct notices (not 2) and deduplicate the retry within the third phase.
+	if err := c.sendInputNotice(context.Background(), d, &TeammateInputHold{AdmissionID: "da_first", DirectInput: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("expected distinct notice when hold cause changes from activation to ordinary, got %d: %q", len(bodies), bodies)
+	}
+	if err := c.sendInputNotice(context.Background(), d, &TeammateInputHold{AdmissionID: "da_first", DirectInput: true, Activation: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.sendInputNotice(context.Background(), d, &TeammateInputHold{AdmissionID: "da_first", DirectInput: true, Activation: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 3 || !strings.Contains(strings.ToLower(bodies[2]), "starting dispatcher") {
+		t.Fatalf("expected third notice on return to activation phase (deduplicated on retry), got %d: %q", len(bodies), bodies)
+	}
+	if err := c.sendInputNotice(context.Background(), d, &TeammateInputHold{AdmissionID: "da_first", DirectInput: true, Activation: true, EffectUncertain: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 4 || !strings.Contains(strings.ToLower(bodies[3]), "outcome unknown") || !strings.Contains(strings.ToLower(bodies[3]), "starting dispatcher") {
+		t.Fatalf("expected activation+uncertain notice, got %d: %q", len(bodies), bodies)
+	}
+	// A delayed clear (14m after the prior notice) must reset the 15-minute
+	// cooldown from the clear time so a recurrence 1m later (T+15m) is still
+	// suppressed, while a recurrence after the full post-clear interval posts once.
+	baseNow := time.Now()
+	clearAt := baseNow.Add(teammateInputNoticeInterval - time.Minute)
+	if err := c.service.Store.teammateClearInputNotice(d, teammateInputNoticeID(d, "da_first:activation:effect"), clearAt); err != nil {
+		t.Fatal(err)
+	}
+	c.service.Now = func() time.Time { return clearAt.Add(time.Minute) }
+	if err := c.sendInputNotice(context.Background(), d, &TeammateInputHold{AdmissionID: "da_first", DirectInput: true, Activation: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 4 {
+		t.Fatalf("expected post-clear cooldown to suppress recurrence 1 minute after delayed clear, got %d: %q", len(bodies), bodies)
+	}
+	c.service.Now = func() time.Time { return clearAt.Add(teammateInputNoticeInterval + time.Minute) }
+	if err := c.sendInputNotice(context.Background(), d, &TeammateInputHold{AdmissionID: "da_first", DirectInput: true, Activation: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.sendInputNotice(context.Background(), d, &TeammateInputHold{AdmissionID: "da_first", DirectInput: true, Activation: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 5 || !strings.Contains(strings.ToLower(bodies[4]), "starting dispatcher") {
+		t.Fatalf("expected fresh activation notice after clear+cooldown (deduplicated on retry), got %d: %q", len(bodies), bodies)
+	}
+
+	// Guild thread activation hold must fall back to a guild-safe startup notice.
+	var guildBodies []string
+	gc, _ := teammateTestConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		if outboxTestScope(w, r, false) {
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/channels/201/messages" {
+			var body struct{ Content string }
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			guildBodies = append(guildBodies, body.Content)
+			_, _ = fmt.Fprintf(w, `{"id":"701","channel_id":"201","content":%q,"author":{"id":"99","bot":true}}`, body.Content)
+			return
+		}
+		t.Fatalf("unexpected guild request %s %s", r.Method, r.URL.Path)
+	})
+	guildDiscussion := bindFileOutboxTest(t, gc)
+	err := gc.managerStartupError(context.Background(), guildDiscussion, &TeammateInputHold{AdmissionID: "da_guild", DirectInput: true, Activation: true})
+	if err == nil {
+		t.Fatal("expected manager error to be returned")
+	}
+	if len(guildBodies) != 1 || !strings.Contains(strings.ToLower(guildBodies[0]), "starting dispatcher") || strings.Contains(guildBodies[0], guildDiscussion.ID) {
+		t.Fatalf("expected guild-safe activation startup notice without discussion ID (err=%v), got %d: %q", err, len(guildBodies), guildBodies)
+	}
 }

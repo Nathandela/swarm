@@ -1,6 +1,7 @@
 package voice
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -49,7 +50,7 @@ func InspectDiscussion(dir string) (DiscussionNativeStatus, error) {
 			return ErrStale
 		}
 		controller := DiscussionController{dir: dir, cfg: Config{ConversationID: conversation}, now: time.Now}
-		status, err = controller.statusFromState(st, false)
+		status, err = controller.statusFromState(context.Background(), st, false)
 		return err
 	})
 	return status, err

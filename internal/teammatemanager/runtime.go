@@ -383,7 +383,7 @@ func (r *Runtime) Admit(ctx context.Context, input discord.TeammateAdmission, re
 func activationNotice(err error) error {
 	var hold *voice.DiscussionInputHold
 	if errors.As(err, &hold) {
-		return errors.Join(&discord.TeammateInputHold{AdmissionID: hold.AdmissionID, CustodyLost: hold.CustodyLost, DirectInput: errors.Is(err, voice.ErrDiscussionDirectInputHeld), EffectUncertain: errors.Is(err, voice.ErrDiscussionEffectUncertain)}, err)
+		return errors.Join(&discord.TeammateInputHold{AdmissionID: hold.AdmissionID, Activation: hold.Activation, CustodyLost: hold.CustodyLost, DirectInput: errors.Is(err, voice.ErrDiscussionDirectInputHeld), EffectUncertain: errors.Is(err, voice.ErrDiscussionEffectUncertain)}, err)
 	}
 	if errors.Is(err, voice.ErrDiscussionActivationUnavailable) {
 		return errors.Join(&discord.TeammateStartupNotice{Body: voice.DiscussionStartupMessage(err)}, err)
@@ -401,12 +401,16 @@ func (r *Runtime) ResumeManual(ctx context.Context, bound discord.TeammateDiscus
 }
 
 func (r *Runtime) Status(bound discord.TeammateDiscussion) (discord.TeammateNativeStatus, error) {
+	return r.StatusWithContext(context.Background(), bound)
+}
+
+func (r *Runtime) StatusWithContext(ctx context.Context, bound discord.TeammateDiscussion) (discord.TeammateNativeStatus, error) {
 	entry, err := r.discussion(bound, nil, false)
 	if err != nil {
 		return discord.TeammateNativeStatus{}, err
 	}
 	defer r.release(entry)
-	status, err := entry.voice.Status()
+	status, err := entry.voice.StatusWithContext(ctx)
 	if err != nil {
 		return discord.TeammateNativeStatus{}, err
 	}
@@ -417,6 +421,7 @@ func CheckoutStatusProjection(status voice.DiscussionNativeStatus) discord.Teamm
 	result := discord.TeammateNativeStatus{
 		UnconfirmedReplies: status.UnconfirmedReplies, PendingReplies: status.PendingReplies, PendingAdmissions: status.PendingAdmissions, PendingActions: status.PendingActions, Notes: status.Notes, RetirementOperation: status.RetirementOperation, OldestPendingNote: status.OldestPendingNote,
 		State: status.State, ManagerSession: status.ManagerSession, ManagerInstance: status.ManagerInstance,
+		PendingManagerSession: status.PendingManagerSession, PendingManagerInstance: status.PendingManagerInstance,
 		Project: status.Project, Diagnostic: status.Diagnostic, Generation: status.Generation, ExternalInput: status.ExternalInput,
 	}
 	for _, outputs := range status.UnconfirmedOutputs {

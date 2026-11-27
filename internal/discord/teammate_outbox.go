@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -167,6 +168,11 @@ func teammateCancelPreparedNotice(tx *bolt.Tx, d TeammateDiscussion, id, cause s
 func (t *teammateConnector) managerStartupError(ctx context.Context, d TeammateDiscussion, managerErr error) error {
 	var hold *TeammateInputHold
 	if errors.As(managerErr, &hold) {
+		cfg := t.service.Config
+		isPersonalDM := cfg.Mode == "personal" && d.InstallationID == cfg.InstallationID && d.Route == (Route{ChannelID: cfg.DMChannelID})
+		if hold.Activation && !isPersonalDM {
+			return errors.Join(managerErr, t.sendStartupNotice(ctx, d, "The starting dispatcher is paused by direct terminal input. Check its window in Swarm. Your message is saved."))
+		}
 		return errors.Join(managerErr, t.sendInputNotice(ctx, d, hold))
 	}
 	if !errors.Is(managerErr, ErrTeammateManagerUnavailable) {
@@ -186,24 +192,59 @@ func (t *teammateConnector) sendInputNotice(ctx context.Context, d TeammateDiscu
 	if cfg.Mode != "personal" || d.InstallationID != cfg.InstallationID || d.Route != (Route{ChannelID: cfg.DMChannelID}) || hold.AdmissionID == "" {
 		return nil
 	}
-	id := teammateInputNoticeID(d, hold.AdmissionID)
+	legacyKey := hold.AdmissionID
+	cause := "ordinary"
 	body := "Your message is saved. Open the dispatcher in Swarm to check whether it needs your help."
 	if hold.DirectInput {
-		body = "Messages queued. Open dispatcher `" + d.ID + "` in Swarm. Finish your input, or save the draft and exit normally. Already submitted? Check its outcome, then use `swarm discord status` for the `resume-manual` coordinates."
-		if hold.CustodyLost {
-			body = "Messages queued. Open dispatcher `" + d.ID + "` in Swarm, save any draft and exit normally. Swarm will verify the exit before replacing it."
+		if hold.Activation {
+			legacyKey = hold.AdmissionID + ":activation"
+			cause = "activation"
+			body = "Messages queued. The starting dispatcher for `" + d.ID + "` is paused by direct terminal input. Open that starting dispatcher in Swarm and finish your input. Don’t exit it normally or run `resume-manual` on the previous dispatcher."
+		} else {
+			body = "Messages queued. Open dispatcher `" + d.ID + "` in Swarm. Finish your input, or save the draft and exit normally. Already submitted? Check its outcome, then use `swarm discord status` for the `resume-manual` coordinates."
+			if hold.CustodyLost {
+				body = "Messages queued. Open dispatcher `" + d.ID + "` in Swarm, save any draft and exit normally. Swarm will verify the exit before replacing it."
+			}
 		}
 	}
 	if hold.EffectUncertain {
-		id = teammateInputNoticeID(d, hold.AdmissionID+":effect")
+		legacyKey = hold.AdmissionID + ":effect"
+		cause = "effect"
 		body = "Earlier message outcome unknown. Later messages are queued. Check `" + d.ID + "` in `swarm discord status` before taking action. Don’t resend."
 		if hold.DirectInput {
-			body = "Your request reached the dispatcher. Terminal input is holding its reply. Open dispatcher `" + d.ID + "` in Swarm, save any draft, and check the outcome before resuming. Don’t resend."
+			if hold.Activation {
+				legacyKey = hold.AdmissionID + ":activation:effect"
+				cause = "activation:effect"
+				body = "Earlier message outcome unknown. The starting dispatcher for `" + d.ID + "` is paused by direct terminal input. Check `" + d.ID + "` in `swarm discord status` and open the starting dispatcher in Swarm to inspect it. Don’t resend or exit it normally."
+			} else {
+				body = "Your request reached the dispatcher. Terminal input is holding its reply. Open dispatcher `" + d.ID + "` in Swarm, save any draft, and check the outcome before resuming. Don’t resend."
+			}
 		}
 	}
+	causeKey := hold.AdmissionID + ":" + cause
 	store := t.service.Store
+	id := teammateInputNoticeID(d, legacyKey)
+	_ = store.db.View(func(tx *bolt.Tx) error {
+		var binding teammateBinding
+		if err := teammateGet(tx.Bucket([]byte(teammateDiscussionBucket)), teammateKey(d.InstallationID, d.Route.ChannelID), &binding); err != nil {
+			return nil
+		}
+		if binding.InputNoticeCause == causeKey && binding.InputNoticeID != "" {
+			id = binding.InputNoticeID
+			return nil
+		}
+		// If this phase was previously posted and we later transitioned away,
+		// mint a fresh durable notice identity for the new transition.
+		k := teammateOutputKey(d.InstallationID, d.ID, id)
+		outboxHit := tx.Bucket([]byte(teammateOutboxBucket)).Get(k) != nil
+		receiptHit := tx.Bucket([]byte(teammateReceiptBucket)).Get(k) != nil
+		if (outboxHit || receiptHit) && binding.InputNoticeID != id {
+			id = teammateInputNoticeID(d, legacyKey+"#"+strconv.FormatUint(binding.InputNoticeSeq+1, 10))
+		}
+		return nil
+	})
 	p := TeammatePublication{ID: id, AdmissionID: hold.AdmissionID, Body: body, SystemCause: teammateInputNotice}
-	if err := store.teammateQueue(d.InstallationID, d.ID, d.Route, p, t.service.Now(), true); err != nil {
+	if err := store.teammateQueueWithCause(d.InstallationID, d.ID, d.Route, p, t.service.Now(), true, causeKey); err != nil {
 		return err
 	}
 	var out teammateOutput
@@ -219,7 +260,7 @@ func (t *teammateConnector) sendInputNotice(ctx context.Context, d TeammateDiscu
 	return t.sendOutput(ctx, d.InstallationID, out)
 }
 
-func (s *Store) teammateClearInputNotice(d TeammateDiscussion, id string) error {
+func (s *Store) teammateClearInputNotice(d TeammateDiscussion, id string, now time.Time) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		key := teammateKey(d.InstallationID, d.Route.ChannelID)
 		var b teammateBinding
@@ -233,6 +274,10 @@ func (s *Store) teammateClearInputNotice(d TeammateDiscussion, id string) error 
 			return err
 		}
 		b.InputNoticeID = ""
+		b.InputNoticeCause = ""
+		if !now.IsZero() {
+			b.InputNoticeAt = now
+		}
 		return putJSON(tx, teammateDiscussionBucket, key, b)
 	})
 }
@@ -366,6 +411,10 @@ func (t *teammateConnector) sendStartupNotice(ctx context.Context, d TeammateDis
 }
 
 func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublication, now time.Time, internal bool, contents ...[]byte) error {
+	return s.teammateQueueWithCause(install, id, route, p, now, internal, "", contents...)
+}
+
+func (s *Store) teammateQueueWithCause(install, id string, route Route, p TeammatePublication, now time.Time, internal bool, causeKey string, contents ...[]byte) error {
 	if p.ID == "" || len(p.ID) > 128 || strings.IndexFunc(p.ID, func(r rune) bool { return r < 33 || r > 126 }) >= 0 ||
 		(strings.TrimSpace(p.Body) == "" && len(p.Files) == 0) || len(p.Body) > MaxPublicationBytes || (p.QuestionID == "") != (p.QuestionHash == "") {
 		return ErrInvalid
@@ -434,14 +483,23 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 				return ErrConflict
 			}
 			if internal && p.SystemCause == teammateInputNotice {
-				// A proven pre-effect refusal and an unconfirmed native submission
+				// Distinct hold causes (ordinary, activation-phase, uncertain effect)
 				// require different operator actions for the same admission.
-				otherID := teammateInputNoticeID(binding.TeammateDiscussion, p.AdmissionID)
-				if otherID == p.ID {
-					otherID = teammateInputNoticeID(binding.TeammateDiscussion, p.AdmissionID+":effect")
+				changedCause := binding.InputNoticeCause != "" && causeKey != "" &&
+					binding.InputNoticeCause != causeKey && strings.HasPrefix(binding.InputNoticeCause, p.AdmissionID+":")
+				if !changedCause && binding.InputNoticeCause == "" && binding.InputNoticeID != "" {
+					for _, suffix := range []string{"", ":activation", ":effect", ":activation:effect"} {
+						candidate := teammateInputNoticeID(binding.TeammateDiscussion, p.AdmissionID+suffix)
+						if candidate == p.ID {
+							continue
+						}
+						candidateKey := teammateOutputKey(install, id, candidate)
+						if b.Get(candidateKey) != nil || tx.Bucket([]byte(teammateReceiptBucket)).Get(candidateKey) != nil {
+							changedCause = true
+							break
+						}
+					}
 				}
-				otherKey := teammateOutputKey(install, id, otherID)
-				changedCause := b.Get(otherKey) != nil || tx.Bucket([]byte(teammateReceiptBucket)).Get(otherKey) != nil
 				if binding.InputNoticeID == p.ID || !changedCause && now.Sub(binding.InputNoticeAt) < teammateInputNoticeInterval {
 					return nil
 				}
@@ -451,7 +509,8 @@ func (s *Store) teammateQueue(install, id string, route Route, p TeammatePublica
 						return err
 					}
 				}
-				binding.InputNoticeID, binding.InputNoticeAt = p.ID, now
+				binding.InputNoticeID, binding.InputNoticeCause, binding.InputNoticeAt = p.ID, causeKey, now
+				binding.InputNoticeSeq++
 				if err = putJSON(tx, teammateDiscussionBucket, teammateKey(install, route.ChannelID), binding); err != nil {
 					return err
 				}
