@@ -787,8 +787,8 @@ mod tests {
                 })
                 .unwrap()
             };
-            let one = threads.spawn(|| reserve(first_id));
-            let two = threads.spawn(|| reserve(second_id));
+            let one = threads.spawn(move || reserve(first_id));
+            let two = threads.spawn(move || reserve(second_id));
             (one.join().unwrap(), two.join().unwrap())
         });
         assert_ne!(left["path"], right["path"]);
