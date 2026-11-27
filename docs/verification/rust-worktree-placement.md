@@ -1,0 +1,9 @@
+# Worktree placement and ownership
+
+Go v0.29.27 at `51e81f2604cb2a2eff4678c9a0b00bdf1b2a8a25` is the reference. Ordinary isolated launches use the physical primary repository's managed workspace root. A launch from a linked checkout starts from that checkout's commit and shares the primary's workspace root. Scheduled occurrences use their separate workspace plan and preserve the occurrence's selected working directory.
+
+An atomic directory claim picks the preferred name or the session's unique fallback. The supervisor records the chosen path, repository, branch, base commit, device and inode in the session reservation. A process exit after mkdir and before writing `session.json` can leave an empty occupied entry. Startup preserves that entry because no published session proves ownership. A subsequent isolated launch with that label can claim its unique fallback. Once the reservation exists, a restart can fill in a missing Git admin owner marker only when the original directory identity and exact branch registration still match. This repair does not launch a provider.
+
+The removal path retains an outer checkout containing a nested Git checkout or another registered worktree. A new marked checkout can be removed after detachment or after its source checkout disappears, subject to the recorded identity, physical placement and nested checkout checks. Legacy Rust records still use their original cwd-relative placement and exact branch custody.
+
+Run the disposable Rust owner fixture with `python3 scripts/verification/parity_runtime.py --candidate target/debug/swarm`. It checks linked-source placement and commit selection, restart repair, the retained worker, and deletion after detachment. The focused tests run with `cargo test --locked --bin swarm workspace::tests` and cover quoted legacy Git registrations, nested registrations and independent checkout retention, exact subdirectory scope and simultaneous directory claims.
