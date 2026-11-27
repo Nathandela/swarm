@@ -61,17 +61,23 @@ pub(super) fn bind(
     }
     if launch["worktree"] == true {
         let target = Path::new(field(launch, "cwd")).canonicalize()?;
-        for dir in [std::env::temp_dir(), "/tmp".into(), "/var/tmp".into()] {
-            if let Ok(tmp) = fs::canonicalize(dir)
-                && target.starts_with(tmp)
-            {
-                return Err(io::Error::other(
-                    "handoff: the worktree destination is temporary; hand off from a durable checkout instead",
-                ));
-            }
-        }
+        check_durable_checkout(&target)?;
+        check_durable_checkout(&crate::workspace::destination_root(&target)?)?;
     }
     Ok((bound, Some((source, parent.incarnation()))))
+}
+
+pub(super) fn check_durable_checkout(path: &Path) -> io::Result<()> {
+    for dir in [std::env::temp_dir(), "/tmp".into(), "/var/tmp".into()] {
+        if let Ok(tmp) = fs::canonicalize(dir)
+            && path.starts_with(tmp)
+        {
+            return Err(io::Error::other(
+                "handoff: the worktree destination is temporary; hand off from a durable checkout instead",
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn hands_off(

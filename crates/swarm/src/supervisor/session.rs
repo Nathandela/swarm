@@ -37,6 +37,7 @@ enum Phase {
 pub(super) struct Prepared {
     pub(super) lineage: Value,
     isolated: bool,
+    pub(super) durable_checkout: bool,
     pub cwd: PathBuf,
     label: String,
     tag: String,
@@ -441,6 +442,7 @@ impl Session {
         Ok(Prepared {
             lineage,
             isolated,
+            durable_checkout: false,
             tag,
             cwd,
             label,
@@ -1101,6 +1103,7 @@ impl Session {
         let Prepared {
             lineage,
             isolated,
+            durable_checkout,
             tag,
             cwd,
             label,
@@ -1121,11 +1124,7 @@ impl Session {
         let id = runtime::random_id()?;
         use std::os::unix::fs::MetadataExt;
         let physical = cwd.metadata()?;
-        let checkout = if isolated {
-            Some(crate::workspace::plan(&cwd, &id, &label)?)
-        } else {
-            None
-        };
+        let workspace_label = &label;
         let label = if label.is_empty() {
             match provider.agent {
                 "agy" => "agy",
@@ -1183,17 +1182,41 @@ impl Session {
         } else {
             Value::Null
         };
+        let token = runtime::random_id()?;
         let dir = root.join(&id);
         DirBuilder::new().mode(0o700).create(&dir)?;
+        let checkout = if isolated {
+            match crate::workspace::claim(&cwd, &id, workspace_label, |candidate| {
+                if durable_checkout {
+                    super::handoff::check_durable_checkout(candidate)?;
+                }
+                if (!mailbox.is_null() || !manager.is_null() || scheduled.is_some())
+                    && !candidate.starts_with(&cwd)
+                {
+                    return Err(io::Error::other(
+                        "worktree: destination exceeds project scope",
+                    ));
+                }
+                Ok(())
+            }) {
+                Ok(checkout) => Some(checkout),
+                Err(error) => {
+                    let _ = fs::remove_dir(&dir);
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
         let agy_source_home = (provider.agent == "agy")
             .then(|| providers::agy::handoff::reserve_home(&provider.env))
             .flatten();
         let maintenance_env = maintenance::environment(&provider);
         let auth_stamp = crate::refresh::auth_identity(provider.agent, &maintenance_env);
-        runtime::write_json(
+        if let Err(error) = runtime::write_json(
             &dir.join("session.json"),
             &json!({
-                "schema": if provider.hermes.is_null() { 1 } else { 2 }, "go_rollback":go_rollback, "id": id, "token": runtime::random_id()?, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"manager":manager,"mailbox":mailbox,"lineage":lineage,
+                "schema": if provider.hermes.is_null() { 1 } else { 2 }, "go_rollback":go_rollback, "id": id, "token": token, "cwd": cwd,"cwd_identity":[physical.dev(),physical.ino()], "name": label, "checkout":checkout,"manager":manager,"mailbox":mailbox,"lineage":lineage,
                 "maintenance_env":maintenance_env,"auth_stamp":auth_stamp,
                 "created_at": now(), "cols": cols, "rows": rows, "tag":tag, "agy_launch":agy_launch,"agy_source_home":agy_source_home,
                 "schedule":scheduled.as_ref().map(|(binding,_)| binding),
@@ -1219,7 +1242,15 @@ impl Session {
                 "opencode_initial": initial,
 
             }),
-        )?;
+        ) {
+            if !dir.join("session.json").try_exists().unwrap_or(true) {
+                if let Some(checkout) = &checkout {
+                    crate::workspace::release_claim(checkout);
+                }
+                let _ = fs::remove_dir(&dir);
+            }
+            return Err(error);
+        }
         let mut session = Self::load(dir)?;
         let secrets = scheduled.map_or(Value::Null, |(_, transient)| transient);
         *session.launch_plan.get_mut().unwrap() = Some((provider, secrets));
@@ -2431,6 +2462,13 @@ impl Session {
     pub(super) fn incarnation(&self) -> String {
         codex_receipt::instance(&self.token)
     }
+    pub(super) fn repair_checkout_reservation(&self) -> io::Result<()> {
+        if let Some((repo, record)) = self.checkout_record()? {
+            crate::workspace::repair_reservation(&repo, &self.id, &record)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn verify_effective(&self) -> io::Result<&Path> {
         if let Some((repo, record)) = self.checkout_record()? {
             crate::workspace::verify(&repo, &self.id, &record)?;

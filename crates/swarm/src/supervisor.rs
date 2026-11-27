@@ -325,6 +325,7 @@ impl State {
             let (bound, source, proof) = handoff::hands_off(self, &request)?;
             let mut prepared = Session::prepare(&bound)?;
             prepared.lineage["hands_off"] = proof;
+            prepared.durable_checkout = true;
             return self.reserve_prepared(prepared, false, Some(source), None);
         }
         for (key, cap) in [
@@ -493,6 +494,7 @@ impl State {
             )?;
         }
         let mut prepared = Session::prepare(&bound)?;
+        prepared.durable_checkout = source.is_some();
         if let Some(scope) = mailbox {
             prepared.bind_mail(scope);
         }
@@ -871,6 +873,9 @@ fn serve(configured: PathBuf) -> io::Result<()> {
             {
                 match Session::load(entry.path()) {
                     Ok(session) => {
+                        if let Err(error) = session.repair_checkout_reservation() {
+                            eprintln!("daemon: worktree reservation {}: {error}", session.id);
+                        }
                         session.reconcile();
                         sessions.insert(session.id.clone(), Arc::new(session));
                     }

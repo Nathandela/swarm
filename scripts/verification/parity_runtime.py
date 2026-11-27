@@ -349,6 +349,29 @@ def drive(root, guard):
             assert delete(second)["op"]=="ok"
             assert (repo/"uncommitted").read_text()=="primary only" and git(repo,"rev-parse","HEAD")==head
             print("two real git worktrees kept independent HEADs; shared checkout was retained until released")
+            outer = invoke(*launch).decode().strip()
+            outer_checkout = expected[0]
+            git(outer_checkout, "-c", "user.name=fixture", "-c", "user.email=fixture@localhost",
+                "commit", "--allow-empty", "-qm", "linked source commit")
+            source_head = git(outer_checkout, "rev-parse", "HEAD")
+            sibling = invoke("spawn", "--cli", "claude", "--worktree", "--name", "Sibling",
+                             "--dir", str(outer_checkout), "--prompt", "isolated sibling fixture").decode().strip()
+            sibling_checkout = repo / ".swarm/worktrees/sibling"
+            assert git(sibling_checkout, "rev-parse", "HEAD") == source_head != head
+            assert not (outer_checkout / ".swarm/worktrees").exists()
+            sibling_admin = Path(git(sibling_checkout, "rev-parse", "--absolute-git-dir").decode())
+            owner = sibling_admin / "swarm-session"
+            assert owner.read_text() == sibling.split("/")[1]
+            owner.unlink()
+            daemon.kill()
+            daemon.wait(timeout=5)
+            daemon = launch_daemon(log)
+            fixtures.wait_for(ready, "replacement Rust daemon after worktree marker gap")
+            assert owner.read_text() == sibling.split("/")[1]
+            git(sibling_checkout, "checkout", "--detach")
+            assert delete(sibling)["op"] == "ok" and not sibling_checkout.exists()
+            assert delete(outer)["op"] == "ok" and not outer_checkout.exists()
+            print("linked-source sibling used its own HEAD; daemon repaired ownership and removed detached checkout")
             parent = invoke("spawn","--cli","claude","--name","source","--dir",str(root/"work"),"--prompt","parent").decode().strip()
             fixtures.wait_for(lambda: b"fixture ready" in invoke("peek",parent), "new source PTY")
             fire("Stop")
