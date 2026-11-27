@@ -41,6 +41,8 @@ type Config struct {
 	ReceptionistCLI    string              `json:"receptionist_cli"`
 	ReceptionistModel  string              `json:"receptionist_model"`
 	WorkDir            string              `json:"work_dir"`
+	// TrustedWebhookIDs lets these webhooks address the teammate as a person would.
+	TrustedWebhookIDs []string `json:"trusted_webhook_ids,omitempty"`
 }
 
 // SupervisorPaths retain the operator's chosen place when the user service starts after logout.
@@ -196,7 +198,10 @@ func (c Config) Validate() error {
 	if !id(c.ApplicationID) {
 		return errors.New("discord: invalid application or owner ID")
 	}
-	for _, ids := range [][]string{c.GuildIDs, c.ChannelIDs, c.UserIDs} {
+	if containsID(c.TrustedWebhookIDs, c.ApplicationID) {
+		return errors.New("discord: a teammate cannot trust its own application")
+	}
+	for _, ids := range [][]string{c.GuildIDs, c.ChannelIDs, c.UserIDs, c.TrustedWebhookIDs} {
 		for _, s := range ids {
 			if !id(s) {
 				return errors.New("discord: invalid allowlist ID")
