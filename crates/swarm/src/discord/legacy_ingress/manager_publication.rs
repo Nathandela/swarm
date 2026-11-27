@@ -926,14 +926,39 @@ pub(super) fn complete_vm_wake(
     }
     let old_floor = state["retired_through"].as_u64().unwrap_or_default();
     let last = state["last_admission"].as_u64().ok_or_else(invalid)?;
-    if sequence <= old_floor || sequence > last || last.saturating_sub(old_floor) > 4096 {
+    let floor = retirement_floor(&records, &conversation, old_floor, last, sequence)?;
+    let owner_reply = settled_vm_owner_reply(&conn, &records, cfg, &conversation, output, &wake)?;
+    permit["revoked"] = json!(true);
+    admission["phase"] = json!("completed");
+    admission["settled_at"] = json!(Timestamp::now().to_string());
+    wake["state"] = json!("settled");
+    state["retired_through"] = json!(floor);
+    let mut changes = vec![
+        (conv_key, state),
+        (admission_key, admission),
+        (permit_key, permit),
+        (wake_key, wake),
+        (closed, json!(true)),
+    ];
+    changes.extend(owner_reply);
+    apply_voice(tx, header, &changes)
+}
+
+fn retirement_floor<'tx>(
+    records: &impl BucketApi<'tx>,
+    conversation: &str,
+    mut floor: u64,
+    last: u64,
+    sequence: u64,
+) -> io::Result<u64> {
+    if sequence <= floor || sequence > last {
         return Err(invalid());
     }
-    let mut floor = old_floor;
+    // Each advance consumes a record from the validated ledger or the admission being settled.
     while floor < last {
         let next = floor + 1;
         if next != sequence {
-            let next_key = key("admissions", &conversation, &next.to_string())?;
+            let next_key = key("admissions", conversation, &next.to_string())?;
             let Some(raw) = records.get(&next_key) else {
                 break;
             };
@@ -951,21 +976,38 @@ pub(super) fn complete_vm_wake(
         }
         floor = next;
     }
-    let owner_reply = settled_vm_owner_reply(&conn, &records, cfg, &conversation, output, &wake)?;
-    permit["revoked"] = json!(true);
-    admission["phase"] = json!("completed");
-    admission["settled_at"] = json!(Timestamp::now().to_string());
-    wake["state"] = json!("settled");
-    state["retired_through"] = json!(floor);
-    let mut changes = vec![
-        (conv_key, state),
-        (admission_key, admission),
-        (permit_key, permit),
-        (wake_key, wake),
-        (closed, json!(true)),
-    ];
-    changes.extend(owner_reply);
-    apply_voice(tx, header, &changes)
+    Ok(floor)
+}
+
+#[cfg(test)]
+#[test]
+fn retirement_crosses_a_large_settled_prefix_and_stops_at_a_gap() {
+    let mut db = Bolt::open_mem().unwrap();
+    let mut tx = db.begin_rw().unwrap();
+    let mut records = tx.create_bucket(b"records").unwrap();
+    let conversation = "discord-fixture";
+    let last = 4_200;
+    for sequence in 2..=last {
+        records
+            .put(
+                key("admissions", conversation, &sequence.to_string()).unwrap(),
+                go_json(&json!({"conversation_id":conversation,"sequence":sequence,
+                    "settled_at":"2026-11-27T05:00:00Z"}))
+                .unwrap(),
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        retirement_floor(&records, conversation, 0, last, 1).unwrap(),
+        last
+    );
+    records
+        .delete(key("admissions", conversation, "4100").unwrap())
+        .unwrap();
+    assert_eq!(
+        retirement_floor(&records, conversation, 0, last, 1).unwrap(),
+        4099
+    );
 }
 
 fn settled_vm_owner_reply<'conn, 'voice>(
