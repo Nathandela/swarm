@@ -333,13 +333,8 @@ fn registered(repo: &Path, path: &Path, reference: &str) -> io::Result<bool> {
     }
     if path.canonicalize()? != path
         || git(path, ["symbolic-ref", "HEAD"])? != reference.as_bytes()
-        || git(
-            path,
-            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        )? != git(
-            repo,
-            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        )?
+        || git(path, ["rev-parse", "--show-toplevel"])? != path.as_os_str().as_bytes()
+        || git_common(path)? != git_common(repo)?
     {
         return Err(io::Error::other("worktree: checkout identity changed"));
     }
@@ -751,6 +746,14 @@ mod tests {
             destination_root(&subdir).unwrap(),
             root.join(".swarm/worktrees")
         );
+        assert!(
+            claim(&subdir, second_id, "Scoped", |candidate| {
+                assert!(!candidate.starts_with(&subdir));
+                Err(io::Error::other("outside exact subdirectory grant"))
+            })
+            .is_err()
+        );
+        assert!(!root.join(".swarm/worktrees/scoped").exists());
         let second = claim(&subdir, second_id, "Same name", |_| Ok(())).unwrap();
         let target = Path::new(second["path"].as_str().unwrap());
         assert_eq!(
@@ -772,6 +775,30 @@ mod tests {
         remove(&root, first_id, &first).unwrap();
         remove(&subdir, second_id, &second).unwrap();
         assert!(!target.exists());
+
+        let rendezvous = std::sync::Barrier::new(2);
+        let (left, right) = std::thread::scope(|threads| {
+            let reserve = |id| {
+                claim(&root, id, "Concurrent", |candidate| {
+                    if candidate.ends_with("concurrent") {
+                        rendezvous.wait();
+                    }
+                    Ok(())
+                })
+                .unwrap()
+            };
+            let one = threads.spawn(|| reserve(first_id));
+            let two = threads.spawn(|| reserve(second_id));
+            (one.join().unwrap(), two.join().unwrap())
+        });
+        assert_ne!(left["path"], right["path"]);
+        assert!(
+            [&left, &right].iter().any(|record| {
+                Path::new(record["path"].as_str().unwrap()).ends_with("concurrent")
+            })
+        );
+        release_claim(&left);
+        release_claim(&right);
 
         let aliases = fixture.join("aliases");
         fs::create_dir(&aliases).unwrap();

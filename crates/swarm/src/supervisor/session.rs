@@ -1190,8 +1190,16 @@ impl Session {
                 if durable_checkout {
                     super::handoff::check_durable_checkout(candidate)?;
                 }
-                if (!mailbox.is_null() || !manager.is_null() || scheduled.is_some())
-                    && !candidate.starts_with(&cwd)
+                let grant = if !mailbox.is_null() {
+                    Some(&mailbox["project"])
+                } else if !manager.is_null() {
+                    Some(&manager["launch"]["cwd"])
+                } else {
+                    None
+                };
+                if let Some(grant) = grant
+                    && (grant.as_str().map(Path::new) != Some(cwd.as_path())
+                        || !candidate.starts_with(&cwd))
                 {
                     return Err(io::Error::other(
                         "worktree: destination exceeds project scope",
@@ -1213,6 +1221,9 @@ impl Session {
             .flatten();
         let maintenance_env = maintenance::environment(&provider);
         let auth_stamp = crate::refresh::auth_identity(provider.agent, &maintenance_env);
+        // A crash before session.json leaves only an empty occupied name. A
+        // later reservation uses its unique fallback. Startup cannot prove
+        // ownership of an unpublished directory, so it leaves the entry intact.
         if let Err(error) = runtime::write_json(
             &dir.join("session.json"),
             &json!({
