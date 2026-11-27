@@ -146,6 +146,8 @@ The joined `d9577d2f` default suites passed 281 tests on Darwin arm64 and 280 on
 
 On native `tf_nathan` Linux x86_64, the optimized `e531937e` Rust application and signed Go v0.29.26 each painted 50 real sessions in 25 alternating cold PTY trials. Rust measured 95.368 ms p95 first paint, 0.256 ms p95 echo and 0.399% of one core idle. Go measured 127.452 ms, 0.421 ms and 2.180% respectively. Both arms reaped their fixture processes. The VM was also running an endurance fixture, so the driver recorded a calibrated comparison. Receipt SHA-256 is `9542549067bc7afbe7bcc292390ddc8eb35836646790d86ddc3664014c6128bc`.
 
+The same loaded external comparison on Darwin arm64 measured Rust at 196.481 ms p95 first paint, 0.046 ms p95 echo and 0.237% of one core idle. Go measured 203.781 ms, 0.235 ms and 1.417%. Each arm reaped 100 fixture processes. The one-minute load averages were 40.82 before and 24.15 after. Both external first-paint samples exceeded the 100 ms budget during this calibrated run. Quiet-host qualification remains open. Receipt SHA-256 is `e5b319b0a5a6dbd9ec97361deaa29a87369539b40e2fd351e43a20bd6d6964e7`.
+
 The matching optimized post-dial suites completed all 25 first-frame trials on both native hosts. Darwin arm64 measured 2.398 ms p95 and reaped all 90 fixture processes. Linux x86_64 measured 4.277 ms p95 and reaped all 101. Receipt SHA-256 is `f2e7533753f28f521ad466d3e40b0abeb05401f365fd15f39860d51007039705` on Mac and `593cc932cdec64737d7381a9dd4e166099af8b7d3ea119167003fcb830bd4d80` on Linux.
 
 | Evidence | SHA-256 |
@@ -284,3 +286,13 @@ The joined Linux opt-ins passed the eleven Go Discord ledger cases, the three ma
 The other joined `0f616f0a` Mac ledger arm passed the eleven retained and general-file cases, the three mailbox cases and both signed Go v0.29.26 and Rust owner protocol arms. The first sandboxed attempt lacked process visibility. The native rerun used a private environment and scratch. Its log SHA-256 is `7fd58cda46959991f8b55c118471c24464aa5f42f93ed5575eed8865e7b017e4`. The isolated Linux replay repeated every retained-guild preparation, queue, interruption, custody and initial history mode with the exact signed Go v0.29.26 supervisor. Its log SHA-256 is `068b736f74b78ccda80c47c40c833220dc0824e788a91a2b3e32df465d4e057f`.
 
 The `dbf84b57` pagination build passed 281 default tests on macOS arm64 and 280 on Linux x86_64, with 25 opt-ins. Formatting and warnings-denied Clippy passed. The joined signed Go v0.29.26 Linux evidence compared the original retained Codex turn's two plain history pages and exact Go cursor. Revoked read authority, a closed call during the last REST check and the prior initial-page controls passed. Both original stores stayed byte-identical. The workspace log SHA-256 is `8bd8cf3d0632ab91fafdd9eab82d686e3f5fb18a1899bc74983896cdb9cde4f9` on macOS and `d3775cad4b5a0f869647d7e9bda497450c3702124c956d7dce4dc8f507947e25` on Linux. The signed Go paging witness SHA-256 is `f68dcb2ae5b43783d328912325849083daeb1df619b0a8a2618c1c7e5c173e97`.
+
+### November 27 duration checkpoint
+
+| Darwin arm64 run | Terminal result | Receipt SHA-256 |
+| --- | --- | --- |
+| Signed mixed `52e77ee5` | Failed after 354 completed inputs and 35 rejoins. Input 355 produced an unknown CLI result. Its original operation later reconciled as completed with one native user row, text part, assistant child and model request. Cleanup passed. | `b372333a0fe24211f066ce7c2e1007edf00f84c62596f151103b1974ca15df18` |
+| Native `41f9aedd` | Failed after 612 completed inputs and 30 rejoins. Input 613 hit `ENOSPC` with zero matching model requests. The terminal cleanup check timed out awaiting roster exit. | `e4e970417d7827a10bfde9a1bc3d769590eb820c0744950e1ec83c03391011c1` |
+| Mixed `41f9aedd` | Failed while waiting for the scheduled receipt on tick 786 after 985 completed inputs, 98 rejoins and 785 scheduled completions. Cleanup passed. | `1a49206a6c9b56dd1ad1eefc32a296e7ec22595beee59b1680fb4285ced36a83` |
+
+The second and third queue status files still said `running` after the terminal receipts. Kernel birth checks found the registered processes from all three runs absent. At approximately 05:28 UTC the native Darwin arm64 `ded21c92` and Linux x86_64 `aec3365e` OpenCode development runs still had fresh heartbeats, at 1,018 inputs after 17h38m and 681 inputs after 11h37m respectively. Their live process identities matched the recorded births. The native 24- and 72-hour receipts, mixed workload on both hosts, and exact final signed candidate duration remain open.

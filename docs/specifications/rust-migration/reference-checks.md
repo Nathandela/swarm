@@ -93,6 +93,8 @@ The six new offline Go attachment tests passed from exact source on macOS arm64 
 
 The integrated Rust and signed Go v0.29.26 executables returned identical exit codes, stdout and stderr for both `teammate message` help flags and a file supplied with `--kind needs-input` on both native hosts. The help advertises the expanded formats, ten files and the 8 MiB total. The two comparison logs have SHA-256 `8075deec939ad3af71b1fda94b366e9459c5a82952fd851c7b2e5ae642637a57`.
 
+The clean exact-source Darwin arm64 round passed 97 packages with eight containing no tests. It used native Go 1.26.10, umask `022` and `-p=1 -parallel=1 -count=1 -timeout=45m`. Log SHA-256 is `e4be4ed16870906786addad572d39ec007e7389c90f7124435ad5d76e34647cb`. The matching race round passed 82 packages, reported eight without tests and failed 15. Its log records restricted process enumeration, retained synthetic process state and timing failures. It contains zero race detector reports. The race gate remains open. Log SHA-256 is `0984aed7d2568e0d9755d72ef35df912e9f92ee1b3d8ec920f96551a5e5621b8`.
+
 ## M0 source build repeatability on Apple Silicon
 
 Two builds in independent scratch directories on this host with Go 1.26.5 and `GOARCH=arm64` produced identical SHA-256 digests within each reference. Both binaries executed their version and Discord help probes. Running the builder with an existing output directory returned exit 2 and preserved its contents.

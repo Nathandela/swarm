@@ -920,12 +920,19 @@ impl Dispatcher {
         Ok(())
     }
 
-    fn release_sent_pin(&self, nonce: &str, entry: &Value) -> io::Result<()> {
-        let file_source = &entry["proof"]["file_source"];
-        if !file_source.is_null() && !self.released_pins.borrow().contains(nonce) {
-            verify_publication(nonce, entry)?;
-            mail_store::release_publication(&self.owner.supervisor_root()?, file_source, nonce)?;
-            self.released_pins.borrow_mut().insert(nonce.to_owned());
+    fn release_sent_pins(&self, entries: &[(&str, Value)]) -> io::Result<()> {
+        let mut released = self.released_pins.borrow_mut();
+        let mut batch = Vec::new();
+        for (nonce, entry) in entries {
+            let file_source = &entry["proof"]["file_source"];
+            if !file_source.is_null() && !released.contains(*nonce) {
+                verify_publication(nonce, entry)?;
+                batch.push((file_source, *nonce));
+            }
+        }
+        if !batch.is_empty() {
+            mail_store::release_publications(&self.owner.supervisor_root()?, &batch)?;
+            released.extend(batch.into_iter().map(|(_, nonce)| nonce.to_owned()));
         }
         Ok(())
     }
@@ -948,14 +955,20 @@ impl Dispatcher {
                 "queued publication is out of the current native input scope",
             ));
         }
+        let mut sent = Vec::new();
         for nonce in &order {
             let entry = inbox.publication(nonce);
+            if entry["state"] == "sent" {
+                if !entry["proof"]["file_source"].is_null() {
+                    sent.push((nonce.as_str(), entry));
+                }
+                continue;
+            }
+            // Recover confirmed pins before claiming another output's file capacity.
+            self.release_sent_pins(&sent)?;
+            sent.clear();
             let publication = &entry["proof"];
             match field(&entry, "state") {
-                "sent" => {
-                    self.release_sent_pin(nonce, &entry)?;
-                    continue;
-                }
                 "prepared" if entry["retry_at"].as_u64().is_none_or(|at| now >= at) => {}
                 _ => break,
             }
@@ -1001,10 +1014,9 @@ impl Dispatcher {
                 Err(PublicationClaimError::Commit(error)) => return Err(error),
                 Err(PublicationClaimError::BeforeWrite(error)) => {
                     if new_pin {
-                        mail_store::release_publication(
+                        mail_store::release_publications(
                             &self.owner.supervisor_root()?,
-                            file_source,
-                            nonce,
+                            &[(file_source, nonce)],
                         )
                         .map_err(|cleanup| {
                             io::Error::other(format!(
@@ -1029,8 +1041,9 @@ impl Dispatcher {
             if inbox.publication(nonce)["state"] != "sent" {
                 break;
             }
-            self.release_sent_pin(nonce, &entry)?;
+            self.release_sent_pins(&[(nonce, entry)])?;
         }
+        self.release_sent_pins(&sent)?;
         Ok(order)
     }
 
@@ -2082,8 +2095,8 @@ mod tests {
         manifest["Pins"].clone()
     }
 
-    fn seed_pinned_prefix(dir: &Path, note: &Value, first: &str, second: &str) {
-        use bbolt_rs::{Bolt, BucketApi, BucketRwApi, DbRwAPI, TxRwApi, TxRwRefApi};
+    fn seed_pinned_prefix(dir: &Path, note: &Value, first: &str, second: &str) -> u64 {
+        use bbolt_rs::{Bolt, BucketApi, BucketRwApi, DbRwAPI, TxApi, TxRwApi, TxRwRefApi};
         let path = dir.join("rust-text-v1.json");
         let mut disk = runtime::read_json(&path).unwrap();
         let template = disk["outbox"][first]["proof"].clone();
@@ -2131,7 +2144,9 @@ mod tests {
                 .put(b"manifest", serde_json::to_vec(&manifest).unwrap())
                 .unwrap();
         }
+        let seeded = tx.id().0;
         tx.commit().unwrap();
+        seeded
     }
 
     fn hold_writer_until_claim(
@@ -2300,7 +2315,7 @@ mod tests {
         // Recreate the old accumulated prefix in one fixture transaction per store.
         drop(inbox);
         drop(dispatcher);
-        seed_pinned_prefix(dir, &note, &first, &second);
+        let seeded = seed_pinned_prefix(dir, &note, &first, &second);
         assert_eq!(file_pins(dir, &note).as_object().unwrap().len(), 128);
         dispatcher = Dispatcher::open(cfg, dir).unwrap().unwrap();
         inbox = Inbox::open(dir, cfg).unwrap();
@@ -2310,6 +2325,16 @@ mod tests {
         assert_eq!(inbox.publication(&last)["state"], "sent");
         assert!(file_pins(dir, &note).as_object().unwrap().is_empty());
         assert!(!inbox.manager()["input"].is_null());
+        {
+            use bbolt_rs::{DbApi, TxApi};
+            let (_pin, mailbox) = crate::checkout::state::receipts::open_bolt(
+                &dir.join("dispatcher-mail.db"),
+                256 << 20,
+            )
+            .unwrap();
+            // One commit frees the prefix, then one pins and one frees the new output.
+            assert!(mailbox.begin().unwrap().id().0 <= seeded + 3);
+        }
 
         let attempts = vec![
             (first.clone(), "part 1".into()),

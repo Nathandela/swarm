@@ -732,38 +732,46 @@ pub(crate) fn release_prepared_publication(
     tx.commit().map_err(io_error)
 }
 
-pub(crate) fn release_publication(root: &Path, source: &Value, nonce: &str) -> io::Result<()> {
-    let key = key(
-        &source["binding"],
-        source["id"].as_str().ok_or_else(absent)?,
-    )?;
+pub(crate) fn release_publications(root: &Path, releases: &[(&Value, &str)]) -> io::Result<()> {
     let mut db = Bolt::open(open_path(root, false)?).map_err(io_error)?;
     let mut tx = db.begin_rw().map_err(io_error)?;
     let Some(mut root) = tx.bucket_mut(b"note-files") else {
         return Ok(());
     };
-    let Some(mut bucket) = root.bucket_mut(&key) else {
-        return Ok(());
-    };
-    let mut manifest: Value = serde_json::from_slice(bucket.get(b"manifest").ok_or_else(absent)?)?;
-    if manifest["Pins"].is_null() {
-        return Ok(());
+    let mut changed = false;
+    for &(source, nonce) in releases {
+        let key = key(
+            &source["binding"],
+            source["id"].as_str().ok_or_else(absent)?,
+        )?;
+        let Some(mut bucket) = root.bucket_mut(&key) else {
+            continue;
+        };
+        let mut manifest: Value =
+            serde_json::from_slice(bucket.get(b"manifest").ok_or_else(absent)?)?;
+        if manifest["Pins"].is_null() {
+            continue;
+        }
+        let pins = manifest["Pins"]
+            .as_object_mut()
+            .ok_or_else(|| io_error("invalid worker file publication pins"))?;
+        let Some(saved) = pins.get(nonce) else {
+            continue;
+        };
+        let expected = source["files"].as_array().ok_or_else(absent)?;
+        if *saved != json!(expected.iter().map(|file| &file["id"]).collect::<Vec<_>>()) {
+            return Err(io_error("worker publication pin selection changed"));
+        }
+        pins.shift_remove(nonce);
+        bucket
+            .put(b"manifest", serde_json::to_vec(&manifest)?)
+            .map_err(io_error)?;
+        changed = true;
     }
-    let pins = manifest["Pins"]
-        .as_object_mut()
-        .ok_or_else(|| io_error("invalid worker file publication pins"))?;
-    let Some(saved) = pins.get(nonce) else {
-        return Ok(());
-    };
-    let expected = source["files"].as_array().ok_or_else(absent)?;
-    if *saved != json!(expected.iter().map(|file| &file["id"]).collect::<Vec<_>>()) {
-        return Err(io_error("worker publication pin selection changed"));
+    if changed {
+        tx.commit().map_err(io_error)?;
     }
-    pins.shift_remove(nonce);
-    bucket
-        .put(b"manifest", serde_json::to_vec(&manifest)?)
-        .map_err(io_error)?;
-    tx.commit().map_err(io_error)
+    Ok(())
 }
 
 pub(crate) fn manager_note(
@@ -1062,7 +1070,13 @@ mod tests {
         let mut changed_order = source.clone();
         changed_order["files"].as_array_mut().unwrap().reverse();
         assert!(pin_publication(&root, &changed_order, "nonce").is_err());
-        release_publication(&root, &source, "nonce").unwrap();
+        assert!(pin_publication(&root, &source, "next").unwrap().1);
+        assert!(
+            release_publications(&root, &[(&source, "nonce"), (&changed_order, "next")]).is_err()
+        );
+        assert!(!pin_publication(&root, &source, "nonce").unwrap().1);
+        assert!(!pin_publication(&root, &source, "next").unwrap().1);
+        release_publications(&root, &[(&source, "nonce"), (&source, "next")]).unwrap();
         for file in &files {
             let mut worker = Command::new(&binary)
                 .arg("read-file")
