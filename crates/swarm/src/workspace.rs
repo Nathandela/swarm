@@ -608,7 +608,13 @@ fn removed_from_intent(journal: &Path, path: &Path, id: &str, record: &Value) ->
         .as_str()
         .map(Path::new)
         .ok_or_else(|| io::Error::other("worktree: remover is missing Git admin coordinates"))?;
-    if intent != json!({"schema":1,"id":id,"checkout":record,"admin":admin})
+    let admin_identity = &intent["admin_identity"];
+    if intent
+        != json!({"schema":1,"id":id,"checkout":record,"admin":admin,
+        "admin_identity":admin_identity})
+        || admin_identity
+            .as_array()
+            .is_none_or(|parts| parts.len() != 2 || parts.iter().any(|part| !part.is_u64()))
         || admin.parent() != Some(&common.join("worktrees"))
         || git_common(common)? != common
         || directory_identity(common)? != record["common_identity"]
@@ -694,13 +700,26 @@ pub(crate) fn remove(repo: &Path, id: &str, record: &Value, journal: &Path) -> i
         check_remove(repo, path)?;
         if !record["claim"].is_null() {
             let marker = owner_marker(path)?;
+            let admin = marker.parent().expect("owner marker parent");
+            let admin_identity = directory_identity(admin)?;
             runtime::write_json(
                 journal,
                 &json!({
-                    "schema":1,"id":id,"checkout":record,"admin":marker.parent()
+                    "schema":1,"id":id,"checkout":record,"admin":admin,
+                    "admin_identity":admin_identity
                 }),
             )?;
             coordinates(repo, id, record)?;
+            check_remove(repo, path)?;
+            verify_claim_owner(path, id, record)?;
+            if owner_marker(path)? != marker
+                || directory_identity(admin)? != admin_identity
+                || directory_identity(&git_common(path)?)? != record["common_identity"]
+            {
+                return Err(io::Error::other(
+                    "worktree: Git administrative identity changed",
+                ));
+            }
         }
         git(
             repo,

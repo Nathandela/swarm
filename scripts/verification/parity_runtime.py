@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import signal
 import shutil
 import socket
 import struct
@@ -368,6 +369,35 @@ def drive(root, guard):
             daemon = launch_daemon(log)
             fixtures.wait_for(ready, "replacement Rust daemon after worktree marker gap")
             assert owner.read_text() == sibling.split("/")[1]
+            sibling_state = root / "state/rust-v1" / sibling.split("/")[1]
+            original_file = sibling_checkout / "original-work"
+            original_file.write_text("original checkout content")
+            pause_before_force = root / "effects/pause-post-intent"
+            pause_before_force.write_text(str(sibling_state / "checkout-removal.json"))
+            with socket.socket(socket.AF_UNIX) as pending:
+                pending.settimeout(8)
+                pending.connect(str(address))
+                control(pending, "hello", endpoint_id="", protocol_version=1)
+                endpoint = read_control(pending)["endpoint_id"]
+                control(pending, "delete", endpoint_id=endpoint, session_id=sibling)
+                fixtures.wait_for(lambda: (root / "effects/post-intent-paused").is_file(),
+                                  "post-intent checkout verification")
+                pause_before_force.unlink()
+                parked = repo / ".swarm/worktrees/parked-original"
+                try:
+                    git(repo, "worktree", "move", str(sibling_checkout), str(parked))
+                    git(repo, "worktree", "add", "--detach", str(sibling_checkout))
+                    replacement = sibling_checkout / "replacement-work"
+                    replacement.write_text("replacement checkout content")
+                finally:
+                    daemon.send_signal(signal.SIGCONT)
+                assert read_control(pending)["op"] == "error"
+                assert (parked / "original-work").read_text() == "original checkout content"
+                assert replacement.read_text() == "replacement checkout content"
+                git(repo, "worktree", "remove", "--force", str(sibling_checkout))
+                git(repo, "worktree", "move", str(parked), str(sibling_checkout))
+                assert original_file.is_file()
+            print("post-intent worktree replacement refused with both checkouts preserved")
             git(sibling_checkout, "checkout", "--detach")
             invoke("kill", outer)
             assert json.loads(invoke("watch", outer, "--until", "completed", "--timeout", "4s"))["group"] == "completed"
@@ -384,7 +414,6 @@ def drive(root, guard):
                 fixtures.wait_for(lambda: (root / "effects/git-removal-paused").is_file(),
                                   "Git removal before daemon commits the deletion tombstone")
                 assert not sibling_checkout.exists()
-                sibling_state = root / "state/rust-v1" / sibling.split("/")[1]
                 assert (sibling_state / "checkout-removal.json").is_file()
                 assert sibling_state.is_dir()
                 daemon.kill()
@@ -498,6 +527,13 @@ os.execv(fixture, [str(fixture), *sys.argv[1:]])
         checkpoint_git = root / "bin/git"
         checkpoint_git.write_text("""#!/bin/sh
 effects="$(dirname "$0")/../effects"
+if [ "${3-}:${4-}:${5-}" = worktree:list:--porcelain ] &&
+   [ -f "$effects/pause-post-intent" ] &&
+   [ -f "$(cat "$effects/pause-post-intent")" ] &&
+   [ ! -f "$effects/post-intent-paused" ]; then
+    kill -STOP "$PPID" || exit "$?"
+    touch "$effects/post-intent-paused"
+fi
 if [ "${3-}:${4-}:${5-}" = worktree:remove:--force ] &&
    [ -f "$effects/pause-git-removal" ] &&
    [ "${6-}" = "$(cat "$effects/pause-git-removal")" ]; then
