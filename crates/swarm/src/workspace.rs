@@ -965,14 +965,50 @@ mod tests {
         fs::create_dir(&aliases).unwrap();
         fs::remove_dir(root.join(".swarm/worktrees")).unwrap();
         symlink(&aliases, root.join(".swarm/worktrees")).unwrap();
-        assert_eq!(destination_root(&root).unwrap(), aliases);
+        // The test scratch may itself sit under a foreign or invalid Git
+        // marker. Go refuses aliases with that ancestor, even in a fixture.
+        let ambient_marker = fixture.ancestors().any(|ancestor| {
+            !ancestor
+                .join(".git")
+                .symlink_metadata()
+                .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+        });
+        let resolved = destination_root(&root);
+        if ambient_marker {
+            assert!(resolved.is_err());
+        } else {
+            assert_eq!(resolved.unwrap(), aliases);
+        }
+        let policy_reached = std::cell::Cell::new(false);
         assert!(
-            claim(&root, second_id, "Denied", |_| Err(io::Error::other(
-                "out of scope"
-            )))
+            claim(&root, second_id, "Denied", |_| {
+                policy_reached.set(true);
+                Err(io::Error::other("out of scope"))
+            })
             .is_err()
         );
+        assert_eq!(policy_reached.get(), !ambient_marker);
         assert!(fs::read_dir(&aliases).unwrap().next().is_none());
+        fs::remove_file(root.join(".swarm/worktrees")).unwrap();
+        let ambient = fixture.join("ambient");
+        let invalid_git = ambient.join(".git");
+        let contaminated_aliases = ambient.join("aliases");
+        fs::create_dir_all(&invalid_git).unwrap();
+        fs::create_dir(&contaminated_aliases).unwrap();
+        symlink(&contaminated_aliases, root.join(".swarm/worktrees")).unwrap();
+        assert!(
+            claim(&root, second_id, "Denied", |_| {
+                panic!("invalid ancestor Git marker must prevent admission")
+            })
+            .is_err()
+        );
+        assert!(
+            fs::read_dir(&contaminated_aliases)
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        assert!(fs::read_dir(&invalid_git).unwrap().next().is_none());
         fs::remove_file(root.join(".swarm/worktrees")).unwrap();
         symlink(root.join(".git"), root.join(".swarm/worktrees")).unwrap();
         assert!(destination_root(&root).is_err());
