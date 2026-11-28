@@ -1,9 +1,10 @@
 let config, worker, timer;
 let initialized = false, revoked = false;
 let activeTurn = '', externalInput = 0;
-let observation = 0, revalidating = false;
+let observation = 0, revalidating = '';
 let projection;
 const admissions = new Map(), nativeTools = new Map(), pendingToolClosures = new Map();
+const recoveryWaiters = new Set();
 const envelopePrefix = '[SWARM_MANAGER_INPUT_V1:';
 const toolPrefix = 'mcp__swarm_voice__';
 const managerMode = () => Boolean(config?.manager_conversation_id);
@@ -21,15 +22,33 @@ const runtime = ($, path, body) => $.http.fetch('http://localhost' + path, {
 });
 const current = async $ => !revoked && worker &&
   await $.session.id() === worker.native_session_id && !revoked;
+const finishRecovery = ready => {
+  for (const finish of recoveryWaiters) finish(ready);
+};
+const waitForRecovery = ($, signal) => new Promise(resolve => {
+  const finish = ready => {
+    if (!recoveryWaiters.delete(finish)) return;
+    resolve(ready);
+    signal.removeEventListener('abort', abort);
+    timeout.cancel();
+  };
+  const abort = () => finish(false);
+  const timeout = $.clock.after(1500, abort);
+  recoveryWaiters.add(finish);
+  signal.addEventListener('abort', abort, { once: true });
+  if (signal.aborted) abort();
+});
 const retire = async $ => {
   revoked = true;
+  finishRecovery(false);
   timer?.cancel();
   if (config && worker) await report($, 'revoked').catch(() => {});
 };
 const loseObservation = () => {
   observation++;
-  revalidating = true;
+  revalidating = 'proof';
   activeTurn = '';
+  finishRecovery(false);
 };
 const observe = async ($, path, body) => {
   if (!config.native_turns || revalidating) return;
@@ -89,7 +108,11 @@ export function register(on) {
         loseObservation();
         return { drop: 'Swarm native prompt was canceled' };
       }
-      if (revalidating) return { drop: 'Swarm native input proof is being revalidated' };
+      if (revalidating) {
+        if (!await waitForRecovery($, next.signal).catch(() => false)) return { drop: 'Swarm native input proof is being revalidated' };
+        if (!await current($).catch(() => false)) { await retire($); return { drop: reason }; }
+        if (next.signal.aborted || observed !== observation || revalidating) return { drop: 'Swarm native input proof changed' };
+      }
     }
     const machine = managerMode() && event.text.includes(envelopePrefix);
     let admittedNonce;
@@ -190,19 +213,23 @@ export function register(on) {
         if (!await current($)) { await retire($); return; }
         if (managerMode() && !await drainToolClosures($)) return;
         const observed = observation, recovering = revalidating;
-        const reply = await report($, recovering ? 'revalidate' : '');
+        const reply = await report($, recovering === 'proof' ? 'revalidate' : '');
         if (!reply.ok) {
           if (!revoked && observed === observation) await retire($);
           return;
         }
         const result = JSON.parse(reply.text);
-        if (recovering) {
-          if (result === true && !revoked && observed === observation) revalidating = false;
+        if (recovering === 'proof') {
+          if (result === true && !revoked && observed === observation) revalidating = 'confirm';
           return;
         }
         if (result === false && !revoked && observed === observation) {
           loseObservation();
           return;
+        }
+        if (recovering === 'confirm' && !revoked && observed === observation) {
+          revalidating = '';
+          finishRecovery(true);
         }
         const interrupt = result;
         if (!interrupt) return;
