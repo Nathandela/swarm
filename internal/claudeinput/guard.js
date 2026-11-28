@@ -110,8 +110,9 @@ export function register(on) {
       }
       if (revalidating) {
         if (!await waitForRecovery($, next.signal).catch(() => false)) return { drop: 'Swarm native input proof is being revalidated' };
-        if (!await current($).catch(() => false)) { await retire($); return { drop: reason }; }
-        if (next.signal.aborted || observed !== observation || revalidating) return { drop: 'Swarm native input proof changed' };
+        const same = await current($).catch(() => null);
+        if (next.signal.aborted || observed !== observation || revalidating || same === null) return { drop: 'Swarm native input proof changed' };
+        if (!same) { await retire($); return { drop: reason }; }
       }
     }
     const machine = managerMode() && event.text.includes(envelopePrefix);

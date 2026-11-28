@@ -191,6 +191,33 @@ for (const fault of ['observation', 'canceled-prompt']) {
   assert(f.canceled());
 }
 {
+  const f = await fixture(true);
+  const submit = f.hooks.get('prompt.submit');
+  f.response('/activity', async()=>({ok:false,text:'refused'}));
+  await submit(f.$, {text:'owner input',origin:{kind:'composer'}}, f.next);
+  const signal = new AbortController();
+  const canceled = async()=>assert.fail('canceled input forwarded');
+  canceled.signal = signal.signal;
+  const input = {text:'native input',origin:{kind:'plugin',name:'swarm-native-input'}};
+  const waiting = submit(f.$, input, canceled);
+  f.guard(async()=>({ok:true,text:'true'}));
+  await f.tick();
+  const id = f.$.session.id;
+  let identityReads = 0;
+  f.$.session.id = async()=>{
+    if (++identityReads === 2) {
+      signal.abort();
+      throw new Error('native hook context canceled');
+    }
+    return id();
+  };
+  f.guard(async()=>({ok:true,text:'null'}));
+  await f.tick();
+  assert((await waiting).drop);
+  assert(!f.canceled(), 'same conversation retired while checking canceled prompt');
+  assert.equal(await submit(f.$, input, f.next), input);
+}
+{
   const f=await fixture(true,true), nonce='a'.repeat(64), envelope='[SWARM_MANAGER_INPUT_V1:'+nonce+']\nhuman words';
   assert((await f.hooks.get('prompt.submit')(f.$,{text:envelope,origin:{kind:'composer'}},f.next)).drop);
   f.response('/manager-prompt',async()=>({ok:true,text:JSON.stringify({nonce})}));
