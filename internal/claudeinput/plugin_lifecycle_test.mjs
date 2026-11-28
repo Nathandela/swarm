@@ -95,11 +95,50 @@ async function fixture(guard = false, manager = false) {
   assert.equal(f.calls.at(-1).body.external_input,1);
 }
 {
-  const f = await fixture(true);
+  const f = await fixture(true, true);
   f.turnReply(async()=>({ok:false,text:'refused'}));
   await f.hooks.get('turn.start')(f.$,{turnId:'unobserved-main'},f.next);
   assert(f.canceled()); assert.equal(f.calls.at(-1).body.state,'revoked');
-  assert((await f.hooks.get('prompt.submit')(f.$,{text:'later',origin:{kind:'plugin',name:'swarm-native-input'}},f.next)).drop);
+  assert((await f.hooks.get('prompt.submit')(f.$,{text:'later',origin:{kind:'plugin',name:'manager-sender'}},f.next)).drop);
+}
+for (const fault of ['observation', 'canceled-prompt']) {
+  const f = await fixture(true);
+  const hook = f.hooks.get('prompt.submit');
+  const owner = {text:'owner input',origin:{kind:'composer'}};
+  const native = {text:'native input',origin:{kind:'plugin',name:'swarm-native-input'}};
+  await f.hooks.get('turn.start')(f.$, {turnId:'old'}, f.next);
+  if (fault === 'observation') {
+    f.response('/activity', async()=>{throw new Error('temporary transport failure');});
+    assert.equal(await hook(f.$, owner, f.next), owner);
+  } else {
+    let release, entered;
+    const inFlight = new Promise(resolve=>{entered=resolve;});
+    f.guard(()=>new Promise(resolve=>{release=resolve; entered();}));
+    const tick = f.tick();
+    await inFlight;
+    const canceled = async()=>assert.fail('canceled input forwarded');
+    canceled.signal = AbortSignal.abort();
+    assert((await hook(f.$, native, canceled)).drop);
+    release({ok:true,text:JSON.stringify({operation_id:'in-flight',turn_id:'old'})});
+    await tick;
+    assert.equal(f.calls.at(-1).body.state,'rejected');
+  }
+  assert(!f.canceled(), fault + ' retired the same conversation');
+  assert((await hook(f.$, native, f.next)).drop, 'input allowed before fresh proof');
+  f.guard(async()=>({ok:true,text:'false'}));
+  await f.tick();
+  assert.equal(f.calls.at(-1).body.state, 'revalidate');
+  assert((await hook(f.$, native, f.next)).drop, 'guard alone opened input');
+  f.guard(async()=>({ok:true,text:'true'}));
+  await f.tick();
+  assert.equal(await hook(f.$, native, f.next), native);
+  f.guard(async()=>({ok:true,text:JSON.stringify({operation_id:'old-interrupt',turn_id:'old'})}));
+  await f.tick();
+  assert(!f.calls.some(call=>call.path==='native-abort'));
+  f.setID('replacement');
+  await f.tick();
+  assert(f.canceled());
+  assert.equal(f.calls.at(-1).body.state, 'revoked');
 }
 {
   const f=await fixture(true,true), nonce='a'.repeat(64), envelope='[SWARM_MANAGER_INPUT_V1:'+nonce+']\nhuman words';

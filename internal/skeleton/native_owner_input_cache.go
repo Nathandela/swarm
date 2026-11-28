@@ -154,7 +154,7 @@ func (d *Daemon) qualifyNativeOwnerHint(ctx context.Context, local string) owner
 		return hint
 	}
 	hint = ownerInputHint{caps: caps, present: true, shimPID: meta.ShimPID, shimStart: meta.ShimStartTime}
-	hint.caps.NativeOwnerInput = d.probeNativeOwnerInput(ctx, local, caps.SessionInstance)
+	hint.caps.NativeOwnerInput = d.probeNativeOwnerInput(ctx, local, caps.SessionInstance) == nil
 	instance, currentInstance := d.sessionInstance(local)
 	if !currentInstance || instance != caps.SessionInstance {
 		return ownerInputHint{}

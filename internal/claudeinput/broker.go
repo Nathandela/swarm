@@ -86,6 +86,7 @@ type request struct {
 	Turn          *Turn                     `json:"turn,omitempty"`
 	TurnID        string                    `json:"turn_id,omitempty"`
 	ExternalInput uint64                    `json:"external_input,omitempty"`
+	Observation   uint64                    `json:"observation,omitempty"`
 }
 
 type Broker struct {
@@ -102,6 +103,8 @@ type Broker struct {
 	revoked          bool
 	guard            Worker
 	guardSeen        time.Time
+	guardObservation uint64
+	guardRecovering  bool
 	operations       map[string]Message
 	order            []string
 	turn             Turn
@@ -258,8 +261,34 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 			respond(nil)
 			return
 		}
+		if req.State == "revalidate" {
+			if b.revoked || b.replay != nil || b.guard.Generation == "" || req.Observation == 0 || req.Observation < b.guardObservation {
+				refuse("native lifecycle guard cannot revalidate this observation")
+				return
+			}
+			if req.Observation > b.guardObservation {
+				b.guardObservation = req.Observation
+				b.guardRecovering = true
+				b.seen = time.Time{}
+				b.turn = Turn{ExternalInput: b.turn.ExternalInput}
+				for id, command := range b.interrupts {
+					if command.State == "prepared" {
+						command.State = "rejected"
+						b.interrupts[id] = command
+					}
+				}
+			}
+			b.guardSeen = time.Now()
+			b.guardRecovering = time.Since(b.seen) >= proofLifetime
+			respond(live())
+			return
+		}
 		if b.revoked || req.State != "" {
 			refuse("native lifecycle guard retired; explicitly refresh this session")
+			return
+		}
+		if req.Observation != b.guardObservation || b.guardRecovering {
+			refuse("native lifecycle observation changed")
 			return
 		}
 		b.guard = guard
@@ -302,7 +331,9 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		b.worker = worker
-		b.seen = time.Now()
+		if req.OperationID == "" || !b.guardRecovering {
+			b.seen = time.Now()
+		}
 		if req.OperationID != "" {
 			msg, ok := b.operations[req.OperationID]
 			if !ok {
@@ -342,8 +373,9 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		respond(nil)
 	case "/ready":
-		if !live() {
-			refuse("native input is unproven; refresh the session")
+		if reason := b.readinessLocked(); reason != "" {
+			w.Header().Set(readinessHeader, string(reason))
+			refuse(reason.Error())
 			return
 		}
 		respond(b.worker)
@@ -440,6 +472,12 @@ func (c *Client) call(ctx context.Context, path string, req request, out any) er
 	if response.StatusCode == http.StatusGone {
 		return managerproof.ErrQuarantined
 	}
+	if path == "/ready" && response.StatusCode == http.StatusConflict {
+		reason := ReadinessError(response.Header.Get(readinessHeader))
+		if _, known := readinessMessages[reason]; known {
+			return reason
+		}
+	}
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("claude native input refused (%d)", response.StatusCode)
 	}
@@ -451,6 +489,12 @@ func (c *Client) call(ctx context.Context, path string, req request, out any) er
 func (c *Client) Ready(ctx context.Context) (Worker, error) {
 	var out Worker
 	err := c.call(ctx, "/ready", request{}, &out)
+	if err != nil {
+		var reason ReadinessError
+		if !errors.As(err, &reason) && !errors.Is(err, managerproof.ErrQuarantined) {
+			err = readinessUnconfirmed
+		}
+	}
 	return out, err
 }
 func (c *Client) Exchange(ctx context.Context, worker Worker, id, state, reason string) (*Message, error) {

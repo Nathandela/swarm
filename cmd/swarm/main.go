@@ -91,7 +91,7 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|setup-trust|
   swarm teammate message --text s   send a note to your own Swarm manager
   swarm message    submit a semantic message <session> --text s [--operation-id id]
                    or read its receipt with --status --operation-id id
-  swarm requests   list native pending requests <session>, or inspect one with
+  swarm requests   list managed OpenCode requests <session>, or inspect one with
                    --request-id id --native-session-id id
   swarm decide     answer an inspected native request <session> with --request-id id
                    --native-session-id id --request-hash hash --reply once|always|reject|answer

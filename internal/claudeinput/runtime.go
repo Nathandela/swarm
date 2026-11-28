@@ -51,7 +51,7 @@ func (b *Broker) serveRuntimeLocked(path string, req request, live bool, respond
 	}
 	switch path {
 	case "/activity":
-		if b.revoked || req.Worker != b.guard || b.guard.Generation == "" || req.ExternalInput <= b.turn.ExternalInput {
+		if !b.currentGuardObservation(req) || req.ExternalInput <= b.turn.ExternalInput {
 			refuse("invalid external input observation")
 			return true
 		}
@@ -65,7 +65,7 @@ func (b *Broker) serveRuntimeLocked(path string, req request, live bool, respond
 		}
 		respond(nil)
 	case "/turn":
-		if b.revoked || req.Worker != b.guard || b.guard.Generation == "" || req.Turn == nil {
+		if !b.currentGuardObservation(req) || req.Turn == nil {
 			refuse("native lifecycle identity unavailable")
 			return true
 		}
@@ -194,6 +194,10 @@ func (b *Broker) serveRuntimeLocked(path string, req request, live bool, respond
 		return false
 	}
 	return true
+}
+
+func (b *Broker) currentGuardObservation(req request) bool {
+	return !b.revoked && !b.guardRecovering && req.Worker == b.guard && b.guard.Generation != "" && req.Observation == b.guardObservation
 }
 
 func (b *Broker) compactInterruptLocked(id, turn string) (Interrupt, error) {

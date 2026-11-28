@@ -1,6 +1,7 @@
 let config, worker, timer;
 let initialized = false, revoked = false;
 let activeTurn = '', externalInput = 0;
+let observation = 0, revalidating = false;
 let projection;
 const admissions = new Map(), nativeTools = new Map(), pendingToolClosures = new Map();
 const envelopePrefix = '[SWARM_MANAGER_INPUT_V1:';
@@ -11,12 +12,12 @@ const reason = 'Swarm native session ended; explicitly refresh this session';
 const report = ($, state = '') => $.http.fetch('http://localhost/guard', {
   method: 'POST', socketPath: config.socket_path,
   headers: { Authorization: 'Bearer ' + config.token, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ generation: config.generation, worker, state }),
+  body: JSON.stringify({ generation: config.generation, worker, state, observation }),
 });
 const runtime = ($, path, body) => $.http.fetch('http://localhost' + path, {
   method: 'POST', socketPath: config.socket_path,
   headers: { Authorization: 'Bearer ' + config.token, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ generation: config.generation, worker, ...body }),
+  body: JSON.stringify({ generation: config.generation, worker, observation, ...body }),
 });
 const current = async $ => !revoked && worker &&
   await $.session.id() === worker.native_session_id && !revoked;
@@ -25,11 +26,19 @@ const retire = async $ => {
   timer?.cancel();
   if (config && worker) await report($, 'revoked').catch(() => {});
 };
+const loseObservation = () => {
+  observation++;
+  revalidating = true;
+  activeTurn = '';
+};
 const observe = async ($, path, body) => {
-  if (!config.native_turns) return;
+  if (!config.native_turns || revalidating) return;
+  const observed = observation;
   try {
-    if (!(await runtime($, path, body)).ok) await retire($);
-  } catch { await retire($); }
+    if ((await runtime($, path, body)).ok) return;
+  } catch {}
+  if (managerMode()) await retire($);
+  else if (!revoked && observed === observation) loseObservation();
 };
 const attest = async ($, path, body) => {
   try {
@@ -71,8 +80,14 @@ export function register(on) {
   on('session.end', async ($, event, next) => { await retire($); return next(event); });
   // A separate native identity is required: Claude skips the submitting plugin's hooks.
   on('prompt.submit', async ($, event, next) => {
-    if (owned(event) && (!await current($) || next.signal.aborted)) {
-      await retire($); return { drop: reason };
+    if (owned(event)) {
+      if (!await current($)) { await retire($); return { drop: reason }; }
+      if (next.signal.aborted) {
+        if (managerMode()) { await retire($); return { drop: reason }; }
+        loseObservation();
+        return { drop: 'Swarm native prompt was canceled' };
+      }
+      if (revalidating) return { drop: 'Swarm native input proof is being revalidated' };
     }
     const machine = managerMode() && event.text.includes(envelopePrefix);
     let admittedNonce;
@@ -132,7 +147,7 @@ export function register(on) {
     finally { await closeTool($, next, call); }
   });
   on('turn.start', async ($, event, next) => {
-    if (event.agentId !== undefined) return next(event);
+    if (event.agentId !== undefined || revalidating) return next(event);
     activeTurn = event.turnId;
     const input = projection;
     projection = undefined;
@@ -170,12 +185,21 @@ export function register(on) {
       try {
         if (!await current($)) { await retire($); return; }
         if (managerMode() && !await drainToolClosures($)) return;
-        const reply = await report($);
-        if (!reply.ok) { await retire($); return; }
-        const interrupt = JSON.parse(reply.text);
+        const observed = observation, recovering = revalidating;
+        const reply = await report($, recovering ? 'revalidate' : '');
+        if (!reply.ok) {
+          if (!revoked && observed === observation) await retire($);
+          return;
+        }
+        const result = JSON.parse(reply.text);
+        if (recovering) {
+          if (result === true && !revoked && observed === observation) revalidating = false;
+          return;
+        }
+        const interrupt = result;
         if (!interrupt) return;
         let state = 'rejected';
-        if (await current($) && activeTurn === interrupt.turn_id) {
+        if (await current($) && observed === observation && activeTurn === interrupt.turn_id) {
           try { await $.turn.abort({ turnId: interrupt.turn_id }); state = 'accepted'; }
           catch { state = 'uncertain'; }
         }

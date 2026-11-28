@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/claudeinput"
+	"github.com/Nathandela/swarm/internal/managerproof"
 	"github.com/Nathandela/swarm/internal/procstart"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
@@ -64,17 +66,19 @@ func (d *Daemon) resolveSemanticTarget(local string) (string, protocol.ErrorCode
 				return instance, "", nil
 			}
 		}
+		var proofErr error
 		switch current.AgentType {
 		case "codex", "claude":
-			if d.probeNativeOwnerInput(context.Background(), local, instance) {
+			proofErr = d.probeNativeOwnerInput(context.Background(), local, instance)
+			if proofErr == nil {
 				return instance, "", nil
 			}
 		default:
 			// These bridges already perform their own operation-specific readiness checks.
 			return instance, "", nil
 		}
-		if !time.Now().Before(deadline) {
-			return "", protocol.CodeUnavailable, errors.New("native discussion input is temporarily unavailable; retry")
+		if errors.Is(proofErr, claudeinput.ReadinessRetired) || errors.Is(proofErr, managerproof.ErrQuarantined) || !time.Now().Before(deadline) {
+			return "", protocol.CodeUnavailable, proofErr
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
