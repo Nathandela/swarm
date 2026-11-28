@@ -28,7 +28,7 @@ const DescriptorFile = "claude-input.json"
 const maxOperations = 128
 const submissionRefusedHeader = "X-Swarm-Claude-Submission-Refused"
 
-var ErrInputNotSubmitted = errors.New("Claude native input proof changed; nothing was submitted")
+var ErrInputNotSubmitted = errors.New("claude native input proof changed; nothing was submitted")
 
 // SupportedVersion admits stable releases with the native worker input baseline.
 func SupportedVersion(version string) bool {
