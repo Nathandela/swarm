@@ -7,14 +7,20 @@ const guardSource = (await readFile(process.env.SWARM_GUARD_FIXTURE_SOURCE ?? ne
 let copies = 0;
 async function fixture(guard = false, manager = false) {
   const source = guard ? guardSource : senderSource;
-  const hooks = new Map(), calls = [];
-  let id = 'original', tick, canceled = false, nextExchange, nextGuard, nextTurn;
+  const hooks = new Map(), catches = new Map(), calls = [];
+  let id = 'original', tick, expire, canceled = false, nextExchange, nextGuard, nextTurn;
   const responses = new Map();
   const nativeQueue = [];
   const $ = {
     fs: { read: async () => JSON.stringify({ generation: 'shim', socket_path: 'private', token: 'own-token', native_turns: true, sender_name: manager ? 'manager-sender' : 'swarm-native-input', manager_conversation_id: manager ? 'conversation' : '' }) },
     session: { id: async () => id, version: async () => ({ version: '2.1.296' }) },
-    clock: { every: (_, fn) => { tick = fn; return { cancel() { canceled = true; } }; } },
+    clock: {
+      every: (_, fn) => { tick = fn; return { cancel() { canceled = true; } }; },
+      sleep: (_, {signal}) => new Promise((resolve, reject) => {
+        expire = resolve;
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      }),
+    },
     http: { fetch: async (url, options) => {
       const path = new URL(url).pathname, body = JSON.parse(options.body);
       calls.push({ path, body });
@@ -28,12 +34,15 @@ async function fixture(guard = false, manager = false) {
     turn: { abort: async ({turnId}) => { calls.push({path:'native-abort',body:{turnId}}); } },
   };
   const mod = await import('data:text/javascript;base64,' + Buffer.from(source + '\n//' + copies++).toString('base64'));
-  mod.register((name, fn) => { hooks.set(name, fn); });
+  mod.register((name, fn) => {
+    hooks.set(name, fn);
+    return { catch(fn) { catches.set(name, fn); } };
+  });
   const next = async event => event;
   next.signal = new AbortController().signal;
   await hooks.get('session.start')($, {}, next);
-  return { $, calls, hooks, next, nativeQueue, response(path,fn) {responses.set(path,fn);}, tick: () => tick(), setID(value) { id = value; },
-    exchange(fn) { nextExchange = fn; }, guard(fn) {nextGuard=fn;}, turnReply(fn) {nextTurn=fn;}, canceled: () => canceled };
+  return { $, calls, hooks, catches, next, nativeQueue, response(path,fn) {responses.set(path,fn);}, tick: () => tick(), setID(value) { id = value; },
+    exchange(fn) { nextExchange = fn; }, guard(fn) {nextGuard=fn;}, turnReply(fn) {nextTurn=fn;}, canceled: () => canceled, expire: () => expire() };
 }
 {
   const f = await fixture(); f.setID('replacement'); await f.tick();
@@ -95,11 +104,139 @@ async function fixture(guard = false, manager = false) {
   assert.equal(f.calls.at(-1).body.external_input,1);
 }
 {
-  const f = await fixture(true);
+  const f = await fixture(true, true);
   f.turnReply(async()=>({ok:false,text:'refused'}));
   await f.hooks.get('turn.start')(f.$,{turnId:'unobserved-main'},f.next);
   assert(f.canceled()); assert.equal(f.calls.at(-1).body.state,'revoked');
-  assert((await f.hooks.get('prompt.submit')(f.$,{text:'later',origin:{kind:'plugin',name:'swarm-native-input'}},f.next)).drop);
+  assert((await f.hooks.get('prompt.submit')(f.$,{text:'later',origin:{kind:'plugin',name:'manager-sender'}},f.next)).drop);
+}
+for (const fault of ['observation', 'canceled-prompt']) {
+  const f = await fixture(true);
+  const hook = f.hooks.get('prompt.submit');
+  const owner = {text:'owner input',origin:{kind:'composer'}};
+  const native = {text:'native input',origin:{kind:'plugin',name:'swarm-native-input'}};
+  await f.hooks.get('turn.start')(f.$, {turnId:'old'}, f.next);
+  if (fault === 'observation') {
+    f.response('/activity', async()=>{throw new Error('temporary transport failure');});
+    assert.equal(await hook(f.$, owner, f.next), owner);
+  } else {
+    let release, entered;
+    const inFlight = new Promise(resolve=>{entered=resolve;});
+    f.guard(()=>new Promise(resolve=>{release=resolve; entered();}));
+    const tick = f.tick();
+    await inFlight;
+    const canceled = async()=>assert.fail('canceled input forwarded');
+    canceled.signal = AbortSignal.abort();
+    assert((await hook(f.$, native, canceled)).drop);
+    release({ok:true,text:JSON.stringify({operation_id:'in-flight',turn_id:'old'})});
+    await tick;
+    assert.equal(f.calls.at(-1).body.state,'rejected');
+  }
+  assert(!f.canceled(), fault + ' retired the same conversation');
+  const expiring = hook(f.$, native, f.next);
+  f.guard(async()=>({ok:true,text:'false'}));
+  await f.tick();
+  assert.equal(f.calls.at(-1).body.state, 'revalidate');
+  f.expire();
+  assert((await expiring).drop, 'unverified proof did not time out');
+  let forwarded = false;
+  const next = async event=>{forwarded=true; return event;};
+  next.signal = f.next.signal;
+  const waiting = hook(f.$, native, next);
+  f.guard(async()=>({ok:true,text:'true'}));
+  await f.tick();
+  assert(!forwarded, 'input forwarded before guard confirmation');
+  const before = f.calls.length;
+  assert.equal(await hook(f.$, owner, f.next), owner);
+  assert.equal(f.calls.length, before, 'owner input restarted recovery during confirmation');
+  f.guard(async()=>({ok:true,text:'null'}));
+  await f.tick();
+  assert.equal(f.calls.at(-1).body.state, '');
+  assert.equal(await waiting, native);
+  assert(forwarded);
+  f.guard(async()=>({ok:true,text:JSON.stringify({operation_id:'old-interrupt',turn_id:'old'})}));
+  await f.tick();
+  assert(!f.calls.some(call=>call.path==='native-abort'));
+  f.setID('replacement');
+  await f.tick();
+  assert(f.canceled());
+  assert.equal(f.calls.at(-1).body.state, 'revoked');
+}
+{
+  const f = await fixture(true);
+  const id = f.$.session.id;
+  let release;
+  f.$.session.id = () => new Promise(resolve=>{release=resolve;});
+  const stale = f.hooks.get('turn.start')(f.$, {turnId:'old'}, f.next);
+  f.$.session.id = id;
+  const canceled = async()=>assert.fail('canceled input forwarded');
+  canceled.signal = AbortSignal.abort();
+  const input = {text:'native input',origin:{kind:'plugin',name:'swarm-native-input'}};
+  assert((await f.hooks.get('prompt.submit')(f.$, input, canceled)).drop);
+  f.guard(async()=>({ok:true,text:'true'}));
+  await f.tick();
+  f.guard(async()=>({ok:true,text:'null'}));
+  await f.tick();
+  release(await id());
+  await stale;
+  assert(!f.calls.some(call=>call.path==='/turn' && call.body.turn.turn_id==='old'));
+  await f.hooks.get('turn.start')(f.$, {turnId:'new'}, f.next);
+  assert(f.calls.some(call=>call.path==='/turn' && call.body.turn.turn_id==='new'));
+}
+{
+  const f = await fixture(true);
+  const submit = f.hooks.get('prompt.submit');
+  f.response('/activity', async()=>({ok:false,text:'refused'}));
+  await submit(f.$, {text:'owner input',origin:{kind:'composer'}}, f.next);
+  const input = {text:'native input',origin:{kind:'plugin',name:'swarm-native-input'}};
+  const blocked = async()=>assert.fail('unverified input forwarded');
+  blocked.signal = f.next.signal;
+  f.$.clock.sleep = async()=>{throw new Error('clock refused the recovery delay');};
+  assert((await submit(f.$, input, blocked)).drop);
+  const onError = f.catches.get('prompt.submit');
+  assert(onError(f.$, input, blocked).drop, 'hook failure let native input proceed');
+  const owner = {text:'owner input',origin:{kind:'composer'}};
+  assert.equal(await onError(f.$, owner, f.next), owner);
+}
+{
+  const f = await fixture(true);
+  const submit = f.hooks.get('prompt.submit');
+  f.response('/activity', async()=>({ok:false,text:'refused'}));
+  await submit(f.$, {text:'owner input',origin:{kind:'composer'}}, f.next);
+  const waiting = submit(f.$, {text:'native input',origin:{kind:'plugin',name:'swarm-native-input'}}, f.next);
+  f.guard(async()=>({ok:true,text:'true'}));
+  await f.tick();
+  f.setID('replacement');
+  await f.tick();
+  assert((await waiting).drop, 'held prompt reached the replacement conversation');
+  assert(f.canceled());
+}
+{
+  const f = await fixture(true);
+  const submit = f.hooks.get('prompt.submit');
+  f.response('/activity', async()=>({ok:false,text:'refused'}));
+  await submit(f.$, {text:'owner input',origin:{kind:'composer'}}, f.next);
+  const signal = new AbortController();
+  const canceled = async()=>assert.fail('canceled input forwarded');
+  canceled.signal = signal.signal;
+  const input = {text:'native input',origin:{kind:'plugin',name:'swarm-native-input'}};
+  const waiting = submit(f.$, input, canceled);
+  f.guard(async()=>({ok:true,text:'true'}));
+  await f.tick();
+  const id = f.$.session.id;
+  let identityReads = 0;
+  f.$.session.id = async()=>{
+    if (++identityReads === 2) {
+      signal.abort();
+      throw new Error('native hook context canceled');
+    }
+    return id();
+  };
+  f.guard(async()=>({ok:true,text:'null'}));
+  await f.tick();
+  assert((await waiting).drop);
+  assert(!f.canceled(), 'same conversation retired while checking canceled prompt');
+  assert.equal(await submit(f.$, input, f.next), input);
 }
 {
   const f=await fixture(true,true), nonce='a'.repeat(64), envelope='[SWARM_MANAGER_INPUT_V1:'+nonce+']\nhuman words';

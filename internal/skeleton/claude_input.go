@@ -40,7 +40,7 @@ func (d *Daemon) sendClaudeNative(local, operationID string, req protocol.Compos
 	client := claudeinput.NewClient(desc)
 	proof, err := client.Ready(ctx)
 	if err != nil {
-		return protocol.CodeStructuredUnsupported, errors.New("claude native message input is unproven; explicitly refresh this session before sending")
+		return protocol.CodeStructuredUnsupported, err
 	}
 	var managerAdmission *protocol.ManagerAdmission
 	if req.ManagerAdmission != nil {
@@ -81,6 +81,9 @@ func (d *Daemon) sendClaudeNative(local, operationID string, req protocol.Compos
 		_, err = client.Submit(ctx, proof, operationID, req.Text)
 	}
 	lane.mu.Unlock()
+	if errors.Is(err, claudeinput.ErrInputNotSubmitted) {
+		return protocol.CodeInputBusy, err
+	}
 	if err != nil {
 		return protocol.CodeOutcomeUnknown, fmt.Errorf("%w: native submission is unconfirmed and will not be replayed", protocol.ErrComposerOutcomeUnknown)
 	}

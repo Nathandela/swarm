@@ -9,6 +9,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/opencodebridge"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
@@ -40,6 +41,13 @@ func nativeDecisionResult(id string, req protocol.NativeDecisionReq) protocol.Na
 }
 
 func (d *Daemon) NativeRequests(local, requestID, target string) (protocol.NativeRequestsReply, error) {
+	meta, ok := d.core.Get(local)
+	if !ok {
+		return protocol.NativeRequestsReply{}, errors.New("native request session is unavailable")
+	}
+	if meta.AgentType != "opencode" || meta.RequiredRuntime != persist.RequiredRuntimeOpenCode {
+		return protocol.NativeRequestsReply{}, protocol.ErrNativeRequestsUnsupported
+	}
 	view, ok := d.openCodeView(local)
 	if !ok || !view.CurrentScopeKnown || len(view.Pending) > 128 {
 		return protocol.NativeRequestsReply{}, errors.New("native current request scope is unconfirmed")

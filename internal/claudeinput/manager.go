@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/Nathandela/swarm/internal/managerproof"
 )
@@ -57,9 +56,6 @@ func (c *Client) ResolveManagerCall(ctx context.Context, worker Worker, req mana
 	var out managerproof.Proof
 	err := c.call(ctx, "/manager-resolve", request{Worker: worker, ProofRequest: &req}, &out)
 	return out, err
-}
-func (b *Broker) liveLocked() bool {
-	return !b.revoked && b.worker.Generation != "" && b.guard.Generation != "" && b.guard.NativeSessionID == b.worker.NativeSessionID && b.guard.Version == b.worker.Version && time.Since(b.seen) < 3*time.Second && time.Since(b.guardSeen) < 3*time.Second
 }
 func (b *Broker) serveManagerLocked(path string, req request, respond func(any), refuse func(string)) bool {
 	switch path {

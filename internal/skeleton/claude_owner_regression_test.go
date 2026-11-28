@@ -3,6 +3,7 @@ package skeleton
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -72,5 +73,31 @@ func TestClaudeOwnerUnknownEnrollmentNeverFallsBack(t *testing.T) {
 	code, err := r.sk.api.SemanticSendTransactional(r.sk.api.endpointID, "owner-unknown", protocol.ComposerSendReq{Session: r.session, Text: "must not type"}, func() error { began = true; return nil })
 	if err == nil || code != protocol.CodeStructuredUnsupported || began {
 		t.Fatalf("unknown enrollment bypass: code=%s err=%v began=%t", code, err, began)
+	}
+}
+
+func TestClaudeRetiredTargetAndUnsupportedRequestsReportDifferentReasons(t *testing.T) {
+	r := newClaudeReceiptRig(t)
+	c, err := protocol.Dial(r.sk.SocketPath(), []string{protocol.CapSemanticTarget, protocol.CapNativeRequests})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	if instance, err := c.SemanticTarget(r.session); err != nil || instance != r.instance {
+		t.Fatalf("live target: %q %v", instance, err)
+	}
+	if err := r.client.Revoke(t.Context(), r.worker); err != nil {
+		t.Fatal(err)
+	}
+	if instance, err := c.SemanticTarget(r.session); instance != "" || err == nil || !strings.Contains(err.Error(), claudeinput.ReadinessRetired.Error()) {
+		t.Fatalf("retired target: %q %v", instance, err)
+	}
+	for _, req := range []protocol.NativeRequestsReq{
+		{Session: r.session},
+		{Session: r.session, RequestID: "request", NativeSessionID: "native"},
+	} {
+		if _, err := c.NativeRequests(req); err == nil || !strings.Contains(err.Error(), protocol.ErrNativeRequestsUnsupported.Error()+" ("+string(protocol.CodeNotImplemented)+")") {
+			t.Fatalf("Claude request capability: %v", err)
+		}
 	}
 }

@@ -2,8 +2,99 @@ package claudeinput
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
+
+func TestGuardRevalidationRequiresFreshProofAndDiscardsOldTurn(t *testing.T) {
+	b, err := Start(shortDir(t), "session", "2.1.332", 123, 456)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = b.Close() }()
+	c := NewClient(b.Descriptor())
+	ctx := t.Context()
+	sender := Worker{NativeSessionID: "native", Generation: "sender", Version: "2.1.332"}
+	guard := sender
+	guard.Generation = "guard"
+	if err := c.Guard(ctx, guard, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Exchange(ctx, sender, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	oldTurn := Turn{TurnID: "old", State: "running"}
+	if err := c.call(ctx, "/turn", request{Worker: guard, Turn: &oldTurn}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Interrupt(ctx, sender, "old-stop", oldTurn.TurnID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Submit(ctx, sender, "prior", "existing input"); err != nil {
+		t.Fatal(err)
+	}
+	if msg, err := c.Exchange(ctx, sender, "", "", ""); err != nil || msg == nil {
+		t.Fatalf("prior claim: %+v %v", msg, err)
+	}
+	revalidate := request{Worker: guard, State: "revalidate", Observation: 1}
+	var ready bool
+	if err := c.call(ctx, "/guard", revalidate, &ready); err != nil || ready {
+		t.Fatalf("guard alone recovered input: %v %v", ready, err)
+	}
+	if _, err := c.Ready(ctx); !errors.Is(err, readinessRecovering) {
+		t.Fatalf("readiness during recovery: %v", err)
+	}
+	if _, err := c.Submit(ctx, sender, "blocked", "must not be delivered"); !errors.Is(err, ErrInputNotSubmitted) {
+		t.Fatalf("broker did not explicitly refuse new input: %v", err)
+	}
+	if _, err := c.Submit(ctx, sender, "prior", "existing input"); err == nil || errors.Is(err, ErrInputNotSubmitted) {
+		t.Fatalf("broker declared a prior claim unsubmitted: %v", err)
+	}
+	if _, err := c.Exchange(ctx, sender, "prior", "started", ""); err != nil {
+		t.Fatal(err)
+	}
+	if receipt, err := c.Operation(ctx, sender, "prior"); err != nil || receipt.State != "started" {
+		t.Fatalf("prior receipt lost: %+v %v", receipt, err)
+	}
+	if err := c.call(ctx, "/guard", revalidate, &ready); err != nil || ready {
+		t.Fatalf("receipt was counted as a heartbeat: %v %v", ready, err)
+	}
+	other := sender
+	other.NativeSessionID = "replacement"
+	if _, err := c.Exchange(ctx, other, "", "", ""); err == nil {
+		t.Fatal("replacement sender renewed old proof")
+	}
+	if msg, err := c.Exchange(ctx, sender, "", "", ""); err != nil || msg != nil {
+		t.Fatalf("sender claimed input before revalidation: %+v %v", msg, err)
+	}
+	if err := c.call(ctx, "/guard", revalidate, &ready); err != nil || !ready {
+		t.Fatalf("matching fresh proofs could not recover: %v %v", ready, err)
+	}
+	if _, err := c.Ready(ctx); !errors.Is(err, readinessRecovering) {
+		t.Fatalf("input opened before the guard confirmed receipt: %v", err)
+	}
+	if _, err := c.Submit(ctx, sender, "early", "must remain fenced"); err == nil {
+		t.Fatal("broker accepted input before guard confirmation")
+	}
+	if err := c.call(ctx, "/guard", request{Worker: guard, Observation: 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if proof, err := c.Ready(ctx); err != nil || proof != sender {
+		t.Fatalf("recovered identity changed: %+v %v", proof, err)
+	}
+	if err := c.call(ctx, "/turn", request{Worker: guard, Turn: &oldTurn}, nil); err == nil {
+		t.Fatal("stale observation repopulated the turn")
+	}
+	if _, err := c.Turn(ctx, sender); err == nil {
+		t.Fatal("stale turn became readable after recovery")
+	}
+	if stop, err := c.Interrupt(ctx, sender, "old-stop", oldTurn.TurnID); err != nil || stop.State != "rejected" {
+		t.Fatalf("prepared stale interrupt was not retired: %+v %v", stop, err)
+	}
+	if _, err := c.Submit(ctx, sender, "new", "new input"); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestMainTurnLifecycleAndExactInterrupt(t *testing.T) {
 	b, err := Start(shortDir(t), "session", "2.1.319", 123, 456)

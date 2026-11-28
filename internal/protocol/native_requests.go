@@ -12,6 +12,8 @@ import (
 
 const OpNativeRequests = "native_requests"
 
+var ErrNativeRequestsUnsupported = errors.New("native request inspection requires a managed OpenCode session")
+
 type (
 	NativeRequestsReq    = schema.NativeRequestsReq
 	NativeRequestsReply  = schema.NativeRequestsReply
@@ -77,7 +79,11 @@ func (cc *clientConn) handleNativeRequests(c Control) {
 	}
 	result, err := reader.NativeRequests(local, c.NativeRequests.RequestID, c.NativeRequests.NativeSessionID)
 	if err != nil {
-		cc.replyErrorCode("native requests: "+err.Error(), CodeUnavailable)
+		code := CodeUnavailable
+		if errors.Is(err, ErrNativeRequestsUnsupported) {
+			code = CodeNotImplemented
+		}
+		cc.replyErrorCode(err.Error(), code)
 		return
 	}
 	result.Session = c.SessionID

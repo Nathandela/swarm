@@ -29,20 +29,22 @@ func TestManagerBrokerTerminalTurnsReleaseLiveSlots(t *testing.T) {
 	worker := Worker{NativeSessionID: "native", Generation: "sender", Version: "2.1.319"}
 	guard := worker
 	guard.Generation = "guard"
-	if err = c.Guard(ctx, guard, false); err != nil {
-		t.Fatal(err)
+	refresh := func() {
+		t.Helper()
+		if err := c.Guard(ctx, guard, false); err != nil {
+			t.Fatal(err)
+		}
+		if queued, err := c.Exchange(ctx, worker, "", "", ""); err != nil || queued != nil {
+			t.Fatalf("heartbeat with no pending input: %+v %v", queued, err)
+		}
 	}
-	if _, err = c.Exchange(ctx, worker, "", "", ""); err != nil {
-		t.Fatal(err)
-	}
+	refresh()
 	binding := managerproof.Binding{Session: "session", SessionInstance: "instance", ConversationID: "conversation", Provider: "claude", NativeSessionID: "native", NativeGeneration: "physical", ObservationGeneration: b.Descriptor().Generation + ":" + guard.Generation, LoginEpoch: "account"}
 	if err = c.BindManager(ctx, worker, binding); err != nil {
 		t.Fatal(err)
 	}
 	for i := range 200 {
-		if err = c.Guard(ctx, guard, false); err != nil {
-			t.Fatal(err)
-		}
+		refresh()
 		nonce := fmt.Sprintf("%064x", i+1)
 		op, turn := fmt.Sprint("op-", i), fmt.Sprint("turn-", i)
 		if _, err = c.SubmitManager(ctx, worker, op, "neutral human text", managerproof.Admission{Binding: binding, Nonce: nonce}); err != nil {
@@ -73,6 +75,11 @@ func TestManagerBrokerTerminalTurnsReleaseLiveSlots(t *testing.T) {
 			if err = c.call(ctx, "/manager-tool", request{Worker: guard, Call: &call}, nil); err != nil {
 				t.Fatal(err)
 			}
+			// The retention check starts after the asynchronous proof is durable.
+			if err = b.custody.Do(ctx, 0, func(context.Context) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			refresh()
 			hash, _ := managerproof.ArgumentsHash(call.Arguments)
 			if _, err = c.ResolveManagerCall(ctx, worker, managerproof.CallRequest{Binding: binding, ToolName: "publish", ArgumentsHash: hash, HostMeta: []byte(fmt.Sprintf(`{"claudecode/toolUseId":%q}`, call.CallID))}); err != nil {
 				t.Fatal(err)

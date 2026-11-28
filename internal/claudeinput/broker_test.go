@@ -3,6 +3,10 @@ package claudeinput
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -267,8 +271,8 @@ func TestNativeBindingRequiresIndependentLifecycleGuard(t *testing.T) {
 	b.mu.Lock()
 	b.guardSeen = time.Now().Add(-4 * time.Second)
 	b.mu.Unlock()
-	if _, err := c.Ready(ctx); err == nil {
-		t.Fatal("expired guard advertised input")
+	if _, err := c.Ready(ctx); !errors.Is(err, readinessExpired) {
+		t.Fatalf("expired guard readiness: %v", err)
 	}
 	if _, err := c.Submit(ctx, worker, "no-guard", "not delivered"); err == nil {
 		t.Fatal("expired guard admitted input")
@@ -276,11 +280,14 @@ func TestNativeBindingRequiresIndependentLifecycleGuard(t *testing.T) {
 	if err := c.Guard(ctx, guard, false); err != nil {
 		t.Fatal(err)
 	}
+	if proof, err := c.Ready(ctx); err != nil || proof != worker {
+		t.Fatalf("same guard heartbeat did not recover expiry: %+v %v", proof, err)
+	}
 	if err := c.Guard(ctx, guard, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Ready(ctx); err == nil {
-		t.Fatal("retired guard kept sender ready")
+	if _, err := c.Ready(ctx); !errors.Is(err, ReadinessRetired) {
+		t.Fatalf("retired guard readiness: %v", err)
 	}
 	if err := c.Guard(ctx, guard, false); err == nil {
 		t.Fatal("guard heartbeat rearmed retired session")
@@ -310,5 +317,18 @@ func TestDescriptorWithoutLifecycleFenceRequiresExplicitRefresh(t *testing.T) {
 	}
 	if _, err := ReadDescriptor(dir); err == nil {
 		t.Fatal("surviving old shim silently acquired lifecycle support")
+	}
+}
+
+func TestLegacyReadyRefusalKeepsRefreshGuidance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "native input is unproven; refresh the session", http.StatusConflict)
+	}))
+	defer server.Close()
+	c := &Client{http: &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	}}}}
+	if _, err := c.Ready(t.Context()); !errors.Is(err, readinessLegacy) {
+		t.Fatalf("legacy broker refusal lost refresh guidance: %v", err)
 	}
 }
