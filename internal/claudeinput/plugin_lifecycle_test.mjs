@@ -7,7 +7,7 @@ const guardSource = (await readFile(process.env.SWARM_GUARD_FIXTURE_SOURCE ?? ne
 let copies = 0;
 async function fixture(guard = false, manager = false) {
   const source = guard ? guardSource : senderSource;
-  const hooks = new Map(), calls = [];
+  const hooks = new Map(), catches = new Map(), calls = [];
   let id = 'original', tick, expire, canceled = false, nextExchange, nextGuard, nextTurn;
   const responses = new Map();
   const nativeQueue = [];
@@ -16,7 +16,10 @@ async function fixture(guard = false, manager = false) {
     session: { id: async () => id, version: async () => ({ version: '2.1.296' }) },
     clock: {
       every: (_, fn) => { tick = fn; return { cancel() { canceled = true; } }; },
-      after: (_, fn) => { expire = fn; return { cancel() {} }; },
+      sleep: (_, {signal}) => new Promise((resolve, reject) => {
+        expire = resolve;
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      }),
     },
     http: { fetch: async (url, options) => {
       const path = new URL(url).pathname, body = JSON.parse(options.body);
@@ -31,11 +34,14 @@ async function fixture(guard = false, manager = false) {
     turn: { abort: async ({turnId}) => { calls.push({path:'native-abort',body:{turnId}}); } },
   };
   const mod = await import('data:text/javascript;base64,' + Buffer.from(source + '\n//' + copies++).toString('base64'));
-  mod.register((name, fn) => { hooks.set(name, fn); });
+  mod.register((name, fn) => {
+    hooks.set(name, fn);
+    return { catch(fn) { catches.set(name, fn); } };
+  });
   const next = async event => event;
   next.signal = new AbortController().signal;
   await hooks.get('session.start')($, {}, next);
-  return { $, calls, hooks, next, nativeQueue, response(path,fn) {responses.set(path,fn);}, tick: () => tick(), setID(value) { id = value; },
+  return { $, calls, hooks, catches, next, nativeQueue, response(path,fn) {responses.set(path,fn);}, tick: () => tick(), setID(value) { id = value; },
     exchange(fn) { nextExchange = fn; }, guard(fn) {nextGuard=fn;}, turnReply(fn) {nextTurn=fn;}, canceled: () => canceled, expire: () => expire() };
 }
 {
@@ -176,6 +182,21 @@ for (const fault of ['observation', 'canceled-prompt']) {
   assert(!f.calls.some(call=>call.path==='/turn' && call.body.turn.turn_id==='old'));
   await f.hooks.get('turn.start')(f.$, {turnId:'new'}, f.next);
   assert(f.calls.some(call=>call.path==='/turn' && call.body.turn.turn_id==='new'));
+}
+{
+  const f = await fixture(true);
+  const submit = f.hooks.get('prompt.submit');
+  f.response('/activity', async()=>({ok:false,text:'refused'}));
+  await submit(f.$, {text:'owner input',origin:{kind:'composer'}}, f.next);
+  const input = {text:'native input',origin:{kind:'plugin',name:'swarm-native-input'}};
+  const blocked = async()=>assert.fail('unverified input forwarded');
+  blocked.signal = f.next.signal;
+  f.$.clock.sleep = async()=>{throw new Error('clock refused the recovery delay');};
+  assert((await submit(f.$, input, blocked)).drop);
+  const onError = f.catches.get('prompt.submit');
+  assert(onError(f.$, input, blocked).drop, 'hook failure let native input proceed');
+  const owner = {text:'owner input',origin:{kind:'composer'}};
+  assert.equal(await onError(f.$, owner, f.next), owner);
 }
 {
   const f = await fixture(true);

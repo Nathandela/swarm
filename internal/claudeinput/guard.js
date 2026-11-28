@@ -8,7 +8,7 @@ const recoveryWaiters = new Set();
 const envelopePrefix = '[SWARM_MANAGER_INPUT_V1:';
 const toolPrefix = 'mcp__swarm_voice__';
 const managerMode = () => Boolean(config?.manager_conversation_id);
-const owned = event => event.origin.kind === 'plugin' && event.origin.name.split('@')[0] === (config.sender_name ?? 'swarm-native-input');
+const owned = event => event.origin.kind === 'plugin' && event.origin.name.split('@')[0] === (config?.sender_name ?? 'swarm-native-input');
 const reason = 'Swarm native session ended; explicitly refresh this session';
 const report = ($, state = '') => $.http.fetch('http://localhost/guard', {
   method: 'POST', socketPath: config.socket_path,
@@ -26,17 +26,21 @@ const finishRecovery = ready => {
   for (const finish of recoveryWaiters) finish(ready);
 };
 const waitForRecovery = ($, signal) => new Promise(resolve => {
+  const deadline = new AbortController();
   const finish = ready => {
     if (!recoveryWaiters.delete(finish)) return;
     resolve(ready);
     signal.removeEventListener('abort', abort);
-    timeout.cancel();
+    deadline.abort();
   };
   const abort = () => finish(false);
-  const timeout = $.clock.after(1500, abort);
   recoveryWaiters.add(finish);
   signal.addEventListener('abort', abort, { once: true });
   if (signal.aborted) abort();
+  else {
+    try { $.clock.sleep(1500, { signal: deadline.signal }).then(abort, abort); }
+    catch { abort(); }
+  }
 });
 const retire = async $ => {
   revoked = true;
@@ -130,6 +134,11 @@ export function register(on) {
     const result=await next(event);
     if(admittedNonce && result?.drop) admissions.delete(admittedNonce);
     return result;
+  }).catch((_, event, next) => {
+    if (!next.called && (owned(event) || managerMode() && event.text.includes(envelopePrefix))) {
+      return { drop: 'Swarm native input guard could not verify this prompt' };
+    }
+    return next(event);
   });
   on('session.append', async ($, event, next) => {
     const stored = await next(event);
