@@ -80,8 +80,10 @@ export function register(on) {
   on('session.end', async ($, event, next) => { await retire($); return next(event); });
   // A separate native identity is required: Claude skips the submitting plugin's hooks.
   on('prompt.submit', async ($, event, next) => {
+    const observed = observation;
     if (owned(event)) {
       if (!await current($)) { await retire($); return { drop: reason }; }
+      if (observed !== observation) return { drop: 'Swarm native input proof changed' };
       if (next.signal.aborted) {
         if (managerMode()) { await retire($); return { drop: reason }; }
         loseObservation();
@@ -98,7 +100,7 @@ export function register(on) {
       admissions.set(proof.value.nonce, event.text);
       admittedNonce=proof.value.nonce;
     }
-    if ((!owned(event) || managerMode() && !machine) && await current($)) {
+    if ((!owned(event) || managerMode() && !machine) && await current($) && observed === observation) {
       await observe($, '/activity', { external_input: ++externalInput });
     }
     const result=await next(event);
@@ -148,21 +150,23 @@ export function register(on) {
   });
   on('turn.start', async ($, event, next) => {
     if (event.agentId !== undefined || revalidating) return next(event);
+    const observed = observation;
     activeTurn = event.turnId;
     const input = projection;
     projection = undefined;
     if (input && input.text !== event.text) { await retire($); return next(event); }
     const turn = { turn_id: activeTurn, state: 'running' };
     if (input) { turn.native_input_id = input.nonce; turn.native_message_id = input.messageID; admissions.delete(input.nonce); }
-    if (await current($)) await observe($, '/turn', { turn, projection: input?.text });
+    if (await current($) && observed === observation) await observe($, '/turn', { turn, projection: input?.text });
     return next(event);
   });
   on('turn.complete', async ($, event, next) => {
     if (managerMode() && !await drainToolClosures($)) return next(event);
+    const observed = observation;
     const main = event.agentId === undefined && event.turnId === activeTurn;
     if (main) {
       activeTurn = '';
-      if (await current($)) await observe($, '/turn', { turn: { turn_id: event.turnId, state: 'completed', reason: event.reason } });
+      if (await current($) && observed === observation) await observe($, '/turn', { turn: { turn_id: event.turnId, state: 'completed', reason: event.reason } });
     }
     const result = await next(event);
     if (managerMode() && main && activeTurn === '' && await current($)) await attest($, '/manager-idle', { turn_id: event.turnId });
@@ -194,6 +198,10 @@ export function register(on) {
         const result = JSON.parse(reply.text);
         if (recovering) {
           if (result === true && !revoked && observed === observation) revalidating = false;
+          return;
+        }
+        if (result === false && !revoked && observed === observation) {
+          loseObservation();
           return;
         }
         const interrupt = result;

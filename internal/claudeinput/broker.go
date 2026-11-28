@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +26,9 @@ import (
 
 const DescriptorFile = "claude-input.json"
 const maxOperations = 128
+const submissionRefusedHeader = "X-Swarm-Claude-Submission-Refused"
+
+var ErrInputNotSubmitted = errors.New("Claude native input proof changed; nothing was submitted")
 
 // SupportedVersion admits stable releases with the native worker input baseline.
 func SupportedVersion(version string) bool {
@@ -279,20 +283,30 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			b.guardSeen = time.Now()
-			b.guardRecovering = time.Since(b.seen) >= proofLifetime
-			respond(live())
+			// The guard can reopen locally after this reply reaches it.
+			respond(time.Since(b.seen) < proofLifetime)
 			return
 		}
 		if b.revoked || req.State != "" {
 			refuse("native lifecycle guard retired; explicitly refresh this session")
 			return
 		}
-		if req.Observation != b.guardObservation || b.guardRecovering {
+		if req.Observation != b.guardObservation {
 			refuse("native lifecycle observation changed")
 			return
 		}
 		b.guard = guard
 		b.guardSeen = time.Now()
+		if b.guardRecovering {
+			// The matching normal heartbeat confirms that the guard has reopened.
+			if time.Since(b.seen) >= proofLifetime {
+				respond(false)
+				return
+			}
+			b.guardRecovering = false
+			respond(nil)
+			return
+		}
 		var pending *Interrupt
 		for id, command := range b.interrupts {
 			if command.State != "prepared" {
@@ -381,6 +395,9 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 		respond(b.worker)
 	case "/submit":
 		if !live() || req.Worker != b.worker {
+			if _, exists := b.operations[req.OperationID]; !exists && b.replay == nil {
+				w.Header().Set(submissionRefusedHeader, "1")
+			}
 			refuse("native input proof is stale")
 			return
 		}
@@ -477,6 +494,13 @@ func (c *Client) call(ctx context.Context, path string, req request, out any) er
 		if _, known := readinessMessages[reason]; known {
 			return reason
 		}
+		raw, err := io.ReadAll(io.LimitReader(response.Body, 128))
+		if err == nil && strings.TrimSpace(string(raw)) == "native input is unproven; refresh the session" {
+			return readinessLegacy
+		}
+	}
+	if path == "/submit" && response.StatusCode == http.StatusConflict && response.Header.Get(submissionRefusedHeader) == "1" {
+		return ErrInputNotSubmitted
 	}
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("claude native input refused (%d)", response.StatusCode)

@@ -1,12 +1,15 @@
 package skeleton
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -319,5 +322,75 @@ func TestClaudeMissingNativeGuardRefusesBeforeBegin(t *testing.T) {
 	message, err := r.client.Exchange(context.Background(), r.worker, "", "", "")
 	if err != nil || message != nil {
 		t.Fatalf("missing guard admitted message: %+v %v", message, err)
+	}
+}
+
+func TestClaudeRecoveryRefusalAfterBeginDoesNotFenceLaterInput(t *testing.T) {
+	r := newClaudeReceiptRig(t)
+	desc := r.broker.Descriptor()
+	guard := r.worker
+	guard.Generation = "guard-" + guard.Generation
+	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", desc.SocketPath)
+	}}
+	httpClient := &http.Client{Transport: transport, Timeout: time.Second}
+	guardReport := func(state string) error {
+		raw, err := json.Marshal(map[string]any{"generation": desc.Generation, "worker": guard, "state": state, "observation": 1})
+		if err != nil {
+			return err
+		}
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://localhost/guard", bytes.NewReader(raw))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+desc.Token)
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return err
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("fixture guard returned %d", resp.StatusCode)
+		}
+		return nil
+	}
+	compose := r.sk.api.semanticComposer
+	r.sk.api.semanticComposer = func(machine, id string, req protocol.ComposerSendReq, begin func() error) (protocol.ErrorCode, error) {
+		return compose(machine, id, req, func() error {
+			if err := begin(); err != nil {
+				return err
+			}
+			return guardReport("revalidate")
+		})
+	}
+	c, err := protocol.Dial(r.sk.SocketPath(), []string{protocol.CapSemanticSend})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	op, err := protocol.NewSemanticOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := protocol.ComposerSendReq{Session: r.session, SessionInstance: r.instance, Text: "must not be submitted"}
+	for range 2 {
+		if err := c.SemanticSend(op, req); !errors.Is(err, protocol.ErrSemanticSendRejected) {
+			t.Fatalf("refusal should be definitive and replayable: %v", err)
+		}
+	}
+	receipt, err := c.SemanticOperation(r.session, op)
+	if err != nil || receipt.State != "rejected" || r.sk.core.UnobservedSemanticExecution(r.local, "later") {
+		t.Fatalf("rejected operation left unresolved custody: %+v, %v", receipt, err)
+	}
+	if msg, err := r.client.Exchange(t.Context(), r.worker, "", "", ""); err != nil || msg != nil {
+		t.Fatalf("refused input was queued: %+v, %v", msg, err)
+	}
+	for _, state := range []string{"revalidate", ""} {
+		if err := guardReport(state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if instance, code, err := r.sk.resolveSemanticTarget(r.local); err != nil || instance != r.instance || code != "" {
+		t.Fatalf("recovered target: %q %s %v", instance, code, err)
 	}
 }

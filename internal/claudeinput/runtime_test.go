@@ -44,8 +44,11 @@ func TestGuardRevalidationRequiresFreshProofAndDiscardsOldTurn(t *testing.T) {
 	if _, err := c.Ready(ctx); !errors.Is(err, readinessRecovering) {
 		t.Fatalf("readiness during recovery: %v", err)
 	}
-	if _, err := c.Submit(ctx, sender, "blocked", "must not be delivered"); err == nil {
-		t.Fatal("broker accepted input during revalidation")
+	if _, err := c.Submit(ctx, sender, "blocked", "must not be delivered"); !errors.Is(err, ErrInputNotSubmitted) {
+		t.Fatalf("broker did not explicitly refuse new input: %v", err)
+	}
+	if _, err := c.Submit(ctx, sender, "prior", "existing input"); err == nil || errors.Is(err, ErrInputNotSubmitted) {
+		t.Fatalf("broker declared a prior claim unsubmitted: %v", err)
 	}
 	if _, err := c.Exchange(ctx, sender, "prior", "started", ""); err != nil {
 		t.Fatal(err)
@@ -66,6 +69,15 @@ func TestGuardRevalidationRequiresFreshProofAndDiscardsOldTurn(t *testing.T) {
 	}
 	if err := c.call(ctx, "/guard", revalidate, &ready); err != nil || !ready {
 		t.Fatalf("matching fresh proofs could not recover: %v %v", ready, err)
+	}
+	if _, err := c.Ready(ctx); !errors.Is(err, readinessRecovering) {
+		t.Fatalf("input opened before the guard confirmed receipt: %v", err)
+	}
+	if _, err := c.Submit(ctx, sender, "early", "must remain fenced"); err == nil {
+		t.Fatal("broker accepted input before guard confirmation")
+	}
+	if err := c.call(ctx, "/guard", request{Worker: guard, Observation: 1}, nil); err != nil {
+		t.Fatal(err)
 	}
 	if proof, err := c.Ready(ctx); err != nil || proof != sender {
 		t.Fatalf("recovered identity changed: %+v %v", proof, err)

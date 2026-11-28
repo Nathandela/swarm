@@ -73,6 +73,16 @@ func TestManagerBrokerTerminalTurnsReleaseLiveSlots(t *testing.T) {
 			if err = c.call(ctx, "/manager-tool", request{Worker: guard, Call: &call}, nil); err != nil {
 				t.Fatal(err)
 			}
+			// The retention check starts after the asynchronous proof is durable.
+			if err = b.custody.Do(ctx, 0, func(context.Context) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if err = c.Guard(ctx, guard, false); err != nil {
+				t.Fatal(err)
+			}
+			if queued, err := c.Exchange(ctx, worker, "", "", ""); err != nil || queued != nil {
+				t.Fatalf("heartbeat with no pending input: %+v %v", queued, err)
+			}
 			hash, _ := managerproof.ArgumentsHash(call.Arguments)
 			if _, err = c.ResolveManagerCall(ctx, worker, managerproof.CallRequest{Binding: binding, ToolName: "publish", ArgumentsHash: hash, HostMeta: []byte(fmt.Sprintf(`{"claudecode/toolUseId":%q}`, call.CallID))}); err != nil {
 				t.Fatal(err)

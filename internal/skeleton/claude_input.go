@@ -81,6 +81,9 @@ func (d *Daemon) sendClaudeNative(local, operationID string, req protocol.Compos
 		_, err = client.Submit(ctx, proof, operationID, req.Text)
 	}
 	lane.mu.Unlock()
+	if errors.Is(err, claudeinput.ErrInputNotSubmitted) {
+		return protocol.CodeInputBusy, err
+	}
 	if err != nil {
 		return protocol.CodeOutcomeUnknown, fmt.Errorf("%w: native submission is unconfirmed and will not be replayed", protocol.ErrComposerOutcomeUnknown)
 	}

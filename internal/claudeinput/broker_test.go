@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -314,5 +317,18 @@ func TestDescriptorWithoutLifecycleFenceRequiresExplicitRefresh(t *testing.T) {
 	}
 	if _, err := ReadDescriptor(dir); err == nil {
 		t.Fatal("surviving old shim silently acquired lifecycle support")
+	}
+}
+
+func TestLegacyReadyRefusalKeepsRefreshGuidance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "native input is unproven; refresh the session", http.StatusConflict)
+	}))
+	defer server.Close()
+	c := &Client{http: &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	}}}}
+	if _, err := c.Ready(t.Context()); !errors.Is(err, readinessLegacy) {
+		t.Fatalf("legacy broker refusal lost refresh guidance: %v", err)
 	}
 }

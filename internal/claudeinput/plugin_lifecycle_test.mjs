@@ -141,6 +141,25 @@ for (const fault of ['observation', 'canceled-prompt']) {
   assert.equal(f.calls.at(-1).body.state, 'revoked');
 }
 {
+  const f = await fixture(true);
+  const id = f.$.session.id;
+  let release;
+  f.$.session.id = () => new Promise(resolve=>{release=resolve;});
+  const stale = f.hooks.get('turn.start')(f.$, {turnId:'old'}, f.next);
+  f.$.session.id = id;
+  const canceled = async()=>assert.fail('canceled input forwarded');
+  canceled.signal = AbortSignal.abort();
+  const input = {text:'native input',origin:{kind:'plugin',name:'swarm-native-input'}};
+  assert((await f.hooks.get('prompt.submit')(f.$, input, canceled)).drop);
+  f.guard(async()=>({ok:true,text:'true'}));
+  await f.tick();
+  release(await id());
+  await stale;
+  assert(!f.calls.some(call=>call.path==='/turn' && call.body.turn.turn_id==='old'));
+  await f.hooks.get('turn.start')(f.$, {turnId:'new'}, f.next);
+  assert(f.calls.some(call=>call.path==='/turn' && call.body.turn.turn_id==='new'));
+}
+{
   const f=await fixture(true,true), nonce='a'.repeat(64), envelope='[SWARM_MANAGER_INPUT_V1:'+nonce+']\nhuman words';
   assert((await f.hooks.get('prompt.submit')(f.$,{text:envelope,origin:{kind:'composer'}},f.next)).drop);
   f.response('/manager-prompt',async()=>({ok:true,text:JSON.stringify({nonce})}));

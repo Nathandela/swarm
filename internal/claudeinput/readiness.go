@@ -14,6 +14,7 @@ const (
 	readinessExpired     ReadinessError = "expired"
 	readinessRecovering  ReadinessError = "recovering"
 	readinessMismatch    ReadinessError = "mismatch"
+	readinessLegacy      ReadinessError = "legacy_unproven"
 	readinessUnconfirmed ReadinessError = "unconfirmed"
 )
 
@@ -23,6 +24,7 @@ var readinessMessages = map[ReadinessError]string{
 	readinessExpired:     "Claude native input heartbeat expired; retry when the sender and guard are responsive",
 	readinessRecovering:  "Claude native input is waiting for fresh sender and guard proof; retry",
 	readinessMismatch:    "Claude native input identity could not be verified; explicitly refresh this session",
+	readinessLegacy:      "Claude native input is unproven; retry during startup or explicitly refresh this session if it persists",
 	readinessUnconfirmed: "Claude native input broker readiness could not be confirmed; retry",
 }
 
